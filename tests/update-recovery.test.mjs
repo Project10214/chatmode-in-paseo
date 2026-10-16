@@ -7,7 +7,7 @@ import { webcrypto } from 'node:crypto';
 const script=await readFile(new URL('../extension/background.js',import.meta.url),'utf8');
 const workerSource=script.replace(/\nvoid pump\(\);\s*$/,'')+
   '\nglobalThis.testWorker={pump,load,upgrade:()=>upgradeRecovery};';
-const ENGINE='cos-native-alpha4.3', VERSION='0.2.14', LINK='https://chatgpt.com/c/bound-chat';
+const ENGINE='cos-native-alpha4.3', VERSION='0.2.21', LINK='https://chatgpt.com/c/bound-chat';
 const bound={sessionId:'session-1',conversationId:'bound-chat',tabId:71};
 
 async function worker({

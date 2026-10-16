@@ -51,7 +51,7 @@ async function api(route, value, authenticated = true, profile = config) {
   const endpoint = endpointOf(profile.endpoint);
   const response = await fetch(`${endpoint.origin}${route}`, {
     method: value === undefined ? 'GET' : 'POST',
-    headers: { ...(value === undefined ? {} : { 'Content-Type': 'application/json' }), 'X-CIP-Extension': chrome.runtime.id, 'X-CIP-Features': 'files-v1',
+    headers: { ...(value === undefined ? {} : { 'Content-Type': 'application/json' }), 'X-CIP-Extension': chrome.runtime.id, 'X-CIP-Features': 'files-v2',
       ...(authenticated ? { Authorization: `Bearer ${profile.token}`, 'X-CIP-Engine': 'cos-native-alpha4.3', 'X-CIP-Browser': catalogBrowserId } : {}) },
     body: value === undefined ? undefined : JSON.stringify(value), signal: AbortSignal.timeout(15000), cache: 'no-store', redirect: 'error'
   });
@@ -105,7 +105,14 @@ async function identity(tabId, expected = null) {
 async function postReceipt(id, row, profile = config) {
   if (row.endpoint && row.endpoint !== profile.endpoint) return;
   await api('/result', { id, lease: row.lease, result: row.result }, true, profile);
-  row.phase = 'acked'; await saveLedger();
+  row.phase = 'acked';
+  if (row.command?.kind === 'send' && row.result?.notSent === true) {
+    // Keep the command ID/lease/result tombstone, never a retryable failed body.
+    delete row.command.payload.text;
+    delete row.command.payload.files;
+    row.discarded = true;
+  }
+  await saveLedger();
 }
 async function execute(command) {
   if (Object.hasOwn(ledger, command.id)) return;
@@ -140,7 +147,9 @@ async function execute(command) {
     claim = await api('/claim', { id: command.id, tabId, documentKey: page.documentKey, ...(command.kind==='ensure'?{url:page.url,nativeMessageId:page.nativeMessageId,reopened}:{}) }, true, profile);
     ledger[command.id] = { ...ledger[command.id], phase: 'claimed', lease: claim.lease, documentKey: page.documentKey };
     tabs[tabId] = { ...tabs[tabId], documentKey: page.documentKey }; await saveLedger(); await saveTabs();
-    const budget = Number.isFinite(claim.deadline) ? Math.min(90000, Math.max(1, claim.deadline - Date.now() - 1000)) : 60000;
+    // The Runtime extends a file Send's deadline by its upload size (max ~5 minutes).
+    const cap = claim.payload?.files?.length ? 300000 : 90000;
+    const budget = Number.isFinite(claim.deadline) ? Math.min(cap, Math.max(1, claim.deadline - Date.now() - 1000)) : 60000;
     const reply = await tabRpc(tabId, { type: 'command', command: claim }, budget);
     const result = reply?.ok ? reply.value : { error: reply?.error ?? 'CONTENT_UNAVAILABLE', notSent: reply?.notSent === true, notApplied: reply?.notApplied === true, diagnostic: reply?.diagnostic };
     // A failed message may still have created its OWN conversation URL.

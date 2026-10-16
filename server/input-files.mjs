@@ -7,6 +7,13 @@ import { BridgeError, invariant } from './protocol.mjs';
 // Outbound user-selected files never enter JSON session history or command payloads.
 // A claimed, paired Chrome command can read bounded chunks of these private copies.
 export const INPUT_LIMITS = Object.freeze({ count: 4, each: 12 * 1024 * 1024, total: 24 * 1024 * 1024, chunk: 128 * 1024 });
+// Extra Send time for staged files: chunked transfer to Chrome, ChatGPT's own
+// upload, then text, authorization and receipt. A 3.8 MB photo alone did not
+// fit the plain 90 s command budget. Capped so a Send never exceeds ~5 minutes.
+export function uploadAllowance(files) {
+  const bytes = files.reduce((n, f) => n + f.size, 0);
+  return Math.min(210000, 60000 + Math.ceil(bytes / (1024 * 1024)) * 10000);
+}
 const TYPES = Object.freeze({
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.webp': 'image/webp', '.gif': 'image/gif',
@@ -47,7 +54,7 @@ async function fileBytes(item, number) {
     invariant(raw.length%4===0 && /^[A-Za-z0-9+/]+={0,2}$/.test(raw), 'ATTACHMENT_INVALID');
     const bytes=Buffer.from(raw,'base64');
     invariant(bytes.length>0 && bytes.toString('base64')===raw && actualType(bytes,ext), 'ATTACHMENT_INVALID');
-    return { bytes, fileName:'paseo-image-'+(number+1)+ext, mimeType:mime };
+    return { bytes, fileName:'paseo-image-'+(number+1)+ext, mimeType:mime, uploadKind:'image' };
   }
   invariant(item.type==='uploaded_file', 'ATTACHMENT_UNSUPPORTED');
   const {fileName,mimeType,size}=item, ext=path.extname(fileName??'').toLowerCase();
@@ -76,7 +83,7 @@ async function fileBytes(item, number) {
   }finally{await fd.close();}
   invariant(bytes.length===size,'ATTACHMENT_SIZE_CHANGED');
   invariant(actualType(bytes,ext),'ATTACHMENT_INVALID');
-  return {bytes,fileName,mimeType:TYPES[ext]};
+  return {bytes,fileName,mimeType:TYPES[ext],uploadKind:'file'};
 }
 export class InputFileStore {
   constructor(directory) { this.directory=directory; }
@@ -90,12 +97,12 @@ export class InputFileStore {
     const output=[];let total=0;
     try {
       for(let i=0;i<items.length;i++){
-        const {bytes,fileName,mimeType}=await fileBytes(items[i],i);
+        const {bytes,fileName,mimeType,uploadKind}=await fileBytes(items[i],i);
         invariant(bytes.length<=INPUT_LIMITS.each && bytes.length>0,'ATTACHMENT_TOO_LARGE');
         invariant(!output.some(f=>f.fileName.toLowerCase()===fileName.toLowerCase()),'ATTACHMENT_NAME_AMBIGUOUS');
         total+=bytes.length;invariant(total<=INPUT_LIMITS.total,'ATTACHMENT_TOO_LARGE');
         await fs.writeFile(this.location(commandId,i),bytes,{mode:0o600,flag:'wx'});
-        output.push({fileName,mimeType,size:bytes.length,sha256:sha(bytes)});
+        output.push({fileName,mimeType,size:bytes.length,sha256:sha(bytes),uploadKind});
       }
       return output;
     }catch(e){await this.remove(commandId);throw e;}

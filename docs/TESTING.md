@@ -29,6 +29,10 @@ npm run test:sdk          # Provider 事件有改动时：用真实 SDK 校验
 
 ```sh
 npm run test:dom        # DOM 适配层审计
+npm run test:attachment-order # 先附件后正文；未发送失败只移除本次附件与正文
+npm run test:failed-send-disposal # 未发送失败作废（含 @）、保留用户修改和未知回执
+npm run test:failed-send-persistence # IndexedDB 自动保存模拟 + 新页面恢复；5 个清理/保留场景
+npm run test:composer-diagnostics # 草稿错误只读诊断：节点分类/时序/脱敏，不修改草稿
 npm run test:browser    # 浏览器夹具回归
 npm run test:flow       # Provider 全流程（内存页面 + 模拟 tabs API）
 npm run test:native     # 移植函数行为（夹具页面）
@@ -36,6 +40,8 @@ npm run test:mv3        # Chrome MV3 通信层回归（需要隔离的浏览器�
 ```
 
 另有 `test:binding`、`test:receipt`、`test:receipt-interaction`、`test:catalog`、`test:apps`、`test:discovery`，以及 `tests/` 中未接入 npm 脚本的 `*.py` 浏览器回归脚本。它们的运行环境相同，可直接用 `python3 tests/<name>.py` 执行。
+
+`test:failed-send-persistence` 使用临时浏览器 profile 和本地路由，模拟网站的 IndexedDB 自动保存；验证自己的未发送正文与应用清理后不会在新页恢复，用户修改、历史未知草稿和未知回执仍保留。它不是 ChatGPT 闭源保存代码的复刻；真实 B01 的来源追踪与清理验收记录只保存在本地 `docs/internal/`，不随仓库发布。
 
 没有依赖或浏览器环境时写 **BLOCKED**，不能改称 PASS。离线 Chrome 测试必须使用独立 profile 和临时 Runtime；不要把生产 ChatGPT 账号或运行中的会话当夹具。修复问题时，同时加一条**能复现旧问题**的测试和相应的反向/异常测试。
 

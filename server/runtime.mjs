@@ -59,7 +59,7 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
         if (Date.now() - windowStart > 60000) { count = 0; windowStart = Date.now(); }
         invariant(++count <= 1800, 'RATE_LIMITED');
         const route = req.url;
-        const fileCapable=req.headers['x-cip-features']==='files-v1';
+        const fileCapable=req.headers['x-cip-features']==='files-v2';
         if (req.method === 'OPTIONS') return json(res, 204, {}, origin);
         if (req.method === 'GET' && route === '/hello') return json(res, 200, { product: PRODUCT, protocol: PROTOCOL, epoch }, origin);
         if (req.method === 'POST' && route === '/pair') {

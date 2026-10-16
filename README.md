@@ -18,8 +18,9 @@
 - 在 Paseo 的 Chatmode Agent 中收发消息，回传 ChatGPT 对用户公开的回答、思考摘要与工具调用过程。
 - 设置页选择模型、思考强度与已授权 `@` 应用；Agent 输入区保留 Paseo 原生「工具」单选下拉（无工具 / 单个应用 / 全部应用 / 常用组合）。
 - 1–8 路并发（默认 2），超额请求按顺序排队；同一会话串行。
-- 图片与文档经原生文件控件发送到 ChatGPT，严格核对附件后才发送（真实账号上的上传仍待专项验收）。
+- 图片与文档附件（最多 4 个）**先于正文**粘贴进 ChatGPT 的输入框，与用户粘贴文件走同一条原生路径，不使用任何文件控件；确认每个文件的移除按钮、精确文件名且上传完成后，才写正文并点 Send。未发送的失败只移除插件本次加入的附件与正文（真实账号端到端发送仍待专项验收）。
 - 关闭标签页后，凭已绑定的 Conversation 重开原对话继续；Chrome 扩展更新后自动刷新本插件管理的已绑定标签并唤醒原 Agent（刷新可能打断网页正在执行的步骤）。
+- **明确未发送即作废**：清除插件本次写入且未被用户修改的正文和 `@` 标记，释放临时附件，丢弃本地待发送副本；保留最小消息 ID/指纹防止重放。不删除其他历史、用户修改的草稿或发送结果不明的证据。
 - **绝不自动重发**送达结果不明的消息，也不自动批准工具授权。
 
 ## 1. 判断：包含哪些东西
@@ -108,6 +109,8 @@ python3 -m playwright install chromium
 # Linux 已有 /usr/bin/chromium 时无需设置；其他系统使用 Playwright 安装的浏览器：
 export CIP_CHROMIUM="$(python3 -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
 npm run test:dom
+npm run test:attachment-order
+npm run test:failed-send-disposal
 npm run test:browser
 npm run test:flow
 npm run test:native

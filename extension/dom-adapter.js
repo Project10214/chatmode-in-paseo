@@ -180,6 +180,65 @@
     }
     return norm(read(node));
   }
+  // Observe only lengths/structure, never retain or report draft text/HTML.
+  // This is diagnostic evidence, NOT permission to clear or adopt a draft.
+  function composerSample(editor = C.composer()) {
+    return { editor, chars: editor ? authored(editor).length : null, at: Date.now() };
+  }
+  const injectedComposer = composerSample();
+  function draftError(checkpoint, box, ready = null, code = 'DRAFT_CONFLICT') {
+    const diagnostic = { stage: 'composer', checkpoint, draftDiagnosticsVersion: 1 };
+    try {
+      const cap = value => Math.min(64000, Math.max(0, value));
+      const elapsed = at => Math.min(60000, Math.max(0, Date.now() - at));
+      const draft = authored(box);
+      Object.assign(diagnostic, {
+        extensionVersion: globalThis.chrome?.runtime?.getManifest?.().version,
+        editorTag: ['DIV','TEXTAREA'].includes(box.tagName) ? box.tagName : 'OTHER',
+        readyState: document.readyState,
+        draftChars: cap(draft.length), rawChars: cap((box.textContent || '').length),
+        visibleChars: cap((box.innerText || '').length),
+        valueChars: cap(typeof box.value === 'string' ? box.value.length : 0),
+        zeroWidthChars: cap((draft.match(/[\u200b-\u200d\u2060\ufeff]/g) || []).length),
+        hasPaseoContextHeader: draft.startsWith('[Paseo context — user-level instructions]'),
+        editableChars: 0, nonEditableChars: 0, hiddenChars: 0, placeholderChars: 0,
+        textNodes: 0, appCount: Math.min(128, box.querySelectorAll(S.chip).length),
+        snapshotTruncated: false, pageGenerating: C.generating(),
+        sameEditorSinceInjection: injectedComposer.editor === box,
+        msSinceInjection: elapsed(injectedComposer.at)
+      });
+      if (injectedComposer.chars !== null) Object.assign(diagnostic, {
+        injectionDraftChars: cap(injectedComposer.chars), emptyAtInjection: injectedComposer.chars === 0
+      });
+      if (ready) Object.assign(diagnostic, {
+        readyDraftChars: cap(ready.chars ?? 0), initiallyEmpty: ready.chars === 0,
+        editorReplaced: ready.editor !== box, msSinceReady: elapsed(ready.at)
+      });
+      const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (diagnostic.textNodes >= 128) { diagnostic.snapshotTruncated = true; break; }
+        diagnostic.textNodes++;
+        const parent = node.parentElement, size = (node.nodeValue || '').length;
+        const within = selector => { const n = parent?.closest(selector); return !!n && box.contains(n); };
+        let hidden = false;
+        for (let element = parent, depth = 0; element && depth < 64; element = element.parentElement, depth++) {
+          const style = getComputedStyle(element);
+          if (element.hidden || element.hasAttribute('inert') || element.getAttribute('aria-hidden') === 'true' ||
+              style.display === 'none' || ['hidden','collapse'].includes(style.visibility)) hidden = true;
+          if (element === box) break;
+        }
+        const nonEditable = within('[contenteditable="false"]');
+        const placeholder = within('[data-placeholder],[data-placeholder-text]');
+        const decoration = within(`${S.chip},button,[role="button"],[role="toolbar"],script,style,svg`);
+        if (hidden) diagnostic.hiddenChars = cap(diagnostic.hiddenChars + size);
+        if (nonEditable) diagnostic.nonEditableChars = cap(diagnostic.nonEditableChars + size);
+        if (placeholder) diagnostic.placeholderChars = cap(diagnostic.placeholderChars + size);
+        if (!hidden && !nonEditable && !placeholder && !decoration)
+          diagnostic.editableChars = cap(diagnostic.editableChars + size);
+      }
+    } catch { /* Evidence collection must never mask the original refusal. */ }
+    return Object.assign(new Error(code), { code, diagnostic });
+  }
   function caretEnd(box) { box.focus(); const range = document.createRange(); range.selectNodeContents(box); range.collapse(false); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range); }
   function insert(value) {
     const box = composer(); caretEnd(box);
@@ -282,13 +341,14 @@
   // authored text and exact chip IDs are checked independently.
   for (const event of ['pointerdown','keydown','paste','drop','compositionstart'])
     document.addEventListener(event, humanEditorTouch, true);
-  async function setApps(ids, guard = () => {}) {
+  async function setApps(ids, guard = () => {}, ready = null) {
     guard(); const box = composer();
-    if (authored(box)) fail('DRAFT_CONFLICT');
+    if (authored(box)) throw draftError('apps-before-discovery', box, ready);
     // Selected apps require THIS document's complete native evidence. Selecting
     // zero apps grants nothing and must not depend on an unrelated hint request.
     const available = ids.length ? await appChoices(guard) : []; guard();
-    if (composer() !== box || !box.isConnected || authored(box)) fail('DRAFT_CONFLICT');
+    if (composer() !== box || !box.isConnected || authored(box))
+      throw draftError('apps-after-discovery', composer(), ready ?? composerSample(box));
     if (!ids.every(id => available.some(app => app.id === id))) fail('APP_UNAVAILABLE');
     const wanted = [...ids].sort(), selected = chips().map(c => c.id).sort();
     if (selected.some(id => !id)) fail('APP_ID_UNPROVEN');
@@ -320,8 +380,9 @@
   function effectiveConfig() { return { model: selected('model'), thinkingOption: selected('thinking'), appIds: chips().map(x => x.id).sort() }; }
   const sameConfig = (a, b) => a.model === b.model && a.thinkingOption === (b.thinkingOption ?? null) && JSON.stringify(a.appIds) === JSON.stringify([...b.appIds].sort());
   async function configure(config, guard = () => {}, deadline = null) {
+    let ready;
     try {
-      await atStage('composer', () => waitForComposer(guard)); guard();
+      ready = composerSample(await atStage('composer', () => waitForComposer(guard))); guard();
       if (C.generating()) {
         // Chrome has reopened the bound page while an earlier ChatGPT turn
         // is still generating. Wait for confirmed native idle; do not click
@@ -340,7 +401,7 @@
         guard();
         if (C.generating()) fail('NATIVE_BUSY');
       }
-      if (authored(composer())) fail('DRAFT_CONFLICT');
+      if (authored(composer())) throw draftError('configure-start', composer(), ready);
     } catch (e) { e.notApplied = true; throw e; }
     const stillCurrent = () => { try { guard(); return true; } catch { return false; } };
     if (!await atStage('chat-surface', () => C.prepareChatModelSurface(stillCurrent))) throw errorStage(Object.assign(new Error('CHAT_SURFACE_UNCONFIRMED'), {code:'CHAT_SURFACE_UNCONFIRMED'}), 'chat-surface');
@@ -350,7 +411,7 @@
       await refreshModelProof();
     } else { await select('model', config.model); await select('thinking', config.thinkingOption); }
     guard();
-    await atStage('apps', () => setApps(config.appIds, guard)); guard();
+    await atStage('apps', () => setApps(config.appIds, guard, ready)); guard();
     const effective = effectiveConfig();
     // A null request means use the observed native default; report it rather than invent one.
     if (config.thinkingOption === null && effective.thinkingOption !== null) fail('THINKING_DEFAULT_UNSPECIFIED');
@@ -358,10 +419,11 @@
     return effective;
   }
   async function catalog(guard = () => {}) {
-    await atStage('composer', () => waitForComposer(guard));
+    const ready = composerSample(await atStage('composer', () => waitForComposer(guard)));
     if (nativeShape()) {
       nativeMode = true;
-      if (authored(composer()) || chips().length || C.generating()) fail('CATALOG_TAB_NOT_EMPTY');
+      if (authored(composer()) || chips().length || C.generating())
+        throw draftError('catalog-start', composer(), ready, 'CATALOG_TAB_NOT_EMPTY');
       const stillCurrent = () => { try { guard(); return true; } catch { return false; } };
       if (!await atStage('chat-surface', () => C.prepareChatModelSurface(stillCurrent))) throw errorStage(Object.assign(new Error('CHAT_SURFACE_UNCONFIRMED'), {code:'CHAT_SURFACE_UNCONFIRMED'}), 'chat-surface');
       let reason = '';
@@ -376,7 +438,8 @@
       const apps = (await atStage('apps', () => appChoices(guard))).map(({ id, label }) => ({ id, label }));
       guard(); return { models, apps, defaultModel: current.model };
     }
-    if (authored(composer()) || chips().length || C.generating()) fail('CATALOG_TAB_NOT_EMPTY');
+    if (authored(composer()) || chips().length || C.generating())
+      throw draftError('catalog-start', composer(), ready, 'CATALOG_TAB_NOT_EMPTY');
     const current = selected('model'), currentThinking = selected('thinking'); const models = [];
     try {
       const rows = await atStage('models', () => choices('model')); const options = rows.map(({ id, label }) => ({ id, label })); dismiss();
@@ -469,19 +532,19 @@
     generating: C.generating, stopButton: C.stopButton, sendButton: C.sendButton, sendButtonEnabled: C.sendButtonEnabled });
   async function send(command, authorize, guard = () => {}, readFile = null) {
     const files=command.payload.files??[];
-    let fileProof=()=>true;
+    let upload=null;
     let clicked = false, owned = null, receipt = null, refusal = null, authorizationError = null;
     let before = new Set();
     pendingReceiptProbe=null;
     let networkProof = null;
-    let userTouched = false;
+    let userTouched = false, writing = false;
     // Only a *trusted composer edit* can revoke draft ownership. Clicks,
     // keystrokes or scroll actions elsewhere on ChatGPT must not fail Send.
     // Keep the pre-click human-edit fence, including edit-and-undo; after the
     // native click, never reinterpret a new draft as a failed old Send.
     const editEvents = ['beforeinput','input','paste','drop','compositionstart','keydown','pointerdown'];
     const trustedEdit = event => {
-      if (clicked || !event.isTrusted) return;
+      if (clicked || writing || !event.isTrusted) return;
       const node = event.target instanceof Element ? event.target : event.target?.parentElement;
       const box = C.composer();
       if (!box || !node || !box.contains(node)) return;
@@ -506,7 +569,7 @@
       await refreshTranscript(); guard();
       before = new Set(messages().map(x => x.id));
       const box = composer();
-      if (authored(box)) fail('DRAFT_CONFLICT');
+      if (authored(box)) throw draftError('send-before-insert', box);
       if (box.closest('form')?.querySelector('[data-composer-attachments]:not(:empty),[data-inline-file-uploading]')) fail('ATTACHMENT_UNSUPPORTED');
       // Capture the identities actually selected through @ before replacing only our own chips.
       const mentions = chips().map(({node,id}) => {
@@ -514,30 +577,34 @@
         return { path: 'app://' + id, name: node.getAttribute('app-mention-display-name') || copy.textContent.trim() };
       });
       if (userTouched) fail('DRAFT_CHANGED');
-      if(command.payload.text.trim() &&
-         !N.insertPrompt(command.payload.text, true, reason => { refusal = reason; }))
-        fail('NATIVE_INPUT_UNAVAILABLE');
       if(!command.payload.text.trim() && !files.length)fail('NATIVE_INPUT_UNAVAILABLE');
-      owned = { box };
-      if (authored(box) !== norm(command.payload.text)) fail('INPUT_NOT_CONFIRMED');
-      for (const mention of mentions) {
-        guard(); if (!N.addAppMention(box, mention)) fail('APP_SELECTION_UNCONFIRMED');
-      }
-      // CoS waits for the native editor's next task to adopt the mention mark.
-      await delay(0); guard();
-      if (!sameConfig(effectiveConfig(), config) || authored(box) !== norm(command.payload.text)) fail('APP_SELECTION_UNCONFIRMED');
-      // CoS native insertPrompt and addAppMention themselves fire trusted
-      // editor input events. Observe HUMAN edits only after those synchronous
-      // writes are finished, while waiting for the actual Send click.
+      // Observe human edits from here on, through the upload. Native insertion
+      // emits trusted events itself, so our synchronous writes are fenced off.
       for (const event of editEvents) document.addEventListener(event, trustedEdit, true);
+      // Attachments BEFORE text: a refused or unconfirmed upload then leaves no
+      // message text behind in ChatGPT's persisted homepage draft (B01).
       if(files.length) {
         if(!globalThis.CIP_UPLOAD?.attach || typeof readFile!=='function')
           fail('ATTACHMENT_BRIDGE_UNAVAILABLE');
-        fileProof=await globalThis.CIP_UPLOAD.attach(command,box,readFile,()=>{
+        upload=await globalThis.CIP_UPLOAD.attach(command,box,readFile,()=>{
           guard();if(userTouched)fail('DRAFT_CHANGED');
         },command.deadline);
         guard();if(userTouched)fail('DRAFT_CHANGED');
       }
+      writing = true;
+      try {
+        if(command.payload.text.trim() &&
+           !N.insertPrompt(command.payload.text, true, reason => { refusal = reason; }))
+          fail('NATIVE_INPUT_UNAVAILABLE');
+        owned = { box, config: { ...config, appIds: [] }, editEpoch: editorTouchEpoch };
+        if (authored(box) !== norm(command.payload.text)) fail('INPUT_NOT_CONFIRMED');
+        for (const mention of mentions) {
+          guard(); if (!N.addAppMention(box, mention)) fail('APP_SELECTION_UNCONFIRMED');
+          owned.config.appIds.push(mention.path.slice('app://'.length));
+        }
+      } finally { writing = false; }
+      await delay(0); guard();
+      if (!sameConfig(effectiveConfig(), config) || authored(box) !== norm(command.payload.text)) fail('APP_SELECTION_UNCONFIRMED');
       // Keep the 12-second initial POST capture window, but give verified
       // browser sends time to receive delayed ChatGPT SSE headers. Never
       // exceed the existing one-shot command deadline.
@@ -596,7 +663,7 @@
           if (authored(box) !== norm(command.payload.text)) fail('DRAFT_CHANGED');
           if (!sameConfig(effectiveConfig(), config)) fail('CONFIG_CHANGED');
           if(files.length){
-            if(!fileProof())fail('ATTACHMENT_REMOVED');
+            if(!upload?.proof())fail('ATTACHMENT_REMOVED');
           }else if (box.closest('form')?.querySelector('[data-composer-attachments]:not(:empty),[data-inline-file-uploading]'))
             fail('ATTACHMENT_UNSUPPORTED');
           if (messages().some(x=>!before.has(x.id)) || C.generating()) fail('TURN_CHANGED');
@@ -643,18 +710,37 @@
       }
       if (!clicked) {
         e.notSent = true;
-        // A failed, unclicked command must not strand its own untouched draft
-        // merely because React re-rendered a decorative span. Never delete a
-        // human edit, attachment or any existing native @ app mark; those are
-        // user-owned and must remain visible for an explicit next action.
-        if (owned && !userTouched && location.pathname === startPath &&
-            owned.box.isConnected && composer() === owned.box &&
-            authored(owned.box) === norm(command.payload.text) &&
-            chips().length === 0 && !C.generating() &&
-            !owned.box.closest('form')?.querySelector('[data-composer-attachments]:not(:empty),[data-inline-file-uploading]') &&
-            sameConfig(effectiveConfig(), command.payload.config) &&
-            !messages().some(row => !before.has(row.id)))
-          N.clearPromptExact(owned.box.textContent);
+        // Known-unsent messages are discarded, not retained as retry drafts.
+        // The @ marks reinserted by THIS attempt are ours too. Exact config,
+        // document and edit fences still protect human changes and attachments.
+        try {
+          try { guard(); } catch (error) {
+            // Cancellation/deadline revokes Send, not cleanup of our unchanged
+            // draft. The guard checks document/route identity before these codes.
+            if (!['COMMAND_CANCELLED','COMMAND_DEADLINE_EXCEEDED'].includes(error?.code)) throw error;
+          }
+          // Our own uploaded files go first; the text fence below refuses to
+          // clear while ANY attachment remains in the composer.
+          if (upload && !userTouched && location.pathname === startPath &&
+              !C.generating() && !messages().some(row => !before.has(row.id)))
+            await upload.remove();
+          if (owned && !userTouched && editorTouchEpoch === owned.editEpoch &&
+              location.pathname === startPath && owned.box.isConnected && composer() === owned.box &&
+              authored(owned.box) === norm(command.payload.text) && !C.generating() &&
+              !owned.box.closest('form')?.querySelector('[data-composer-attachments]:not(:empty),[data-inline-file-uploading]') &&
+              sameConfig(effectiveConfig(), owned.config) &&
+              !messages().some(row => !before.has(row.id))) {
+            // A mark with conflicting identity attributes must not pass merely
+            // because the display reader chose its first matching attribute.
+            const marksUnchanged = chips().every(({node,id}) => id &&
+              [node, ...node.querySelectorAll(S.chip)].every(mark =>
+                ['data-app-id','data-prompt-link-href','app-mention-path','href'].every(field => {
+                  const value = mark.getAttribute(field);
+                  return !value || value === id || value === 'app://' + id;
+                })));
+            if (marksUnchanged && N.clearPromptExact(owned.box.textContent)) ownedApps = null;
+          }
+        } catch { /* Never replace the failure or erase a draft whose ownership is uncertain. */ }
       }
       throw e;
     } finally { networkProof?.close();for (const event of editEvents) document.removeEventListener(event, trustedEdit, true); }

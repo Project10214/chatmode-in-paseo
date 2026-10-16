@@ -1,4 +1,4 @@
-"""Native file input smoke in real isolated Chrome (no logged-in ChatGPT)."""
+"""Attachment paste smoke in real isolated Chrome (no logged-in ChatGPT)."""
 import base64, json
 from pathlib import Path
 from playwright.sync_api import sync_playwright
@@ -11,15 +11,18 @@ with sync_playwright() as pw:
     page=browser.new_page()
     html='''<!doctype html><html><body><form data-chatgpt-composer>
       <div contenteditable id="prompt-textarea"></div>
-      <input type="file" accept="image/png,application/pdf" multiple>
+      <input type="file" accept="" multiple>
       <div data-composer-attachments></div><button data-testid="send-button">Send</button></form>
       <script>
       window.seen=[];
-      document.querySelector('input[type=file]').addEventListener('change',async e=>{
+      document.querySelector('#prompt-textarea').addEventListener('paste',async e=>{
+        const files=[...(e.clipboardData?.files||[])];
+        if(!files.length)return;
+        e.preventDefault();
         const root=document.querySelector('[data-composer-attachments]');
-        for(const f of e.target.files){
+        for(const f of files){
           window.seen.push({name:f.name,type:f.type,bytes:[...new Uint8Array(await f.arrayBuffer())]});
-          const chip=document.createElement('div');chip.textContent=f.name;root.append(chip);
+          const chip=document.createElement('button');chip.type='button';chip.setAttribute('aria-label','Remove file: '+f.name);root.append(chip);
         }
       });
       </script></body></html>'''
@@ -34,23 +37,23 @@ with sync_playwright() as pw:
       const hash=async buffer=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',buffer))]
         .map(v=>v.toString(16).padStart(2,'0')).join('');
       const files=[];
-      for(const d of data)files.push({fileName:d.name,mimeType:d.type,size:d.bytes.length,sha256:await hash(new Uint8Array(d.bytes))});
+      for(const d of data)files.push({fileName:d.name,mimeType:d.type,size:d.bytes.length,sha256:await hash(new Uint8Array(d.bytes)),uploadKind:d.type==='application/pdf'?'file':'image'});
       const read=async ({index,offset})=>{
         const chunk=sample[index].subarray(offset,offset+131072);
         const str=String.fromCharCode(...chunk);
         return {data:btoa(str),offset,total:files[index].size,sha256:files[index].sha256};
       };
       const box=document.querySelector('#prompt-textarea');
-      const proof=await CIP_UPLOAD.attach({id:'cmd',lease:'lease',documentKey:'doc',payload:{files}},box,read,()=>{},Date.now()+60000);
+      const upload=await CIP_UPLOAD.attach({id:'cmd',lease:'lease',documentKey:'doc',payload:{files}},box,read,()=>{},Date.now()+60000);
       await new Promise(resolve=>setTimeout(resolve,20));
-      return {proof:proof(),uploads:window.seen,inputCount:document.querySelector('input[type=file]').files.length};
+      return {proof:upload.proof(),uploads:window.seen,inputCount:document.querySelector('input[type=file]').files.length};
     }'''
     data=[{'name':'outbound.png','type':'image/png','bytes':list(PNG)},
           {'name':'document.pdf','type':'application/pdf','bytes':list(PDF)}]
     result=page.evaluate(js,{'data':data})
     assert result['proof'] is True,result
-    assert result['inputCount']==2,result
+    assert result['inputCount']==0,result
     assert [v['name'] for v in result['uploads']]==[d['name'] for d in data],result
     assert [bytes(v['bytes']) for v in result['uploads']]==[PNG,PDF],result
-    print(json.dumps({'passed':4,'checks':['native input accepted PNG and PDF','Paseo staged bytes matched','DOM attachment confirmation','two-file selection'],'scope':'isolated real Chrome, not ChatGPT account'},ensure_ascii=False))
+    print(json.dumps({'passed':4,'checks':['editor paste accepted PNG and PDF','Paseo staged bytes matched','DOM attachment confirmation','two-file selection'],'scope':'isolated real Chrome, not ChatGPT account'},ensure_ascii=False))
     browser.close()
