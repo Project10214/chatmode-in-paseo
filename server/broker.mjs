@@ -269,7 +269,10 @@ export class Broker {
   async create(selection, { cwd = '', systemPrompt = '' } = {}) {
     const id = randomUUID();
     await this.store.transaction(d => {
-      invariant(Object.keys(d.sessions).length < LIMITS.sessions, 'SESSION_LIMIT');
+      // Retained sessions are durable history, not concurrent browser work.
+      // Store.transaction bounds bytes (including turn/control reservations);
+      // a lifetime count cap would permanently disable new chats after 100 opens.
+      // Never evict old identities or deduplication records to admit a new chat.
       const config = validateSelection(selection, d.catalog);
       d.sessions[id] = { id, config, cwd: text(cwd, 8000, true), systemPrompt: text(systemPrompt, 16000, true), conversationId: null, tabId: null,
         status: 'idle', contextRevision: 1, contextPending: true, turn: null, prompts: {}, history: [], sequence: 0, createdAt: now() };
