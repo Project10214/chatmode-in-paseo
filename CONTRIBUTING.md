@@ -51,6 +51,7 @@ Thank you for your interest in Chatmode in Paseo! Issues and pull requests are w
 2. Keep each pull request focused. For a bug fix, add a test that reproduces the original problem, plus a negative or edge-case test.
 3. Run the checks above locally. CI runs `check`, `verify:upstream`, `test`, `typecheck` and `test:sdk`.
 4. Fill in the pull request template. Pull requests are squash-merged.
+   Add a line under the unreleased section of [CHANGELOG.md](CHANGELOG.md) for any user-visible change.
 5. [Conventional Commits](https://www.conventionalcommits.org/) style messages (for example `fix(extension): …`) are appreciated but not required.
 
 ### License of contributions
@@ -103,6 +104,7 @@ By submitting a contribution you agree that it is licensed under the repository'
 2. 每个 PR 只做一件事。修复问题时，请补一条能复现原问题的测试，以及相应的反向/异常测试。
 3. 在本地运行上述检查。CI 会运行 `check`、`verify:upstream`、`test`、`typecheck` 与 `test:sdk`。
 4. 按模板填写 PR 说明。PR 以 Squash 方式合并。
+   有用户可见的变化时，在 [CHANGELOG.md](CHANGELOG.md) 的 unreleased 一节加一行。
 5. 提交信息推荐使用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/) 风格（如 `fix(extension): …`），但不强制。
 
 ### 贡献的许可

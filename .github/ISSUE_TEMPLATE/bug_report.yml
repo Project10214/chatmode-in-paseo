@@ -45,7 +45,7 @@ body:
     attributes:
       label: "Plugin version / 插件版本"
       description: "The `version` field in package.json / package.json 中的 version 字段"
-      placeholder: "0.1.0-alpha.4.7"
+      placeholder: "0.1.0-alpha.4.8"
     validations:
       required: true
   - type: input
