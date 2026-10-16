@@ -71,6 +71,6 @@ export async function installNativeWake({
 
 if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   installNativeWake().then(result=>
-    console.log('Installed CoS/Paseo wake host at '+result.manifestPath),
+    console.log('Installed Chatmode in Paseo wake host at '+result.manifestPath),
     e=>{console.error(e.code||e.message);process.exitCode=1;});
 }
