@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { createHash, webcrypto, randomUUID } from 'node:crypto';
-import { InputFileStore, INPUT_LIMITS } from '../server/input-files.mjs';
+import { InputFileStore, INPUT_LIMITS, uploadAllowance } from '../server/input-files.mjs';
 import { CAPABILITIES } from '../server/provider.mjs';
 
 const PNG=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9YkCvYoAAAAASUVORK5CYII=','base64');
@@ -117,6 +117,8 @@ test('FILE6 Broker stages only descriptors in a one-shot Send; wrong lease canno
  assert(c && c.payload.files.length===2);
  assert.equal(c.payload.files[1].fileName,'private.pdf');
  assert(!JSON.stringify(c).includes(pdf) && !JSON.stringify(c).includes(PDF.toString('base64')));
+ // A file Send gets upload time on top of the plain command budget.
+ assert.equal(c.deadline-c.createdAt,f.broker.commandTimeout+uploadAllowance(c.payload.files));
  const claim=await f.broker.claim(c.id,s.tabId,s.documentKey);
  const good=await f.broker.readInputChunk({id:c.id,lease:claim.lease,documentKey:s.documentKey,index:1,offset:0});
  assert.deepEqual(Buffer.from(good.data,'base64'),PDF);
@@ -185,4 +187,11 @@ test('FILE9 two different files with the same visible filename are refused befor
    {type:'uploaded_file',fileName:'REPORT.PDF',mimeType:'application/pdf',size:PDF.length,path:second}
  ]),/ATTACHMENT_NAME_AMBIGUOUS/);
  await assert.rejects(files.read(id,0,0,{size:PDF.length}),/ATTACHMENT_EXPIRED/);
+});
+test('FILE10 upload allowance grows with total size and is capped near five minutes',()=>{
+ const mb=n=>({size:n*1024*1024});
+ assert.equal(uploadAllowance([{size:1}]),70000);
+ assert.equal(uploadAllowance([mb(3.8)]),100000);
+ assert.equal(uploadAllowance([mb(12),mb(12)]),210000);
+ assert(90000+uploadAllowance([mb(12),mb(12)])<=300000);
 });

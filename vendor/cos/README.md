@@ -61,7 +61,7 @@ DOM 回退删除、Runtime ID 校验、15 秒观察恢复、Chrome 当前标签�
 
 `cos-images-main.js` 移植并适配 e4056264 的 `fiber.js:generatedImagesOf/shellTurnSource` 图片身份和完成逻辑，以及 `content.js:nativeImageNode/captureNativeImage` 的已加载像素读取。只输出公开原生消息 ID、assetId、尺寸及压缩 WebP 字节，不转发签名 URL、Cookie、私有工具数据。`cos-picker-main.js` 增加对应的受限描述投影和 nonce 图片请求。未移植 `exportNativeImage` 原图下载；Paseo 卡片明确标注压缩预览，并提供原对话网页入口。
 
-## 2026-10-16 · 原生附件发送（Chrome 0.2.19 / Paseo alpha.4.12）
+## 2026-10-16 · 原生附件发送（Chrome 0.2.20 / Paseo alpha.4.13）
 
 依据 GitHub 上游主分支 `totec448-spec/chat-on-steroids` 的 `extension/chatgpt-dom.js`（所读 blob SHA `f9036940bacc0c63ef4f3dcc173de5fdd0a18c2c`）中的 `uploadImages` / `composerFileName`（MIT），在 `extension/file-upload.js` 中移植附件送达证据：以新增的移除按钮和精确文件名确认每个文件，等上传进度消失、Send 可用。
 

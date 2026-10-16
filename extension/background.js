@@ -147,7 +147,9 @@ async function execute(command) {
     claim = await api('/claim', { id: command.id, tabId, documentKey: page.documentKey, ...(command.kind==='ensure'?{url:page.url,nativeMessageId:page.nativeMessageId,reopened}:{}) }, true, profile);
     ledger[command.id] = { ...ledger[command.id], phase: 'claimed', lease: claim.lease, documentKey: page.documentKey };
     tabs[tabId] = { ...tabs[tabId], documentKey: page.documentKey }; await saveLedger(); await saveTabs();
-    const budget = Number.isFinite(claim.deadline) ? Math.min(90000, Math.max(1, claim.deadline - Date.now() - 1000)) : 60000;
+    // The Runtime extends a file Send's deadline by its upload size (max ~5 minutes).
+    const cap = claim.payload?.files?.length ? 300000 : 90000;
+    const budget = Number.isFinite(claim.deadline) ? Math.min(cap, Math.max(1, claim.deadline - Date.now() - 1000)) : 60000;
     const reply = await tabRpc(tabId, { type: 'command', command: claim }, budget);
     const result = reply?.ok ? reply.value : { error: reply?.error ?? 'CONTENT_UNAVAILABLE', notSent: reply?.notSent === true, notApplied: reply?.notApplied === true, diagnostic: reply?.diagnostic };
     // A failed message may still have created its OWN conversation URL.

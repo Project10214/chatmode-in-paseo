@@ -143,7 +143,8 @@
     if (!paste.defaultPrevented) fail('ATTACHMENT_PASTE_UNHANDLED');
 
     const remaining = Number.isFinite(deadline) ? deadline - Date.now() - 20000 : 60000;
-    const end = Date.now() + Math.max(500, Math.min(60000, remaining));
+    // Large files can take minutes in ChatGPT; the Runtime sized the deadline.
+    const end = Date.now() + Math.max(500, Math.min(240000, remaining));
     const proof = () => {
       guard();
       if (!box.isConnected || ownedForm(box) !== form) fail('ATTACHMENT_PAGE_CHANGED');

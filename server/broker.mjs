@@ -4,7 +4,7 @@ import { nativeTimelineItem, recordNativeTimeline, settleNativeTimeline } from '
 import { SlotQueue, concurrencyValue } from './slots.mjs';
 import path from 'node:path';
 import { MediaStore, IMAGE_LIMITS } from './media.mjs';
-import { InputFileStore } from './input-files.mjs';
+import { InputFileStore, uploadAllowance } from './input-files.mjs';
 import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { BridgeError, invariant, identifier, nativeMessageId as verifyNativeId, text, object, LIMITS, validateCatalog, validateSelection, sameSelection, conversationId } from './protocol.mjs';
@@ -542,7 +542,7 @@ export class Broker {
       s.status = 'sending'; s.turn = { id: turnId, clientMessageId, commandId, createdAt: now(), text: value, authorized: false, outcome: null, historyStart: s.history.length + 1 };
       s.prompts[clientMessageId] = { fingerprint, turnId, outcome: null };
       s.history.push({ type: 'user_message', id: `user:${turnId}`, text: value, clientMessageId });
-      d.commands[commandId] = { id: commandId, kind: 'send', sessionId: id, payload: { turnId, text: fullText, ...(files.length?{files}:{}), contextRevision: s.contextRevision, config: s.config, conversationId: s.conversationId, tabId: s.tabId }, phase: 'queued', createdAt: now(), deadline: now() + this.commandTimeout };
+      d.commands[commandId] = { id: commandId, kind: 'send', sessionId: id, payload: { turnId, text: fullText, ...(files.length?{files}:{}), contextRevision: s.contextRevision, config: s.config, conversationId: s.conversationId, tabId: s.tabId }, phase: 'queued', createdAt: now(), deadline: now() + this.commandTimeout + (files.length ? uploadAllowance(files) : 0) };
       return { turnId, replay: false };
       } catch (e) {
         // Preserve failed admission identity too; retrying requires a NEW clientMessageId.

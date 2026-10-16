@@ -7,6 +7,13 @@ import { BridgeError, invariant } from './protocol.mjs';
 // Outbound user-selected files never enter JSON session history or command payloads.
 // A claimed, paired Chrome command can read bounded chunks of these private copies.
 export const INPUT_LIMITS = Object.freeze({ count: 4, each: 12 * 1024 * 1024, total: 24 * 1024 * 1024, chunk: 128 * 1024 });
+// Extra Send time for staged files: chunked transfer to Chrome, ChatGPT's own
+// upload, then text, authorization and receipt. A 3.8 MB photo alone did not
+// fit the plain 90 s command budget. Capped so a Send never exceeds ~5 minutes.
+export function uploadAllowance(files) {
+  const bytes = files.reduce((n, f) => n + f.size, 0);
+  return Math.min(210000, 60000 + Math.ceil(bytes / (1024 * 1024)) * 10000);
+}
 const TYPES = Object.freeze({
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.webp': 'image/webp', '.gif': 'image/gif',
