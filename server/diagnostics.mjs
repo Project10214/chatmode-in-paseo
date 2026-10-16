@@ -6,6 +6,21 @@ export function safeDiagnostic(value) {
     const n = value[key];
     if (Number.isInteger(n) && n >= 0 && n <= 128) out[key] = n;
   }
+  if (value.stage === 'composer') {
+    if (value.draftDiagnosticsVersion === 1) out.draftDiagnosticsVersion = 1;
+    if (['configure-start','apps-before-discovery','apps-after-discovery','send-before-insert','catalog-start'].includes(value.checkpoint)) out.checkpoint = value.checkpoint;
+    if (typeof value.extensionVersion === 'string' && /^\d{1,3}\.\d{1,3}\.\d{1,5}(?:\.\d{1,5})?$/.test(value.extensionVersion)) out.extensionVersion = value.extensionVersion;
+    if (['DIV','TEXTAREA','OTHER'].includes(value.editorTag)) out.editorTag = value.editorTag;
+    if (['loading','interactive','complete'].includes(value.readyState)) out.readyState = value.readyState;
+    for (const key of ['draftChars','rawChars','visibleChars','valueChars','editableChars','nonEditableChars','hiddenChars','placeholderChars','zeroWidthChars','injectionDraftChars','readyDraftChars'])
+      if (Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 64000) out[key] = value[key];
+    for (const key of ['textNodes','appCount'])
+      if (Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 128) out[key] = value[key];
+    for (const key of ['msSinceInjection','msSinceReady'])
+      if (Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 60000) out[key] = value[key];
+    for (const key of ['initiallyEmpty','emptyAtInjection','editorReplaced','hasPaseoContextHeader','sameEditorSinceInjection','snapshotTruncated','pageGenerating'])
+      if (typeof value[key] === 'boolean') out[key] = value[key];
+  }
   if (value.stage === 'binding' && ['identity_unavailable','message_unavailable','monitor_unavailable','page_loading','route_changed','message_changed','page_closed','multiple_tabs','unsupported_engine','ownership_conflict','invalid_message_id','wait_capacity','observation_rejected','receipt_identity_conflict','receipt_observation_unavailable'].includes(value.reason)) out.reason = value.reason;
   if (value.stage === 'apps') {
     for (const key of ['nativeProbeAttempted', 'hintRequestSeen', 'observerReplySeen'])

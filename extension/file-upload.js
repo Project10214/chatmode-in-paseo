@@ -1,218 +1,179 @@
-/* CIP outbound attachments. Only a currently claimed Send can read its own
- * server-staged bytes; no file paths, prompt bodies or tokens are logged. */
+/* Chatmode in Paseo outbound attachment adapter.
+ * Adapts the upload-receipt verification from totec448-spec/chat-on-steroids,
+ * extension/chatgpt-dom.js uploadImages / composerFileName, main blob
+ * f9036940bacc0c63ef4f3dcc173de5fdd0a18c2c (MIT).
+ * Delivery differs: CoS elects a native file input per upload kind, which the
+ * logged-in composer of 2026-10-16 made ambiguous (four inputs, two of them
+ * accept="image/*"). Files are handed to the editor's own paste handler
+ * instead, the same path as a user pasting files; no file input is used.
+ * Preserves CIP's bounded, authenticated chunk transport and one-shot Send.
+ * The CoS desktop app is NOT installed or required. */
 (() => {
   'use strict';
-  const MAX_FILES=4,MAX_EACH=12*1024*1024,CHUNK=128*1024;
-  const fail=code=>{throw Object.assign(new Error(code),{code,notSent:true});};
-  const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-  const hex=bytes=>[...bytes].map(n=>n.toString(16).padStart(2,'0')).join('');
-  const ownedForm=box=>box?.closest('form')||fail('COMPOSER_UNAVAILABLE');
-  // ChatGPT can mount separate image and document pickers, plus unrelated
-  // profile/other-chat inputs. Select an exact native picker; never use DOM
-  // ordering or an arbitrary "first input" to resolve a genuine tie.
-  const inputReady=n=>n && !n.disabled && n.isConnected!==false;
-  const inputScore=(n,file)=>{
-    const accept=(n.getAttribute('accept')||'').toLowerCase().trim();
-    if(!accept)return 1; // Generic picker is a fallback, not equal to image/*.
-    const mime=file.mimeType.toLowerCase(),extension='.'+file.fileName.split('.').at(-1).toLowerCase();
-    let score=0;
-    for(const part of accept.split(',').map(x=>x.trim())){
-      if(part===mime)score=Math.max(score,50);
-      else if(part===extension)score=Math.max(score,45);
-      else if(part===mime.split('/')[0]+'/*')score=Math.max(score,30);
-      else if(part==='*/*')score=Math.max(score,5);
+  const MAX_FILES = 4, MAX_EACH = 12 * 1024 * 1024, CHUNK = 128 * 1024;
+  const fail = (code, diagnostic) => {
+    throw Object.assign(new Error(code), { code, notSent: true, ...(diagnostic ? { diagnostic } : {}) });
+  };
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const hex = bytes => [...bytes].map(n => n.toString(16).padStart(2, '0')).join('');
+  const ownedForm = box => box?.closest('form') || fail('COMPOSER_UNAVAILABLE');
+  const isUploadBusy = form =>
+    !!form.querySelector('[aria-busy="true"],[role="progressbar"],[data-inline-file-uploading],[data-uploading="true"]');
+
+  // Adapted from CoS's composerFileName: a *remove* control is the native
+  // ownership witness. A filename substring, an image thumbnail, or the open
+  // button alone must never be mistaken for an uploaded file.
+  function composerFileName(button) {
+    const attachmentHost = button.closest('[data-composer-attachments]');
+    const tileParent = button.parentElement;
+    if (attachmentHost && tileParent && tileParent !== attachmentHost) {
+      const actions = [...tileParent.querySelectorAll('button')];
+      if (actions.length === 2 && actions[1] === button) {
+        const open = actions[0], name = open.getAttribute('aria-label');
+        const removal = button.getAttribute('aria-label') || '';
+        const labelled = [...tileParent.querySelectorAll('span')].some(node =>
+          !node.children.length && node.textContent === name);
+        if (name && removal !== name && removal.endsWith(' ' + name) && labelled &&
+            open.closest('[data-composer-attachments]') === attachmentHost) return name;
+      }
     }
-    return score;
-  };
-  const uniqueInput=(inputs,file)=>{
-    const matched=inputs.filter(inputReady).map(node=>({node,score:inputScore(node,file)}))
-      .filter(x=>x.score>0);
-    if(!matched.length)return null;
-    const best=Math.max(...matched.map(x=>x.score));
-    const winners=matched.filter(x=>x.score===best);
-    if(winners.length!==1)fail('ATTACHMENT_INPUT_AMBIGUOUS');
-    return winners[0].node;
-  };
-  const localInputs=form=>[...form.querySelectorAll('input[type="file"]')];
-  const portalInputs=form=>[...document.querySelectorAll('input[type="file"]')]
-    .filter(n=>!form.contains(n) && !n.closest('[data-message-author-role],[data-turn-key],section[data-testid^="conversation-turn"]') &&
-      (!n.closest('form') || n.closest('form')===form) &&
-      (!n.form || n.form===form));
-  const findInput=(form,file,portals=null)=>{
-    // The exact composer form outranks all other inputs on the page.
-    const local=uniqueInput(localInputs(form),file);
-    if(local)return local;
-    // Only open the global fallback after following THIS composer's native
-    // attachment control. "portals" is the set exposed by that interaction.
-    return portals ? uniqueInput(portals,file) : null;
-  };
-  const attachmentRoot=form=>form.querySelector('[data-composer-attachments]') ||
-    form.querySelector('[data-testid="composer-attachments"]');
-  function evidence(form,files) {
-    const root=attachmentRoot(form);
-    if(!root || !root.isConnected || root.children.length===0)return false;
-    if(form.querySelector('[data-inline-file-uploading],[data-testid="file-uploading"],[data-uploading="true"]'))return false;
-    const rendered=(root.textContent+' '+[...root.querySelectorAll('[aria-label],[title],[alt]')]
-      .map(n=>[n.getAttribute('aria-label'),n.getAttribute('title'),n.getAttribute('alt')].join(' ')).join(' '));
-    const names=files.filter(f=>rendered.includes(f.fileName));
-    // Image-only native previews often have no filename. A thumbnail supplies
-    // a bounded count, but never stands in for a named document attachment.
-    const images=files.filter(f=>f.mimeType.startsWith('image/'));
-    const unnamedImages=images.filter(f=>!names.includes(f));
-    const thumbs=[...root.querySelectorAll('img,[data-testid*="image-thumbnail"],[data-testid*="image-preview"]')]
-      .filter(n=>n.getClientRects().length>0);
-    return names.length+Math.min(thumbs.length,unnamedImages.length)>=files.length &&
-      root.children.length>=files.length;
+    const tile = button.closest('[data-composer-attachments] [role="button"][aria-label]');
+    if (tile && tile !== button) {
+      const name = tile.getAttribute('aria-label');
+      const actions = [...tile.querySelectorAll('button')];
+      if (name && actions.length === 1 && actions[0] === button &&
+          [...tile.querySelectorAll('img[alt]')].some(image => image.getAttribute('alt') === name)) return name;
+    }
+    const group = button.closest('[role="group"][aria-label]');
+    if (group?.querySelector('[data-default-action="true"] button')) {
+      const actions = [...group.querySelectorAll('button')].filter(node =>
+        !node.closest('[data-default-action="true"]'));
+      return actions.length === 1 && actions[0] === button ? group.getAttribute('aria-label') : undefined;
+    }
+    return /^Remove file(?: \d+)?: (.+)$/.exec(button.getAttribute('aria-label') || '')?.[1];
   }
-  async function loadFile(command,file,index,read,guard) {
-    if(!Number.isInteger(file.size)||file.size<=0||file.size>MAX_EACH||
-       typeof file.sha256!=='string'||!/^[a-f0-9]{64}$/.test(file.sha256)||
-       typeof file.mimeType!=='string'||!/^[-\w.+]+\/[-\w.+]+$/.test(file.mimeType)||
-       typeof file.fileName!=='string'||!/^[^\\/\x00-\x1f]{1,150}$/.test(file.fileName))fail('ATTACHMENT_INVALID');
-    const buffer=new Uint8Array(file.size);
-    for(let offset=0;offset<file.size;offset+=CHUNK){
+
+  function attachmentTiles(form, prior) {
+    return [...form.querySelectorAll('button[aria-label]')]
+      .filter(button => !prior.has(button) && composerFileName(button));
+  }
+  function nativeSendReady(form) {
+    const controls = globalThis.CIP_COS_CONTROLS;
+    const nativeSend = controls?.sendButton?.();
+    if (nativeSend) return controls.sendButtonEnabled(nativeSend);
+    const candidates = [...form.querySelectorAll(
+      'button[data-testid="send-button"],button[type="submit"]')].filter(b => !b.disabled &&
+        b.getAttribute('aria-disabled') !== 'true');
+    return candidates.length === 1;
+  }
+
+  async function loadFile(command, file, index, read, guard) {
+    if (!Number.isInteger(file.size) || file.size <= 0 || file.size > MAX_EACH ||
+        typeof file.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(file.sha256) ||
+        typeof file.mimeType !== 'string' || !/^[-\w.+]+\/[-\w.+]+$/.test(file.mimeType) ||
+        typeof file.fileName !== 'string' ||
+        !/^[^\\/\x00-\x1f]{1,150}$/.test(file.fileName) ||
+        !['file', 'image'].includes(file.uploadKind) ||
+        (file.uploadKind === 'image' && !file.mimeType.startsWith('image/')))
+      fail('ATTACHMENT_INVALID');
+    const buffer = new Uint8Array(file.size);
+    for (let offset = 0; offset < file.size; offset += CHUNK) {
       guard();
-      const part=await read({type:'input-chunk',id:command.id,lease:command.lease,
-        documentKey:command.documentKey,index,offset});
-      if(part?.offset!==offset||part?.total!==file.size||part?.sha256!==file.sha256||
-         typeof part.data!=='string')fail('ATTACHMENT_CHUNK_MISMATCH');
-      const binary=atob(part.data);
-      const length=Math.min(CHUNK,file.size-offset);
-      if(binary.length!==length)fail('ATTACHMENT_CHUNK_MISMATCH');
-      for(let i=0;i<length;i++)buffer[offset+i]=binary.charCodeAt(i);
+      const part = await read({ type: 'input-chunk', id: command.id, lease: command.lease,
+        documentKey: command.documentKey, index, offset });
+      if (part?.offset !== offset || part?.total !== file.size ||
+          part?.sha256 !== file.sha256 || typeof part.data !== 'string')
+        fail('ATTACHMENT_CHUNK_MISMATCH');
+      const binary = atob(part.data);
+      const length = Math.min(CHUNK, file.size - offset);
+      if (binary.length !== length) fail('ATTACHMENT_CHUNK_MISMATCH');
+      for (let i = 0; i < length; i++) buffer[offset + i] = binary.charCodeAt(i);
     }
     guard();
-    if(hex(new Uint8Array(await crypto.subtle.digest('SHA-256',buffer)))!==file.sha256)
+    if (hex(new Uint8Array(await crypto.subtle.digest('SHA-256', buffer))) !== file.sha256)
       fail('ATTACHMENT_INTEGRITY_FAILED');
-    return new File([buffer],file.fileName,{type:file.mimeType,lastModified:Date.now()});
+    return new File([buffer], file.fileName, { type: file.mimeType, lastModified: Date.now() });
   }
-  async function inputFor(form,file,guard){
-    // Only bounded counts cross into error diagnostics. Never include file
-    // names, paths, element attributes, selected UI text or user content.
-    const pickerFail=code=>{
-      const owned=localInputs(form),portal=portalInputs(form);
-      throw Object.assign(new Error(code),{code,notSent:true,diagnostic:{
-        stage:'composer',panelCount:Math.min(128,owned.length),
-        rowCount:Math.min(128,portal.length),
-        matchingUserCount:Math.min(128,owned.filter(n=>inputReady(n)&&inputScore(n,file)>0).length)
-      }});
-    };
-    let localAmbiguous=false;
-    const local=()=>{
-      try{return findInput(form,file);}
-      catch(e){
-        if(e.code==='ATTACHMENT_INPUT_AMBIGUOUS'){localAmbiguous=true;return null;}
-        throw e;
-      }
-    };
-    const direct=local();
-    if(direct)return direct;
-    // With two equally suitable native inputs, only the ChatGPT-owned upload
-    // gesture can establish which one its React handler actually activates.
-    // Capture the synthetic input click and cancel ONLY its default file
-    // chooser; the selected File is inserted through native change below.
-    let chosen=null,conflict=false,actionActive=false;
-    const before=new Set(portalInputs(form));
-    const observe=event=>{
-      const input=event.target;
-      if(!(input instanceof HTMLInputElement)||input.type!=='file' ||
-         !inputReady(input)||!inputScore(input,file))return;
-      const otherForm=input.form||input.closest('form');
-      if(otherForm && otherForm!==form)return;
-      if(!form.contains(input) && !portalInputs(form).includes(input))return;
-      // UA-generated file-input events from a label can be trusted. Accept
-      // them only during the exact native composer action we initiated;
-      // never intercept an independent human click outside that action.
-      if(event.isTrusted&&!actionActive)return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      if(chosen && chosen!==input)conflict=true;
-      else chosen=input;
-    };
-    const selected=portals=>{
-      if(conflict)pickerFail('ATTACHMENT_INPUT_AMBIGUOUS');
-      if(chosen)return chosen;
-      if(localAmbiguous)return null;
-      try{return findInput(form,file,portals);}
-      catch(e){
-        if(e.code==='ATTACHMENT_INPUT_AMBIGUOUS'){localAmbiguous=true;return null;}
-        throw e;
-      }
-    };
-    document.addEventListener('click',observe,true);
-    try{
-      const buttons=[...form.querySelectorAll(
-        'button[data-testid="composer-plus-btn"],button[data-composer-navigation-target="add-context"],button[aria-label*="Attach" i],button[aria-label*="Add files" i],button[aria-label*="添加文件"],button[data-testid="upload-button"]')]
-        .filter(b=>!b.disabled&&b.getClientRects().length>0);
-      if(buttons.length!==1)pickerFail(localAmbiguous?'ATTACHMENT_INPUT_AMBIGUOUS':'ATTACHMENT_INPUT_UNAVAILABLE');
-      guard();actionActive=true;
-      try{buttons[0].click();}finally{actionActive=false;}
-      // A native plus button may directly activate a mounted input, or open
-      // a menu first. Never choose the first of several tied file pickers.
-      for(let retry=0;retry<5;retry++){
-        guard();
-        const input=selected(portalInputs(form).filter(n=>!before.has(n)));
-        if(input)return input;
-        await delay(100);
-      }
-      const actions=[...document.querySelectorAll('[role="menuitem"],[role="option"]')]
-        .filter(n=>/^(?:upload|add)\s+(?:(?:photos?|images?)\s+(?:and|&)\s+)?files?|^upload\s+from\s+(?:computer|device)|上传(照片和)?文件|从(电脑|设备)上传|照片和文件/i
-          .test((n.textContent||'').trim())&&n.getClientRects().length>0);
-      if(actions.length!==1)pickerFail(localAmbiguous?'ATTACHMENT_INPUT_AMBIGUOUS':'ATTACHMENT_INPUT_UNAVAILABLE');
-      guard();actionActive=true;
-      try{actions[0].click();}finally{actionActive=false;}
-      for(let retry=0;retry<20;retry++){
-        guard();
-        const input=selected(portalInputs(form));
-        if(input)return input;
-        await delay(100);
-      }
-      pickerFail(localAmbiguous?'ATTACHMENT_INPUT_AMBIGUOUS':'ATTACHMENT_INPUT_UNAVAILABLE');
-    }finally{
-      document.removeEventListener('click',observe,true);
-    }
-  }
-  async function attach(command,box,read,guard,deadline){
-    const files=command?.payload?.files;
-    if(!Array.isArray(files)||!files.length)return ()=>true;
-    if(files.length>MAX_FILES)fail('ATTACHMENT_COUNT_UNSUPPORTED');
-    const form=ownedForm(box);
-    if(attachmentRoot(form)?.children.length||form.querySelector('[data-inline-file-uploading]'))
+
+  const none = Object.freeze({ proof: () => true, remove: async () => true });
+  async function attach(command, box, read, guard, deadline) {
+    const descriptors = command?.payload?.files;
+    if (!Array.isArray(descriptors) || !descriptors.length) return none;
+    if (descriptors.length > MAX_FILES) fail('ATTACHMENT_COUNT_UNSUPPORTED');
+    const form = ownedForm(box);
+    const prior = new Set(form.querySelectorAll('button[aria-label]'));
+    const preExisting = [...prior].some(composerFileName);
+    if (preExisting || isUploadBusy(form) ||
+        form.querySelector('[data-composer-attachments]:not(:empty)'))
       fail('ATTACHMENT_DRAFT_CONFLICT');
-    const blobs=[];
-    for(let i=0;i<files.length;i++)blobs.push(await loadFile(command,files[i],i,read,guard));
+
+    // Validate and prepare ALL bytes before touching the page.
+    const files = [];
+    for (let index = 0; index < descriptors.length; index++)
+      files.push(await loadFile(command, descriptors[index], index, read, guard));
     guard();
-    // Separate native image/document controls are normal. Build a stable plan
-    // before changing any file picker; each file must choose one owned input.
-    const groups=new Map();
-    for(let i=0;i<files.length;i++){
+    const names = files.map(file => file.name);
+
+    // Only remove controls that appeared after our delivery AND carry one of
+    // our exact file names. A user's own attachment is never touched.
+    let ownedTiles = null;
+    const ours = () => ownedTiles ?? attachmentTiles(form, prior)
+      .filter(button => names.includes(composerFileName(button)));
+    const remove = async () => {
+      for (const button of ours()) if (button.isConnected) button.click();
+      const end = Date.now() + 5000;
+      while (Date.now() < end) {
+        if (!ours().some(button => button.isConnected) && !isUploadBusy(form)) return true;
+        await delay(100);
+      }
+      return false;
+    };
+
+    // One paste of all Files into the empty editor, before any message text.
+    // Never click upload menus, touch a file input or open a system picker.
+    // An untrusted paste has no browser default action, so a paste the page
+    // does not handle writes nothing.
+    const transfer = new DataTransfer();
+    for (const file of files) transfer.items.add(file);
+    guard();
+    if (!box.isConnected || ownedForm(box) !== form) fail('ATTACHMENT_PAGE_CHANGED');
+    box.focus();
+    const paste = new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true });
+    box.dispatchEvent(paste);
+    if (!paste.defaultPrevented) fail('ATTACHMENT_PASTE_UNHANDLED');
+
+    const remaining = Number.isFinite(deadline) ? deadline - Date.now() - 20000 : 60000;
+    const end = Date.now() + Math.max(500, Math.min(60000, remaining));
+    const proof = () => {
       guard();
-      const input=await inputFor(form,files[i],guard);
-      const group=groups.get(input)??[];
-      group.push(blobs[i]);groups.set(input,group);
+      if (!box.isConnected || ownedForm(box) !== form) fail('ATTACHMENT_PAGE_CHANGED');
+      const tiles = attachmentTiles(form, prior);
+      if (tiles.length > files.length) fail('ATTACHMENT_EXTRA_CHANGED');
+      if (!ownedTiles) {
+        const unmatched = [...tiles];
+        if (files.every(file => {
+          const i = unmatched.findIndex(button => composerFileName(button) === file.name);
+          if (i < 0) return false;
+          unmatched.splice(i, 1);
+          return true;
+        })) ownedTiles = tiles;
+      }
+      if (!ownedTiles) return false;
+      if (tiles.length !== ownedTiles.length || tiles.some(node => !ownedTiles.includes(node)))
+        fail('ATTACHMENT_REMOVED');
+      return !isUploadBusy(form) && nativeSendReady(form);
+    };
+    try {
+      while (Date.now() < end) {
+        if (proof()) return Object.freeze({ proof, remove });
+        await delay(100);
+      }
+      fail('ATTACHMENT_UPLOAD_UNCONFIRMED');
+    } catch (error) {
+      // Never strand a half-uploaded file in ChatGPT's persisted draft.
+      try { await remove(); } catch {}
+      throw error;
     }
-    for(const [input,group] of groups){
-      guard();
-      if(input.isConnected===false||input.disabled)fail('ATTACHMENT_INPUT_UNAVAILABLE');
-      if(group.length>1 && !input.multiple)fail('ATTACHMENT_MULTIPLE_UNSUPPORTED');
-    }
-    for(const [input,group] of groups){
-      guard();
-      const transfer=new DataTransfer();
-      for(const file of group)transfer.items.add(file);
-      input.files=transfer.files;
-      input.dispatchEvent(new Event('input',{bubbles:true}));
-      input.dispatchEvent(new Event('change',{bubbles:true}));
-    }
-    const remaining=Number.isFinite(deadline)?deadline-Date.now()-25000:20000;
-    const end=Date.now()+Math.min(25000,Math.max(1000,remaining));
-    do{
-      guard();
-      if(!box.isConnected||ownedForm(box)!==form)fail('ATTACHMENT_PAGE_CHANGED');
-      if(evidence(form,files))return ()=>evidence(form,files);
-      await delay(100);
-    }while(Date.now()<end);
-    fail('ATTACHMENT_UPLOAD_UNCONFIRMED');
   }
-  globalThis.CIP_UPLOAD=Object.freeze({attach});
+  globalThis.CIP_UPLOAD = Object.freeze({ attach });
 })();

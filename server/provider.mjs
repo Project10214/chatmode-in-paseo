@@ -150,15 +150,17 @@ function createConnection(runtime, capabilities, validateEvent) {
   };
   const end = (hostId, turnId, state, error) => {
     const key = `${hostId}:${turnId}`; if (endedTurns.has(key)) return; endedTurns.add(key);
-    const unconfirmed = error === 'RECEIPT_UNCONFIRMED';
-    const link=(()=>{try{const s=sessions.get(hostId);return s&&broker.snapshot(s.id).conversationId;}catch{return null;}})();
-    const message = unconfirmed
-      ? link ? '此条消息的送达结果无法确认，但已保留 ChatGPT 对话绑定。不会自动重发；你可以继续发送一条新的消息。'
+    const snapshot=(()=>{try{const s=sessions.get(hostId);return s&&broker.snapshot(s.id);}catch{return null;}})();
+    const discarded = snapshot?.turn?.id === turnId && snapshot.turn.discarded === true;
+    const unconfirmed = !discarded && error === 'RECEIPT_UNCONFIRMED';
+    const link = snapshot?.conversationId;
+    const message = discarded ? '本条消息确认未发送，已作废，不会自动重试。请提交一条新消息。'
+      : unconfirmed ? link ? '此条消息的送达结果无法确认，但已保留 ChatGPT 对话绑定。不会自动重发；你可以继续发送一条新的消息。'
         : '网页可能已收到消息，但发送回执尚未确认。不会自动重发；请勿重复发送原消息。'
       : error;
     emit({type:'session.notice',sessionId:hostId,notice:{id:'native-permission',severity:'info',title:'授权等待已结束',dismissed:true}});
-    emit({type:'session.notice',sessionId:hostId,notice:{id:'native-delivery',severity:unconfirmed?'warning':'info',
-      title:unconfirmed?'已尝试发送，回执未确认；并非仍在排队':'本轮投递已结束；以回执或错误为准',dismissed:!unconfirmed}});
+    emit({type:'session.notice',sessionId:hostId,notice:{id:'native-delivery',severity:unconfirmed||discarded?'warning':'info',
+      title:discarded?'消息未发送，已作废；不会自动重试':unconfirmed?'已尝试发送，回执未确认；并非仍在排队':'本轮投递已结束；以回执或错误为准',dismissed:!unconfirmed&&!discarded}});
     // Settle native tool cards before the turn terminal without inventing a
     // successful tool result when its webpage status was not confirmed.
     try {

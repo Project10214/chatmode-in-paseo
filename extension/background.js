@@ -51,7 +51,7 @@ async function api(route, value, authenticated = true, profile = config) {
   const endpoint = endpointOf(profile.endpoint);
   const response = await fetch(`${endpoint.origin}${route}`, {
     method: value === undefined ? 'GET' : 'POST',
-    headers: { ...(value === undefined ? {} : { 'Content-Type': 'application/json' }), 'X-CIP-Extension': chrome.runtime.id, 'X-CIP-Features': 'files-v1',
+    headers: { ...(value === undefined ? {} : { 'Content-Type': 'application/json' }), 'X-CIP-Extension': chrome.runtime.id, 'X-CIP-Features': 'files-v2',
       ...(authenticated ? { Authorization: `Bearer ${profile.token}`, 'X-CIP-Engine': 'cos-native-alpha4.3', 'X-CIP-Browser': catalogBrowserId } : {}) },
     body: value === undefined ? undefined : JSON.stringify(value), signal: AbortSignal.timeout(15000), cache: 'no-store', redirect: 'error'
   });
@@ -105,7 +105,14 @@ async function identity(tabId, expected = null) {
 async function postReceipt(id, row, profile = config) {
   if (row.endpoint && row.endpoint !== profile.endpoint) return;
   await api('/result', { id, lease: row.lease, result: row.result }, true, profile);
-  row.phase = 'acked'; await saveLedger();
+  row.phase = 'acked';
+  if (row.command?.kind === 'send' && row.result?.notSent === true) {
+    // Keep the command ID/lease/result tombstone, never a retryable failed body.
+    delete row.command.payload.text;
+    delete row.command.payload.files;
+    row.discarded = true;
+  }
+  await saveLedger();
 }
 async function execute(command) {
   if (Object.hasOwn(ledger, command.id)) return;

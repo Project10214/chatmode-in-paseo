@@ -88,5 +88,22 @@ with sync_playwright() as pw:
  p.evaluate('CIP_DOM.refreshTranscript()');error=p.evaluate("()=>{try{CIP_DOM.state('typed-u');return null}catch(e){return e.code}}")
  assert error=='TRANSCRIPT_UNCONFIRMED'
  checks.append('oversized native text fails visibly rather than silently accepting an upstream-truncated answer')
+ p.close();p=fresh();p.evaluate('CIP_DOM.catalog()')
+ p.evaluate(r"""()=>{
+   fixtureLocation.pathname='/c/12345678-1234-1234-1234-123456789abc';fixtureLocation.href='https://chatgpt.com'+fixtureLocation.pathname;
+   const turn=document.createElement('section');turn.setAttribute('data-testid','conversation-turn-proven');document.querySelector('main').append(turn);
+   const image={content_type:'image_asset_pointer',asset_pointer:'file-service://file-PRIVATE_POINTER',width:2,height:2};
+   window.publicMessages=[
+     {id:'text-u',author:{role:'user'},content:{content_type:'text',parts:['Question']}},
+     {id:'image-only-u',author:{role:'user'},content:{content_type:'multimodal_text',parts:[image]},metadata:{attachments:[{id:'file-PRIVATE_POINTER',name:'PRIVATE_NAME.png'}]}},
+     {id:'pdf-only-u',author:{role:'user'},content:{content_type:'text',parts:['']},metadata:{attachments:[{id:'file-PRIVATE_DOC',name:'PRIVATE_DOC.pdf'}]}},
+     {id:'mixed-u',author:{role:'user'},content:{content_type:'multimodal_text',parts:[image,'Describe it']}},
+     {id:'empty-u',author:{role:'user'},content:{content_type:'text',parts:['']}}];
+   const owner={memoizedProps:{conversationId:'12345678-1234-1234-1234-123456789abc',turn:{messages:publicMessages}},return:null};turn.__reactFiber$fixture=owner;
+ }""")
+ p.evaluate('CIP_DOM.refreshTranscript()');items=p.evaluate('CIP_DOM.messages().map(({node,...x})=>x)')
+ assert [(i['id'],i['text']) for i in items if i['role']=='user']==[('text-u','Question'),('image-only-u',''),('pdf-only-u',''),('mixed-u','Describe it')],items
+ assert 'PRIVATE' not in json.dumps(items)
+ checks.append('file-only user turns keep their exact native ID with empty text; file pointers and names never cross; a bare empty turn is still skipped')
  p.close();b.close()
 print(json.dumps({'passed':len(checks),'checks':checks,'scope':'Chromium + actual transplanted CoS modules; synthetic native DOM and React states; no real ChatGPT/Paseo'},ensure_ascii=False,indent=2))

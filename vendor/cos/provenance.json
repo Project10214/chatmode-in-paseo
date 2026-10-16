@@ -130,7 +130,7 @@
     },
     {
       "localPath": "extension/upstream/cos-picker-main.js",
-      "localSha256": "ab4ca1914f06e5badab3ca5f828638c142e7bef72a486bf71d187e3f70049e27",
+      "localSha256": "6c34e540d47486b67aa83e12064b12c9c7c57f971f884dd07f5de2a956b31bb3",
       "world": "MAIN",
       "sourcePath": "extension/fiber.js",
       "sourceBlobSha": "3f1bbf2e803f2d50b482572eb6ffd0d1b8592f7f",
@@ -146,7 +146,7 @@
         "pickerSnapshot"
       ],
       "sourceRangeHint": "265–330, 2615–2810; alpha3.6 search anchor follows e40562640361ca8f74158b2262ca8c555b00abed fiber.js:79–85",
-      "relation": "function-level transplant with documented adaptations; projection includes CoS SEARCH_TURN_ANCHOR and rejects layout-shaped message IDs; alpha.4.1 also projects only same-native-user public reasoning recaps and bounded tool-call details; not an unchanged whole file"
+      "relation": "function-level transplant with documented adaptations; projection includes CoS SEARCH_TURN_ANCHOR and rejects layout-shaped message IDs; alpha.4.1 also projects only same-native-user public reasoning recaps and bounded tool-call details; not an unchanged whole file; alpha.4.12 keeps file-only user turns (empty text, no file pointers or names) so an attachment-only Send has an exact native user identity"
     },
     {
       "localPath": "extension/upstream/cos-activity-main.js",

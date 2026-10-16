@@ -60,3 +60,15 @@ DOM 回退删除、Runtime ID 校验、15 秒观察恢复、Chrome 当前标签�
 ## alpha.3.8 — 生成图预览
 
 `cos-images-main.js` 移植并适配 e4056264 的 `fiber.js:generatedImagesOf/shellTurnSource` 图片身份和完成逻辑，以及 `content.js:nativeImageNode/captureNativeImage` 的已加载像素读取。只输出公开原生消息 ID、assetId、尺寸及压缩 WebP 字节，不转发签名 URL、Cookie、私有工具数据。`cos-picker-main.js` 增加对应的受限描述投影和 nonce 图片请求。未移植 `exportNativeImage` 原图下载；Paseo 卡片明确标注压缩预览，并提供原对话网页入口。
+
+## 2026-10-16 · 原生附件发送（Chrome 0.2.19 / Paseo alpha.4.12）
+
+依据 GitHub 上游主分支 `totec448-spec/chat-on-steroids` 的 `extension/chatgpt-dom.js`（所读 blob SHA `f9036940bacc0c63ef4f3dcc173de5fdd0a18c2c`）中的 `uploadImages` / `composerFileName`（MIT），在 `extension/file-upload.js` 中移植附件送达证据：以新增的移除按钮和精确文件名确认每个文件，等上传进度消失、Send 可用。
+
+**投递方式与上游不同。**上游按附件来源选原生 file input，用 DataTransfer 写入后派发 change：纯图片用唯一的 `accept="image/*"`，含普通文件时用唯一无 accept 的通用输入框。2026-10-16 在已登录的真实 ChatGPT Composer 中实测到 4 个 file input，其中两个是 `accept="image/*"`，使上游的图片选择判为歧义，这正是生产 B01 失败的原因。同一页面上，把文件放进合成的 paste 事件交给编辑器，PNG、PDF 及两者混合都能产生带精确文件名的移除按钮。经用户决定，本项目**只走粘贴**：不使用任何 file input，不点击上传菜单。页面未处理该 paste 时报 `ATTACHMENT_PASTE_UNHANDLED`，不写入任何内容。`uploadKind` 仍随描述符传递并校验。
+
+**先附件、后正文。**上游与早期本项目都先写正文再上传；上传失败时，正文会留在 ChatGPT 持久化的首页草稿里。现在附件确认后才写正文和 `@` 应用；正文仍用 CoS `insertPrompt` 写入，不走粘贴。未发送的失败只移除插件本次新增、且文件名属于本次的附件，再清理本次正文。本项目自有的大小约束、SHA-256、浏览器 lease/文档/会话身份、失败防重发保留不变。
+
+**只有附件的用户消息。**上游 `publicTranscript` 只收录有文字的消息，只发文件的用户消息因此被跳过；网络请求证据遇到附件也按设计放弃。真实账号实发时，只带图片的消息已送达却无法确认回执。`cos-picker-main.js` 现在保留这类用户消息：正文只取其中的字符串部分（只有文件时为空），文件指针、文件名和元数据都不带出，使其能按原生用户消息 ID 确认回执。
+
+本地无需安装 CoS 桌面程序，不主张两套 runtime/文件协议字节等价；**真实账号的端到端附件发送仍待专项验收**。

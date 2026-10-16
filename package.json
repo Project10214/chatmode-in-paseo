@@ -1,6 +1,6 @@
 {
   "name": "chatmode-in-paseo",
-  "version": "0.1.0-alpha.4.7",
+  "version": "0.1.0-alpha.4.12",
   "description": "Direct ChatGPT browser provider for Paseo; no CoS desktop app",
   "private": true,
   "license": "MIT",
@@ -24,6 +24,10 @@
     "typecheck": "tsc --noEmit",
     "dev": "node server/standalone.mjs",
     "test:dom": "python3 tests/dom-audit.py",
+    "test:attachment-order": "python3 tests/attachment-order-browser.py",
+    "test:failed-send-disposal": "python3 tests/failed-send-disposal-browser.py",
+    "test:failed-send-persistence": "python3 tests/failed-send-persistence-browser.py",
+    "test:composer-diagnostics": "python3 tests/composer-diagnostics-browser.py",
     "test:browser": "python3 tests/browser-fixture.py",
     "test:flow": "python3 tests/browser-provider-flow.py",
     "test:sdk": "node --test tests/sdk-contract.mjs",

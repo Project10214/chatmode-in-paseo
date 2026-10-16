@@ -20,6 +20,21 @@ const finishTurn = (session, outcome) => {
   if (id && session.prompts[id]) session.prompts[id].outcome = outcome;
   session.turn.nativeTerminalItems = settleNativeTimeline(session);
 };
+// Discard only a proven-unsent attempt. Keep IDs/fingerprints/outcomes as
+// tombstones so deleting content can NEVER make an old message executable again.
+function discardUnsent(session, command) {
+  if (command?.kind !== 'send') return;
+  command.discarded = true;
+  delete command.payload.text;
+  delete command.payload.files;
+  if (!session) return;
+  const turnId = command.payload.turnId;
+  session.history = session.history.filter(item => item.id !== `user:${turnId}`);
+  if (session.turn?.id === turnId) {
+    session.turn.notSent = true; session.turn.discarded = true;
+    delete session.turn.text;
+  }
+}
 // A bound conversation can outlive a Send receipt deadline. This only preserves
 // the one authorized attempt; it never confirms delivery or authorizes replay.
 function pendingReceipt(c, s, url) {
@@ -217,12 +232,14 @@ export class Broker {
       const c=d.commands[id];invariant(c&&c.phase==='queued'&&!c.lease,'COMMAND_NOT_CLAIMABLE');
       invariant(['catalog','open','configure','ensure','send','stop'].includes(c.kind),'CONTROL_ONLY');
       c.phase='failed';c.error=error;const s=c.sessionId&&d.sessions[c.sessionId];
+      discardUnsent(s,c);
       if(c.kind==='send'&&s?.turn?.id===c.payload.turnId&&!s.turn.authorized&&!s.turn.outcome){
         s.status='idle';s.error=error;finishTurn(s,'failed');s.turn.notSent=true;
         return {id:s.id,turnId:s.turn.id,state:'failed',error,activityItem:settleActivity(s,'failed')};
       }
       return null;
     });
+    if (this.store.read().commands[id]?.discarded) await this.inputFiles.remove(id);
     this.settle(id,error);if(result)this.emit(result.id,result);return {accepted:true,notSent:true};
   }
   async recover() {
@@ -231,6 +248,7 @@ export class Broker {
       for (const c of Object.values(data.commands)) if (pending(c)) {
         const s = c.sessionId && data.sessions[c.sessionId];
         if (c.kind === 'send' && c.phase === 'authorized' && pendingReceipt(c, s, s?.conversationId)) continue;
+        if (c.phase !== 'authorized') discardUnsent(s,c);
         c.phase = 'failed'; c.error = 'RUNTIME_RESTARTED';
       }
       for (const c of Object.values(data.commands)) if (['open', 'configure', 'ensure'].includes(c.kind) && c.error === 'RUNTIME_RESTARTED' && c.lease) {
@@ -241,12 +259,14 @@ export class Broker {
           s.turn?.lease && !s.turn.outcome &&
           (s.turn.receiptPending === true || (s.turn.nativeMessageId && ['running','stopping'].includes(s.status)));
         if (retained) continue;
-        s.status = 'blocked'; s.error = 'RUNTIME_RESTARTED';
+        s.status = s.turn?.notSent === true ? 'idle' : 'blocked'; s.error = 'RUNTIME_RESTARTED';
         if (s.turn && !s.turn.outcome) s.turn.outcome = 'failed';
         if (s.turn && s.prompts[s.turn.clientMessageId]) s.prompts[s.turn.clientMessageId].outcome = 'failed';
         settleActivity(s,'failed');
       }
     });
+    await Promise.all(Object.values(this.store.read().commands).filter(c => c.discarded)
+      .map(c => this.inputFiles.remove(c.id)));
   }
   subscribe(id, fn) { this.events.on(id, fn); return () => this.events.off(id, fn); }
   emit(id, event) { for (const fn of this.events.listeners(id)) { try { fn(structuredClone(event)); } catch {} } this.slots.pump(); }
@@ -404,6 +424,7 @@ export class Broker {
             result.notSent !== true && pendingReceipt(c, s, result.bindingUrl))
           return { value: c.result, pending: { id:s.id, turnId:s.turn.id, state:'receipt-pending' } };
         c.phase = 'failed'; c.error = code;
+        if (result.notSent === true || !wasAuthorized) discardUnsent(s,c);
         if (c.kind === 'send' && s?.turn?.id === c.payload.turnId && !s.turn.outcome) {
           // A failed receipt may still carry this authorized document's exact
           // conversation URL. Bind it without ever accepting it as a receipt.
@@ -468,6 +489,7 @@ export class Broker {
       } else throw new BridgeError('UNKNOWN_COMMAND');
       c.phase = 'done'; return { value: c.result };
     });
+    if (this.store.read().commands[id]?.discarded) await this.inputFiles.remove(id);
     this.settle(id, output.error, output.value);
     if (affected) this.emit(affected.id, affected);
     if (output.pending) this.emit(output.pending.id, output.pending);
@@ -547,11 +569,18 @@ export class Broker {
   }
   async failTurn(id, error, uncertain, expectedTurnId) {
     if (this.closed) return;
+    let discardedId = null;
     const result = await this.store.transaction(d => {
       const s = d.sessions[id]; if (!s?.turn || s.turn.outcome || (expectedTurnId && s.turn.id !== expectedTurnId)) return null;
       finishTurn(s, 'failed'); s.status = uncertain&&!s.conversationId ? 'blocked' : 'idle'; s.error = error;
+      const command = d.commands[s.turn.commandId];
+      if (!uncertain && !s.turn.authorized && command?.kind === 'send') {
+        command.phase = 'failed'; command.error ??= error;
+        discardUnsent(s,command); discardedId = command.id;
+      }
       return { id, turnId: s.turn.id, state: 'failed', error, activityItem:settleActivity(s,'failed') };
     }, { control: true });
+    if (discardedId) await this.inputFiles.remove(discardedId);
     if (result) this.emit(id, result);
   }
   async observe(event) {
@@ -700,7 +729,7 @@ export class Broker {
       const c = d.commands[s.turn.commandId];
       if (!s.turn.authorized && s.turn.origin!=='browser') {
         if (c && pending(c)) { c.phase = 'failed'; c.error = 'CANCELLED_BEFORE_SEND'; }
-        finishTurn(s, 'canceled'); s.status = 'idle';
+        finishTurn(s, 'canceled'); s.status = 'idle'; discardUnsent(s,c);
         return { before: true, commandId: c?.id, turnId: s.turn.id, activityItem:settleActivity(s,'canceled') };
       }
       if (!s.turn.nativeMessageId) return { uncertain: true, turnId: s.turn.id };
@@ -714,7 +743,10 @@ export class Broker {
     }, { control: true });
     if (decision.settled) return { stopped: decision.stopped };
     if (decision.before) {
-      if (decision.commandId) this.settle(decision.commandId, 'CANCELLED_BEFORE_SEND');
+      if (decision.commandId) {
+        await this.inputFiles.remove(decision.commandId);
+        this.settle(decision.commandId, 'CANCELLED_BEFORE_SEND');
+      }
       this.emit(id, { id, turnId: decision.turnId, state: 'canceled', activityItem:decision.activityItem }); return { stopped: true };
     }
     if (decision.uncertain) { await this.failTurn(id, 'STOP_UNCONFIRMED', true, decision.turnId); throw new BridgeError('STOP_UNCONFIRMED'); }

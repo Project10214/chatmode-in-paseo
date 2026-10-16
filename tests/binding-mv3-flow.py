@@ -174,6 +174,7 @@ with tempfile.TemporaryDirectory(prefix='cip-mv3-state-') as directory, tempfile
         opened=wait(lambda es:next((e for e in es if e['type']=='session.opened'),None))
         sid=opened['persistence']['data']['id']
         checks.append('real background catalog and native model configuration reach the Provider')
+        assert 'prompt.image' in opened['capabilities']
         def prompt(mid,text,host='a'):
             send_input({'type':'session.prompt','sessionId':host,'prompt':{'clientMessageId':mid,'delivery':'auto','input':{'type':'message','content':[{'type':'text','text':text}]}}})
         prompt('first','FIRST_MV3_BODY')
@@ -206,6 +207,25 @@ with tempfile.TemporaryDirectory(prefix='cip-mv3-state-') as directory, tempfile
         assert 'NEVER_EXPORT_TOOL_ARGUMENTS' not in json.dumps(state['history'])
         checks.append('Paseo native tool_call and public reasoning summary survive Chrome MV3 streaming with no hidden args/COT')
         checks.append('public answer travels content -> worker -> HTTP /event -> Runtime history -> Provider timeline')
+        # Fixture-only draft: diagnostic evidence must survive the real Chrome
+        # content -> worker -> Runtime allowlist, without exporting its text.
+        page.locator('#prompt-textarea').fill('PRIVATE_DIAGNOSTIC_FIXTURE')
+        send_input({'type':'session.configure','requestId':'draft-diag','sessionId':'a',
+                    'changes':{'settings':{'app:quick':'none'}}})
+        refusal=wait(lambda es:next((e for e in es if e.get('type')=='request.failed'
+                                   and e.get('requestId')=='draft-diag'),None))
+        assert refusal['error']['code']=='DRAFT_CONFLICT',refusal
+        commands=json.loads((Path(directory)/'state.json').read_text())['commands'].values()
+        refusal_command=next(c for c in commands if c.get('sessionId')==sid
+                             and c['kind']=='configure' and c.get('error')=='DRAFT_CONFLICT')
+        diagnostic=refusal_command['diagnostic']
+        assert diagnostic['checkpoint']=='configure-start' and diagnostic['draftDiagnosticsVersion']==1,diagnostic
+        assert diagnostic['extensionVersion']==json.loads((R/'extension/manifest.json').read_text())['version'] and diagnostic['draftChars']==len('PRIVATE_DIAGNOSTIC_FIXTURE'),diagnostic
+        assert 'PRIVATE_DIAGNOSTIC_FIXTURE' not in json.dumps(diagnostic)
+        assert page.locator('#prompt-textarea').inner_text()=='PRIVATE_DIAGNOSTIC_FIXTURE'
+        assert page.evaluate('fixtureState.clicks')==1
+        page.locator('#prompt-textarea').fill('')
+        checks.append('read-only composer diagnostics survive actual MV3/Runtime transport without draft text or a Send')
         prompt('second','SECOND_MV3_BODY')
         wait(lambda es:call('read',id=sid)['turn'].get('nativeMessageId')=='native-user-2')
         page.reload()

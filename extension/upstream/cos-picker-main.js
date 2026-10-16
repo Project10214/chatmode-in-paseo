@@ -197,6 +197,21 @@
   // CIP projection adapter. Source readers above and in cos-transcript-core.js are upstream;
   // this exact-id, bounded wire projection is deliberately not the entire CoS recorder.
   const imageReader = globalThis.CIP_createCoSImages?.({fiberOf, core:globalThis.CIP_COS_PUBLIC_CORE});
+  // CIP addition: a user turn can carry only files. Its string parts (none for
+  // a file-only turn) become its text, so an attachment-only Send still has an
+  // exact native user identity. Asset pointers, file names and file metadata
+  // never cross the projection.
+  function attachedFiles(message) {
+    const files=message?.metadata?.attachments;
+    if(Array.isArray(files)&&files.length>0&&files.length<=64)return true;
+    const content=message?.content;
+    const parts=content?.content_type==='multimodal_text'&&Array.isArray(content.parts)?content.parts:[];
+    return parts.length<=64&&parts.some(part=>part&&typeof part==='object'&&!Array.isArray(part));
+  }
+  function stringParts(content) {
+    const parts=Array.isArray(content?.parts)?content.parts:[];
+    return parts.filter(part=>typeof part==='string').join('\n').slice(0,256000);
+  }
   function publicTranscript() {
     imageReader?.begin();
     const core=globalThis.CIP_COS_PUBLIC_CORE;
@@ -236,8 +251,9 @@
           if(parts.length>1000||parts.reduce((n,v)=>n+(typeof v==='string'?v.length:0),0)>256000)
             return{path:location.pathname,available:false,messages:[],error:'TRANSCRIPT_LIMIT'};
         }
-        const raw=core.authoredText(message);
-        if(!raw && id!==terminal)continue;
+        let raw=core.authoredText(message);
+        if(raw==null&&role==='user'&&attachedFiles(message))raw=stringParts(content);
+        if(raw==null && id!==terminal)continue;
         const text=role==='user'?core.withoutAppMentions(raw??''):(raw??'');
         if(seen.has(id)){if(seen.get(id)!==text)return{path:location.pathname,available:false,messages:[],error:'TRANSCRIPT_CONFLICT'};continue;}
         total+=text.length;if(total>512000)return{path:location.pathname,available:false,messages:[],error:'TRANSCRIPT_LIMIT'};

@@ -47,7 +47,7 @@ async function fileBytes(item, number) {
     invariant(raw.length%4===0 && /^[A-Za-z0-9+/]+={0,2}$/.test(raw), 'ATTACHMENT_INVALID');
     const bytes=Buffer.from(raw,'base64');
     invariant(bytes.length>0 && bytes.toString('base64')===raw && actualType(bytes,ext), 'ATTACHMENT_INVALID');
-    return { bytes, fileName:'paseo-image-'+(number+1)+ext, mimeType:mime };
+    return { bytes, fileName:'paseo-image-'+(number+1)+ext, mimeType:mime, uploadKind:'image' };
   }
   invariant(item.type==='uploaded_file', 'ATTACHMENT_UNSUPPORTED');
   const {fileName,mimeType,size}=item, ext=path.extname(fileName??'').toLowerCase();
@@ -76,7 +76,7 @@ async function fileBytes(item, number) {
   }finally{await fd.close();}
   invariant(bytes.length===size,'ATTACHMENT_SIZE_CHANGED');
   invariant(actualType(bytes,ext),'ATTACHMENT_INVALID');
-  return {bytes,fileName,mimeType:TYPES[ext]};
+  return {bytes,fileName,mimeType:TYPES[ext],uploadKind:'file'};
 }
 export class InputFileStore {
   constructor(directory) { this.directory=directory; }
@@ -90,12 +90,12 @@ export class InputFileStore {
     const output=[];let total=0;
     try {
       for(let i=0;i<items.length;i++){
-        const {bytes,fileName,mimeType}=await fileBytes(items[i],i);
+        const {bytes,fileName,mimeType,uploadKind}=await fileBytes(items[i],i);
         invariant(bytes.length<=INPUT_LIMITS.each && bytes.length>0,'ATTACHMENT_TOO_LARGE');
         invariant(!output.some(f=>f.fileName.toLowerCase()===fileName.toLowerCase()),'ATTACHMENT_NAME_AMBIGUOUS');
         total+=bytes.length;invariant(total<=INPUT_LIMITS.total,'ATTACHMENT_TOO_LARGE');
         await fs.writeFile(this.location(commandId,i),bytes,{mode:0o600,flag:'wx'});
-        output.push({fileName,mimeType,size:bytes.length,sha256:sha(bytes)});
+        output.push({fileName,mimeType,size:bytes.length,sha256:sha(bytes),uploadKind});
       }
       return output;
     }catch(e){await this.remove(commandId);throw e;}
