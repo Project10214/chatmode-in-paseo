@@ -48,7 +48,7 @@ HTTP 仅回环监听，检查 Host、Origin、extensionId、token、大小和速
 
 完整 SDK 类型解析、Paseo 安装和设置界面；真实 ChatGPT 菜单、应用与最终状态；Chrome MV3 暂停/恢复及导航竞态；账号切换和分页目录；实际远程 MCP 的只读验证；高并发与大历史性能。
 
-未移植完整 CoS Fiber、Goal/Loop、Compact & Resume、工具审批代理、丰富工具日志、原生子 Agent 调度；不将这些列为本版已实现。存储仍写整份状态，尚无归档删除 UI。离线测试不是生产负载测试或“分布式恰好一次”证明。
+未移植完整 CoS Fiber、Goal/Loop、Compact & Resume、工具审批代理、丰富工具日志、原生子 Agent 调度；不将这些列为本版已实现。存储仍写整份状态；已归档会话移到 `archive/YYYY-MM-DD.jsonl`，`state.json` 只留索引，尚无删除 UI。离线测试不是生产负载测试或“分布式恰好一次”证明。
 
 
 ## 7. CoS 函数移植边界
