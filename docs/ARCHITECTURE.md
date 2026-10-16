@@ -1,6 +1,6 @@
 # 架构与明确边界
 
-日期：2026-10-13；版本：0.1.0-alpha.3。详见 ITERATION_ALPHA3.md 与 vendor/cos/README.md。
+协议见 [PROTOCOL.md](PROTOCOL.md)；CoS 函数移植的来源与改动见 [vendor/cos/README.md](../vendor/cos/README.md)。
 
 ## 1. 两条通道，不混用权限
 
@@ -48,9 +48,9 @@ HTTP 仅回环监听，检查 Host、Origin、extensionId、token、大小和速
 
 完整 SDK 类型解析、Paseo 安装和设置界面；真实 ChatGPT 菜单、应用与最终状态；Chrome MV3 暂停/恢复及导航竞态；账号切换和分页目录；实际远程 MCP 的只读验证；高并发与大历史性能。
 
-未移植完整 CoS Fiber、Goal/Loop、Compact & Resume、附件、工具审批代理、丰富工具日志、原生子 Agent 调度；不将这些列为本版已实现。存储仍写整份状态，尚无归档删除 UI。离线 127 项检查不是生产负载测试或“分布式恰好一次”证明。
+未移植完整 CoS Fiber、Goal/Loop、Compact & Resume、附件、工具审批代理、丰富工具日志、原生子 Agent 调度；不将这些列为本版已实现。存储仍写整份状态，尚无归档删除 UI。离线测试不是生产负载测试或“分布式恰好一次”证明。
 
 
 ## 7. CoS 函数移植边界
 
-五个活跃模块位于 extension/upstream；本机服务端仍是原有 Paseo 适配 Runtime。CIP v3 将旧扩展隔离，原版 CoS 主程序不会启动。MAIN 世界仅提供已提交状态的只读公开投影，isolated 世界控制原生 UI；页内消息不持有配对 token。来源清单不等于整个 CoS 功能或兼容性的继承。
+十二个活跃模块位于 extension/upstream（逐个来源见 vendor/cos/provenance.json）；本机服务端仍是原有 Paseo 适配 Runtime。CIP v3 将旧扩展隔离，原版 CoS 主程序不会启动。MAIN 世界仅提供已提交状态的只读公开投影，isolated 世界控制原生 UI；页内消息不持有配对 token。来源清单不等于整个 CoS 功能或兼容性的继承。

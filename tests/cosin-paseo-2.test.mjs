@@ -20,7 +20,7 @@ test('COS2-01: public reasoning recap and separate tool call identities, no hidd
       reasoningRecap:{type:'show',summary:'正在比较两种实现方案'},
       activeReasoning:{text:'PRIVATE_COT',presentation:'thought'},
       items:[tool('call-a'),tool('call-hidden',{channel:'analysis'})]},
-    tool('call-b',{invocation:{server:'presure',tool:'get_task',arguments:{apiKey:'NEVER_EXPOSE'}}}),
+    tool('call-b',{invocation:{server:'tasks',tool:'get_item',arguments:{apiKey:'NEVER_EXPOSE'}}}),
     tool('secret',{metadata:{is_visually_hidden_from_conversation:true}})
   ]});
   assert.deepEqual(value.reasoning,[{id:'reason-1',text:'正在比较两种实现方案'}]);
@@ -67,7 +67,7 @@ test('COS2-04: broker native tool cards are upserted per callId with streamed st
   await observation(publicTool);
   await observation(publicTool);
   await observation({...publicTool,status:'completed'});
-  await observation({type:'tool_call',callId:'mcp-tool-2',name:'presure · list_workitems',
+  await observation({type:'tool_call',callId:'mcp-tool-2',name:'tasks · list_items',
     kind:'search',status:'running'});
   await observation({type:'reasoning',id:'recap-1',text:'先核对代码'});
   await observation({type:'reasoning',id:'recap-1',text:'先核对代码，再确认错误'});

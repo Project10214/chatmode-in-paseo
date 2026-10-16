@@ -10,8 +10,6 @@ artifacts/
 
 __pycache__/
 *.pyc
-!docs/evidence-alpha3/*.log
-!docs/evidence-alpha3-2/*.log
 .test-tools/
 .local-backups/
 vendor/cos/reference/
@@ -30,3 +28,7 @@ state.json
 *.key
 *.p12
 *.pfx
+
+# Private iteration and acceptance notes stay local; only curated docs are published
+docs/internal/
+docs/evidence*/

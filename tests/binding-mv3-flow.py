@@ -232,7 +232,7 @@ with tempfile.TemporaryDirectory(prefix='cip-mv3-state-') as directory, tempfile
         page_b=next(p for p in browser.pages if p.url.endswith('/c/'+state_b['conversationId']))
         assert page.evaluate('fixtureState.clicks')==3 and page_b.evaluate('fixtureState.clicks')==1
         checks.append('two simultaneous native tabs retain separate model/app choices, IDs, answers and terminal events')
-        # COSINPASEO-1: ChatGPT's OWN editor, not Paseo, starts a new native user turn.
+        # ChatGPT's OWN editor, not Paseo, starts a new native user turn.
         # This must be imported as one autonomous Paseo turn without a second Send.
         before=json.loads((Path(directory)/'state.json').read_text())
         native_sends_before=len([v for v in before['commands'].values()

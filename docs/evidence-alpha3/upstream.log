@@ -1,6 +1,0 @@
-
-> cos-in-paseo@0.1.0-alpha.3 verify:upstream
-> node scripts/verify-upstream.mjs
-
-PASS: 5 active source-derived modules, recorded hashes, MIT notice and manifest worlds verified.
-Function excerpts contain documented adaptations; no whole-file upstream equivalence or live-host claim.

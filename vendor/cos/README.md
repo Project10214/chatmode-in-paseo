@@ -35,7 +35,7 @@ Provider 注册和事件转换、首次发送延迟创建标签页、Chrome tabs
 
 原版只挑选 Core 名称；本项目按需求改为完整 `mode=plugins` 中的全部原生应用 ID/名称，增加顺序防护、分页/冲突拒绝与 CIP nonce 回复。不是完整复制 usage.js，也不含它的配额、发送请求体或流式内容观察逻辑。仅观察网页自己的 GET 响应，不主动请求私有接口，不读取请求头、Cookie、令牌或工具参数。
 
-`dom-adapter.setApps` 改为调用已经移植的 `addAppMention`，不再先输入 @ 并搜索菜单；原版单 Core 标记扩展为按 ID 多选。`extension/app-catalog.js` 是两端消息适配，不是声称来自原版。旧 `app-menu.js` 不再被清单加载，保留仅作历史对照。
+`dom-adapter.setApps` 改为调用已经移植的 `addAppMention`，不再先输入 @ 并搜索菜单；原版单 Core 标记扩展为按 ID 多选。`extension/app-catalog.js` 是两端消息适配，不是声称来自原版。
 
 自动同步由 `server/catalog.mjs` 统一负责：配对扩展首次心跳、Paseo Provider 和设置页共用一个请求。原版 CoS 源码没有本项目的 Paseo 调度逻辑，不能将这部分说成照搬 CoS。
 
@@ -48,14 +48,14 @@ Provider 注册和事件转换、首次发送延迟创建标签页、Chrome tabs
 
 同时修复刷新后的 content script 尚未切换 nativeMode 就被查询消息身份的遗漏。更换网页消息结构不再需要先进入模型配置才能启用原生正文读取。发送确认仍要求新原生用户消息编号、匹配正文和对应会话；不把 URL 变化、输入框清空或回答文字当作单独的送达证明。
 
-验证及边界见 `docs/RECEIPT_ALPHA3_3.md`。离线测试不构成真实登录账号验收。
+离线测试不构成真实登录账号验收。
 
 
 ## alpha.3.6：搜索锚点与稳定消息身份
 
 `cos-picker-main.js` 的 CIP 公开消息投影补齐 CoS `fiber.js`（e40562640361ca8f74158b2262ca8c555b00abed，第 79–85 行）的 `SEARCH_TURN_ANCHOR`；锚点只用于定位原生消息模型，消息身份取自其 messageId，不取布局键。新增布局形状拒绝和冲突保护，当前哈希已记录于 provenance.json。
 
-DOM 回退删除、Runtime ID 校验、15 秒观察恢复、Chrome 当前标签页 URL 核验属于本项目适配，不声称是 CoS 的整套原版 runtime。详情与真实 MV3 受控测试见 `docs/BINDING_ALPHA3_6.md`。
+DOM 回退删除、Runtime ID 校验、15 秒观察恢复、Chrome 当前标签页 URL 核验属于本项目适配，不声称是 CoS 的整套原版 runtime。
 
 ## alpha.3.8 — 生成图预览
 

@@ -1,4 +1,4 @@
-"""COSINPASEO-7: native file input smoke in real isolated Chrome (no logged-in ChatGPT)."""
+"""Native file input smoke in real isolated Chrome (no logged-in ChatGPT)."""
 import base64, json
 from pathlib import Path
 from playwright.sync_api import sync_playwright

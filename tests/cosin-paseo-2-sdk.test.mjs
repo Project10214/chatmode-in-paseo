@@ -5,11 +5,11 @@ import {createProvider,CAPABILITIES} from '../server/provider.mjs';
 
 let ProviderEventSchema=null;
 try{
-  ({ProviderEventSchema}=await import('../.test-tools/ui/node_modules/@getpaseo/plugin/dist/server/provider.js'));
+  ({ProviderEventSchema}=await import(process.env.CIP_SDK_MODULE??'@getpaseo/plugin/server/provider'));
 }catch{}
 
 test('COS2-SDK: the installed Paseo Provider validates actual native reasoning/tool calls and endings',
-  {skip:!ProviderEventSchema&&'Pinned Paseo SDK not available in isolated test-tools'},async t=>{
+  {skip:!ProviderEventSchema&&'Paseo SDK not installed (run npm install --ignore-scripts)'},async t=>{
     const f=await fixture(t),s=await f.ready(),{event}=await f.sending(s);
     const conn=await createProvider({...f,status:()=>({connected:true})},
       value=>ProviderEventSchema.parse(value)).connect({versions:[1],capabilities:CAPABILITIES});

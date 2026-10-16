@@ -1,4 +1,4 @@
-// COSINPASEO-1: wake an existing Paseo Agent without submitting a prompt.
+// Wake an existing Paseo Agent without submitting a prompt.
 // The only host API used for wake is agents.ref(id).commands(): Paseo's
 // list_commands_request calls ensureAgentLoaded() for a closed agent.
 // Never call send(), run(), refreshAgent(), or native ChatGPT Send here.
