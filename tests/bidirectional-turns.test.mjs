@@ -19,7 +19,7 @@ const external=s=>({
   text:'Sent directly in the ChatGPT webpage',url:url(s)
 });
 
-test('COS1-A: a browser native user message starts Paseo autonomous events without issuing Send',async t=>{
+test('TURN-A: a browser native user message starts Paseo autonomous events without issuing Send',async t=>{
   const f=await fixture(t),s=await completed(f,await f.ready());
   const runtime={broker:f.broker,store:f.store,status:()=>({connected:true})};
   const connection=await createProvider(runtime).connect({versions:[1],capabilities:CAPABILITIES});
@@ -50,7 +50,7 @@ test('COS1-A: a browser native user message starts Paseo autonomous events witho
   assert.equal(f.broker.idleBindings().find(x=>x.sessionId===s.id).previousNativeMessageId,'native-from-browser-1');
 });
 
-test('COS1-B: external turn enforces original conversation, exact anchor, owner and idle state',async t=>{
+test('TURN-B: external turn enforces original conversation, exact anchor, owner and idle state',async t=>{
   const f=await fixture(t),s=await completed(f,await f.ready()),proof=external(s);
   for(const [change,code] of [
     [{url:'https://chatgpt.com/c/foreign'},'WRONG_CONVERSATION'],
@@ -68,7 +68,7 @@ test('COS1-B: external turn enforces original conversation, exact anchor, owner 
   assert.equal(duplicate.turnId,first.turnId);
 });
 
-test('COS1-C: running turn configuration is durable but only applied after native finish',async t=>{
+test('TURN-C: running turn configuration is durable but only applied after native finish',async t=>{
   const f=await fixture(t),s=await f.ready();
   const turn=await f.sending(s,'active','text');
   const desired={...s.config,appIds:[]};
@@ -87,7 +87,7 @@ test('COS1-C: running turn configuration is durable but only applied after nativ
   assert.equal(f.broker.snapshot(s.id).pendingConfig,undefined);
 });
 
-test('COS1-D: native Paseo settings accept an active turn with next-turn tool selection',async t=>{
+test('TURN-D: native Paseo settings accept an active turn with next-turn tool selection',async t=>{
   const f=await fixture(t),s=await f.ready(),started=await f.sending(s);
   const runtime={broker:f.broker,store:f.store,status:()=>({connected:true})};
   const conn=await createProvider(runtime).connect({versions:[1],capabilities:CAPABILITIES});
@@ -106,7 +106,7 @@ test('COS1-D: native Paseo settings accept an active turn with next-turn tool se
   assert.equal(f.broker.snapshot(s.id).status,'idle');
 });
 
-test('COS1-E: host wake uses the existing Agent commands path, never an outbound chat prompt',async()=>{
+test('TURN-E: host wake uses the existing Agent commands path, never an outbound chat prompt',async()=>{
   const sid='fb482e6c-2e0a-49d5-9e02-66f3ebf57747',agentId='agent-1';
   const agent={id:agentId,provider:'chatmode',archivedAt:null,
     persistence:{provider:'chatmode',sessionId:'plugin:'+JSON.stringify({version:1,data:{id:sid}})}};
@@ -125,7 +125,7 @@ test('COS1-E: host wake uses the existing Agent commands path, never an outbound
   assert.equal(commands,2);
 });
 
-test('COS1-F: a cold Paseo Provider restores an imported browser turn by persistence',async t=>{
+test('TURN-F: a cold Paseo Provider restores an imported browser turn by persistence',async t=>{
   const f=await fixture(t),s=await completed(f,await f.ready());
   // No Provider owns this session while the browser-origin turn arrives.
   const imported=await f.broker.importExternalTurn(external(s));
@@ -146,7 +146,7 @@ test('COS1-F: a cold Paseo Provider restores an imported browser turn by persist
   assert.equal(Object.values(f.store.read().commands).filter(x=>x.kind==='send').length,1);
 });
 
-test('COS1-G: switching pending tools back to active settings clears the deferred change',async t=>{
+test('TURN-G: switching pending tools back to active settings clears the deferred change',async t=>{
   const f=await fixture(t),s=await f.ready(),turn=await f.sending(s,'running','text');
   await f.broker.stageConfiguration(s.id,{...s.config,appIds:[]});
   assert.deepEqual(f.broker.snapshot(s.id).pendingConfig.appIds,[]);

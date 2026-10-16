@@ -7,8 +7,8 @@ import {createRuntime} from '../server/runtime.mjs';
 import {validateCatalog} from '../server/protocol.mjs';
 import {rawCatalog,selection,until} from './helpers.mjs';
 
-test('COS1-HTTP: authenticated idle observation imports once, wakes once and never enqueues Send',async t=>{
-  const directory=await mkdtemp(path.join(os.tmpdir(),'cos1-http-')),wake=[];
+test('TURN-HTTP: authenticated idle observation imports once, wakes once and never enqueues Send',async t=>{
+  const directory=await mkdtemp(path.join(os.tmpdir(),'turn-http-')),wake=[];
   const runtime=await createRuntime({directory,port:0,onExternalTurn:id=>{wake.push(id)}});
   t.after(async()=>{await runtime.close();await rm(directory,{recursive:true,force:true})});
   const pairing=JSON.parse(await readFile(path.join(directory,'pairing.json'),'utf8'));

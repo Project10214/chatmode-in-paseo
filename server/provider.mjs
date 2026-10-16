@@ -13,7 +13,7 @@ export function createProvider(runtime, validateEvent = value => value) {
   return {
     id: 'chatmode', label: 'Chatmode', icon: 'icon.svg',
     description: 'ChatGPT browser conversations, using already-authorized ChatGPT apps',
-    async status() { const s=runtime.status();return s.connected||s.paired ? { available: true } : { available: false, diagnostic: 'Pair the CoS in Paseo Chrome extension on this daemon host.' }; },
+    async status() { const s=runtime.status();return s.connected||s.paired ? { available: true } : { available: false, diagnostic: 'Pair the Chatmode in Paseo Chrome extension on this daemon host.' }; },
     async getCatalogCacheKey(options) {
       const data = runtime.store.read();
       return JSON.stringify({ scope: options.scope, cwd: options.cwd ?? '', defaults: data.defaults,

@@ -18,7 +18,7 @@ export default function contribute(server: PluginServerContext) {
     server.on('agent.closed', ({agent},context) => { wake.adopt(context.paseo); void wake.rememberAgent(agent.id); })
   ];
   // Synchronous registration. Startup belongs to one shared promise, not each connection.
-  const ready = createRuntime({ directory: path.resolve(process.env.CIP_STATE_DIR ?? path.join(os.homedir(), '.cos-in-paseo')),
+  const ready = createRuntime({ directory: path.resolve(process.env.CIP_STATE_DIR ?? path.join(os.homedir(), '.chatmode-in-paseo')),
     port: Number(process.env.CIP_PORT ?? 17843), onExternalTurn: sessionId => wake.wake(sessionId) });
   // Mark the startup rejection handled even before the first caller asks for status.
   void ready.catch(() => {});

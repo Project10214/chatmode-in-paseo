@@ -31,7 +31,7 @@ function contentPage(users){
   };
 }
 
-test('COS1-W1: idle ChatGPT page identifies only a NEW anchored user, without sending a message',async()=>{
+test('TURN-W1: idle ChatGPT page identifies only a NEW anchored user, without sending a message',async()=>{
   const users=[nativeUser('old-user','Before'),nativeUser('new-user','Manual browser prompt')];
   const page=contentPage(users);
   const s={conversationId:'chat-browser',previousNativeMessageId:'old-user'};
@@ -93,7 +93,7 @@ function browserWorker(){
     run:async()=>{await sandbox.__test.load();await sandbox.__test.watch(session)}};
 }
 
-test('COS1-W2: Chrome worker forwards native user event, never queues a second Send',async()=>{
+test('TURN-W2: Chrome worker forwards native user event, never queues a second Send',async()=>{
   const f=browserWorker();
   await f.run();
   const imported=f.calls.filter(x=>x.route==='/external-turn');
@@ -106,7 +106,7 @@ test('COS1-W2: Chrome worker forwards native user event, never queues a second S
   assert.equal(f.local.tabs[71].documentKey,'document-new');
 });
 
-test('COS1-W3: worker declines conflicting routes and unverified candidates',async()=>{
+test('TURN-W3: worker declines conflicting routes and unverified candidates',async()=>{
   const f=browserWorker();
   f.setTab({id:71,url:'https://chatgpt.com/c/unrelated'});
   await f.run();

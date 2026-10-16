@@ -10,7 +10,7 @@ This project follows the [Contributor Covenant, version 2.1](https://www.contrib
 
 **Scope.** This applies in all project spaces (issues, pull requests, reviews, discussions) and whenever someone represents the project in public.
 
-**Reporting and enforcement.** Report unacceptable behavior privately to the maintainers through GitHub's [private reporting form](https://github.com/Project10214/cos-in-paseo/security/advisories/new) and start the title with "[Conduct]". Maintainers will review reports promptly and fairly, keep the reporter's identity confidential, and may respond with a correction, a warning, a temporary ban or a permanent ban, following the enforcement guidelines of the Contributor Covenant.
+**Reporting and enforcement.** Report unacceptable behavior privately to the maintainers through GitHub's [private reporting form](https://github.com/Project10214/chatmode-in-paseo/security/advisories/new) and start the title with "[Conduct]". Maintainers will review reports promptly and fairly, keep the reporter's identity confidential, and may respond with a correction, a warning, a temporary ban or a permanent ban, following the enforcement guidelines of the Contributor Covenant.
 
 **Attribution.** Adapted from the Contributor Covenant, version 2.1, © the Contributor Covenant authors, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
@@ -26,6 +26,6 @@ This project follows the [Contributor Covenant, version 2.1](https://www.contrib
 
 **适用范围。**适用于所有项目空间（Issue、Pull Request、评审、讨论），以及有人在公开场合代表本项目时。
 
-**举报与处理。**请通过 GitHub 的[私密报告表单](https://github.com/Project10214/cos-in-paseo/security/advisories/new)向维护者私下举报，标题以"[Conduct]"开头。维护者会及时、公正地处理，为举报人保密，并可能依据 Contributor Covenant 的处理指引采取更正、警告、临时封禁或永久封禁。
+**举报与处理。**请通过 GitHub 的[私密报告表单](https://github.com/Project10214/chatmode-in-paseo/security/advisories/new)向维护者私下举报，标题以"[Conduct]"开头。维护者会及时、公正地处理，为举报人保密，并可能依据 Contributor Covenant 的处理指引采取更正、警告、临时封禁或永久封禁。
 
 **出处。**改编自 Contributor Covenant 2.1，© Contributor Covenant 作者，以 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 许可。

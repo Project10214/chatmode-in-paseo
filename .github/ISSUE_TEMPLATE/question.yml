@@ -6,8 +6,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Please read the [product manual](https://github.com/Project10214/cos-in-paseo/blob/main/docs/PRODUCT_MANUAL.md) and the README first. Write in **English or 中文**.
-        请先阅读[产品说明书](https://github.com/Project10214/cos-in-paseo/blob/main/docs/PRODUCT_MANUAL.md)和 README。请用**中文或英文**填写。
+        Please read the [product manual](https://github.com/Project10214/chatmode-in-paseo/blob/main/docs/PRODUCT_MANUAL.md) and the README first. Write in **English or 中文**.
+        请先阅读[产品说明书](https://github.com/Project10214/chatmode-in-paseo/blob/main/docs/PRODUCT_MANUAL.md)和 README。请用**中文或英文**填写。
 
         **Redact before pasting / 粘贴前请脱敏：** no tokens, pairing codes, cookies or private conversation content. 请勿包含令牌、配对码、Cookie 或私人对话内容。
   - type: textarea

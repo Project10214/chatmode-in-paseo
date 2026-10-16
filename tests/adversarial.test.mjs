@@ -109,7 +109,7 @@ async function backgroundFixture(t, options={}) {
  const ctx=vm.createContext({URL,AbortSignal,structuredClone,console,Date,Promise,Set,Map,crypto:webcrypto,
   setTimeout:()=>123,clearTimeout:()=>{},
   fetch:async(url,o={})=>{const route=new URL(url).pathname;const body=o.body?JSON.parse(o.body):undefined;routes.push({route,body});
-   if(route==='/hello')return response({product:'cos-in-paseo',protocol:options.protocol??PROTOCOL,epoch:'e'});
+   if(route==='/hello')return response({product:'chatmode-in-paseo',protocol:options.protocol??PROTOCOL,epoch:'e'});
    if(route==='/commands')return response({commands:queue});
    if(route==='/active')return response({sessions:options.active??[]});
    if(route==='/claim'){const c=queue.find(c=>c.id===body.id);return response({...c,...body,lease:'lease-1'});}

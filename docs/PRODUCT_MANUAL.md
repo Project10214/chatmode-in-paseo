@@ -1,4 +1,4 @@
-# CoS in Paseo｜产品说明书（精简版）
+# Chatmode in Paseo｜产品说明书（精简版）
 
 > 说明产品现状与目标，不代表已全部验收通过。协议为 CIP `v5`，网页引擎为 `cos-native-alpha4.3`；插件与扩展的版本以 `package.json`、`extension/manifest.json` 为准。已安装版本与源码版本不能混为一谈。
 
@@ -42,7 +42,7 @@ Chrome 扩展与 Paseo 后台须在**同一台主机**；Paseo 手机端可以�
 - **曾通过：** 两轮消息收发、网页手动发言回传、两 Agent 隔离、专用测试会话关页再续聊。
 - **仍待验收：** 曾出现 `TURN_CHANGED`、`CONTENT_UNAVAILABLE`、`NATIVE_BUSY`、`STOP_UNCONFIRMED`、`REOPEN_IDENTITY_UNPROVEN`。新版改为“绑定 Conversation 决定重开；原生消息 ID 仅用于一次发送及事件归属”，已通过自动化和离线 Chrome 测试；**尚未完成新版的生产实机复验**。
 - **公开过程的真实证据：** 专用真实账号对两个随机文件分别成功完成 MCP 读取，SHA256 逐项核对无误。实际 ChatGPT 页面存在两个不同 callId 的 `mcp-tool-call`，原版曾以不允许 `/` 的工具名校验将它们过滤掉；现已修复，并在真实网页读取器与 Chrome MV3 隔离联调中识别出两卡。安装到生产 Chrome/Paseo 的实际同步仍待验。
-- **系统唤醒部分通过：** Native Messaging 本机入口已经安装，且从外接项目盘迁至 `~/.cos-in-paseo/bin/`。真实 Chrome 通过隔离 Profile 成功访问小程序，并验证非法命令被拒绝。**整个 Paseo 退出后的自动冷启动仍未实机验收**。如果 Paseo 和 Chrome 都退出且没有外部触发者，仍不能凭空自行启动。
+- **系统唤醒部分通过：** Native Messaging 本机入口已经安装，且从外接项目盘迁至 `~/.chatmode-in-paseo/bin/`。真实 Chrome 通过隔离 Profile 成功访问小程序，并验证非法命令被拒绝。**整个 Paseo 退出后的自动冷启动仍未实机验收**。如果 Paseo 和 Chrome 都退出且没有外部触发者，仍不能凭空自行启动。
 
 ## 4. 必须守住的行为边界
 
@@ -51,7 +51,7 @@ Chrome 扩展与 Paseo 后台须在**同一台主机**；Paseo 手机端可以�
 - **只读公开过程：** `collapse` 是可见内容折叠；可同步其中公开摘要/工具状态，但不提取 `analysis/private/hide_all`、内部推理或未显示的工具参数。
 - **权限不越界：** 不替用户批准工具、不直接继承 Paseo 的 MCP 权限。ChatGPT Stop 也不证明外部 MCP 任务已经停止。
 - **更新恢复：** Chrome 扩展版本更新会自动刷新**属于该插件、已绑定的打开中对话标签**，加载新版采集脚本，再请求唤醒原 Paseo Agent 并恢复观察；不刷新无关 ChatGPT 标签或重发未知状态消息。**刷新可能打断当时网页中的生成/工具等待，不能保证外部任务继续或完成**；状态不确定时保留警告。非此更新流程不强停其他 Agent、不清锁、不擅自重启共享 Runtime。
-- **数据保护：** 状态目录 `~/.cos-in-paseo/` 含会话记录，权限受限但**未加密**；不得外传 token、完整私人会话或私有推理。
+- **数据保护：** 状态目录 `~/.chatmode-in-paseo/` 含会话记录，权限受限但**未加密**；不得外传 token、完整私人会话或私有推理。
 
 ## 5. 下一步按这个顺序做
 

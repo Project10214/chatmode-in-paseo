@@ -1,11 +1,13 @@
-# CoS in Paseo
+# Chatmode in Paseo
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![CI](https://github.com/Project10214/cos-in-paseo/actions/workflows/ci.yml/badge.svg)](https://github.com/Project10214/cos-in-paseo/actions/workflows/ci.yml)
+> 原名 **CoS in Paseo**，2026-10-16 更名为 Chatmode in Paseo。Formerly named *CoS in Paseo*.
 
-**中文** · [English](#english-summary) — 在 Paseo 中创建 Chatmode Agent，由本项目的 Chrome 扩展驱动 ChatGPT 网页收发消息，无需 CoS 桌面应用。当前为 **alpha**。欢迎通过 [Issue](https://github.com/Project10214/cos-in-paseo/issues) 反馈问题、通过 Pull Request 贡献代码（中英文均可），见[贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [许可证：MIT](LICENSE)。含源自 [Chat On Steroids](https://github.com/totec448-spec/chat-on-steroids)（MIT）的移植代码，见[第三方声明](THIRD_PARTY_NOTICES.md)。
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![CI](https://github.com/Project10214/chatmode-in-paseo/actions/workflows/ci.yml/badge.svg)](https://github.com/Project10214/chatmode-in-paseo/actions/workflows/ci.yml)
+
+**中文** · [English](#english-summary) — 在 Paseo 中创建 Chatmode Agent，由本项目的 Chrome 扩展驱动 ChatGPT 网页收发消息，无需 CoS 桌面应用。当前为 **alpha**。欢迎通过 [Issue](https://github.com/Project10214/chatmode-in-paseo/issues) 反馈问题、通过 Pull Request 贡献代码（中英文均可），见[贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [许可证：MIT](LICENSE)。含源自 [Chat On Steroids](https://github.com/totec448-spec/chat-on-steroids)（MIT）的移植代码，见[第三方声明](THIRD_PARTY_NOTICES.md)。
 
 <a id="english-summary"></a>
-**English summary** — CoS in Paseo is a [Paseo](https://paseo.sh) plugin plus a Chrome extension that lets a Paseo "Chatmode" agent talk to the ChatGPT web UI directly, without the CoS desktop app. It is **alpha** software. Issues and pull requests in English or Chinese are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and [LICENSE](LICENSE) (MIT). Portions adapted from [Chat On Steroids](https://github.com/totec448-spec/chat-on-steroids) (MIT) are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Requirements: Node.js ≥ 22.6, Chrome and the Paseo daemon on the same machine, Paseo SDK 0.11.2. The rest of this README is in Chinese; see [docs/PRODUCT_MANUAL.md](docs/PRODUCT_MANUAL.md) for the product manual and [docs/TESTING.md](docs/TESTING.md) for testing.
+**English summary** — Chatmode in Paseo is a [Paseo](https://paseo.sh) plugin plus a Chrome extension that lets a Paseo "Chatmode" agent talk to the ChatGPT web UI directly, without the CoS desktop app. It is **alpha** software. Issues and pull requests in English or Chinese are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and [LICENSE](LICENSE) (MIT). Portions adapted from [Chat On Steroids](https://github.com/totec448-spec/chat-on-steroids) (MIT) are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Requirements: Node.js ≥ 22.6, Chrome and the Paseo daemon on the same machine, Paseo SDK 0.11.2. The rest of this README is in Chinese; see [docs/PRODUCT_MANUAL.md](docs/PRODUCT_MANUAL.md) for the product manual and [docs/TESTING.md](docs/TESTING.md) for testing.
 
 在 Paseo 创建 Chatmode Agent，按网页实际观察选择模型、思考强度和 `@` 应用；本项目的 Chrome 扩展发送消息并回传可见回答。开发机文件和终端操作继续使用 ChatGPT 中已经接入并授权的 MCP。
 
@@ -57,7 +59,7 @@ ChatGPT 网页 / 模型 ──已授权 @ 应用──→ 开发主机 MCP
 Chrome 与 **Paseo 后台必须在同一台开发主机**；Paseo 手机端可以远程连接该后台。本机服务不应公开到局域网或公网。使用 Node.js 22.6 以上。SDK 目标是 `0.11.2`；清单范围 `>=0.11.2 <0.12.0` 是待实测的兼容目标，不是已验证矩阵。
 
 ```sh
-cd /absolute/path/cos-in-paseo
+cd /absolute/path/chatmode-in-paseo
 npm run check
 npm run verify:upstream
 npm test
@@ -71,10 +73,10 @@ npm run test:sdk
 ### 首次安装
 
 ```sh
-paseo plugin install /absolute/path/cos-in-paseo
+paseo plugin install /absolute/path/chatmode-in-paseo
 ```
 
-在 Paseo 的 **Settings → Plugins → CoS in Paseo → Chatmode 配置** 打开设置贡献，生成一次性配对码。在 Chrome 的 `chrome://extensions` 开启开发者模式，选择“加载已解压的扩展程序”，指定本项目 `extension/`。登录自己的 ChatGPT 账号后，在扩展弹窗填写设置页显示的本机地址和配对码。
+在 Paseo 的 **Settings → Plugins → Chatmode in Paseo → Chatmode 配置** 打开设置贡献，生成一次性配对码。在 Chrome 的 `chrome://extensions` 开启开发者模式，选择“加载已解压的扩展程序”，指定本项目 `extension/`。登录自己的 ChatGPT 账号后，在扩展弹窗填写设置页显示的本机地址和配对码。
 
 配对并登录后，更新版扩展首次连上 Runtime 就自动同步目录，不需要打开设置页或点击获取。设置页会自动显示进度、成功数量或具体失败原因。选好模型、思考档位和应用后保存默认配置，再创建 `chatmode` Agent；应用使用逐项开关。已有会话不会被默认值修改。“重新同步（备用）”只用于主动重新检查。失败不会每秒重开网页，已开始的真实消息不会自动重发。
 
@@ -86,11 +88,11 @@ paseo plugin install /absolute/path/cos-in-paseo
 npm run install:native-wake
 ```
 
-安装器将 `scripts/native-wake-host.py` **复制到本机私有目录** `~/.cos-in-paseo/bin/native-wake-host.py`，再把当前已配对扩展的准确 ID 和这个本地路径写入 Chrome Native Messaging 清单；这不是常驻服务。**不要让清单直接指向外接项目盘**：实机验收中 Chrome 无法执行该位置的小程序，迁至本机后验证通过。入口仅接受固定“打开 Paseo”动作，不接收任意命令或聊天正文。Chrome 扩展须已授权 `nativeMessaging`。Paseo/Chrome 任一侧退出时另一侧可以尝试拉起；OS 接受启动不代表 Daemon 或 Agent 已恢复，仍需实时状态确认。
+安装器将 `scripts/native-wake-host.py` **复制到本机私有目录** `~/.chatmode-in-paseo/bin/native-wake-host.py`，再把当前已配对扩展的准确 ID 和这个本地路径写入 Chrome Native Messaging 清单；这不是常驻服务。**不要让清单直接指向外接项目盘**：实机验收中 Chrome 无法执行该位置的小程序，迁至本机后验证通过。入口仅接受固定“打开 Paseo”动作，不接收任意命令或聊天正文。Chrome 扩展须已授权 `nativeMessaging`。Paseo/Chrome 任一侧退出时另一侧可以尝试拉起；OS 接受启动不代表 Daemon 或 Agent 已恢复，仍需实时状态确认。
 
 ### 升级已有安装
 
-先人工检查旧网页会话，停止不需要的生成，关闭对应 Agent，停用旧 Paseo 插件。**在 Runtime 已退出后备份 `~/.cos-in-paseo/`，不要删除历史或仍被进程使用的锁。**替换整套源码，再通过 Paseo 重新加载插件；Chrome 同时重新加载新版 `extension/`。新版在真正收到 Chrome `onInstalled(update)` 后会自动刷新**本插件管理的已绑定对话标签**；如个别页面恢复失败，只针对该页面按诊断处理，不刷新其他聊天标签。
+先人工检查旧网页会话，停止不需要的生成，关闭对应 Agent，停用旧 Paseo 插件。**在 Runtime 已退出后备份 `~/.chatmode-in-paseo/`，不要删除历史或仍被进程使用的锁。**替换整套源码，再通过 Paseo 重新加载插件；Chrome 同时重新加载新版 `extension/`。新版在真正收到 Chrome `onInstalled(update)` 后会自动刷新**本插件管理的已绑定对话标签**；如个别页面恢复失败，只针对该页面按诊断处理，不刷新其他聊天标签。
 
 若更换目录导致 Chrome 扩展 ID 变化，重新配对。配对失败保留原配置；版本不匹配在提交配对码前拒绝。升级时发现旧未完成事务，会阻断而不是自动重发。结果不明的会话需先人工核查；设置页的“结束本地跟踪”不停止网页/MCP、不删除历史，且要求先关闭该 Agent。
 
@@ -117,12 +119,12 @@ npm run test:native
 
 仅允许排除带明确警告的、宿主形状的本机 `paseo` MCP 项，避免它阻塞所有新聊；**这不表示该 MCP 已被导入网页**。其他 Paseo MCP 配置及预先批准规则不支持并报错。开发工具须在 ChatGPT 接入授权；网页模型不会因此自动获得 Paseo 子 Agent 工具。
 
-运行数据保存在 `~/.cos-in-paseo/`（或 `CIP_STATE_DIR`），权限限制为当前用户，但不加密。历史接近容量上限会拒绝新消息，输出超限会记录失败，不静默丢失或无限卡住；目前没有自动归档删除界面。
+运行数据保存在 `~/.chatmode-in-paseo/`（或 `CIP_STATE_DIR`），权限限制为当前用户，但不加密。历史接近容量上限会拒绝新消息，输出超限会记录失败，不静默丢失或无限卡住；目前没有自动归档删除界面。
 
 ### GitHub / 参与贡献
 
-源码托管在 <https://github.com/Project10214/cos-in-paseo>，以 [MIT 许可证](LICENSE)公开，CI 见 `.github/workflows/ci.yml`。欢迎提交 Issue 与 Pull Request，中英文均可，流程见 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
+源码托管在 <https://github.com/Project10214/chatmode-in-paseo>，以 [MIT 许可证](LICENSE)公开，CI 见 `.github/workflows/ci.yml`。欢迎提交 Issue 与 Pull Request，中英文均可，流程见 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
 
-The source is hosted at <https://github.com/Project10214/cos-in-paseo> under the [MIT License](LICENSE). Issues and pull requests in English or Chinese are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Please report security problems privately as described in [SECURITY.md](SECURITY.md).
+The source is hosted at <https://github.com/Project10214/chatmode-in-paseo> under the [MIT License](LICENSE). Issues and pull requests in English or Chinese are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Please report security problems privately as described in [SECURITY.md](SECURITY.md).
 
 更多信息：[产品说明书](docs/PRODUCT_MANUAL.md) · [架构](docs/ARCHITECTURE.md) · [协议](docs/PROTOCOL.md) · [测试与验收指南](docs/TESTING.md) · [第三方声明](THIRD_PARTY_NOTICES.md) · [CoS 复用比对](docs/UPSTREAM_REUSE_AUDIT_20261016.md)

@@ -32,7 +32,7 @@ async function worker({
     fetch:async (input,opts)=>{
       const name=new URL(input).pathname,body=opts?.body?JSON.parse(opts.body):null;
       requests.push({name,body});
-      if(name==='/hello')return respond({protocol:5,product:'cos-in-paseo'});
+      if(name==='/hello')return respond({protocol:5,product:'chatmode-in-paseo'});
       if(name==='/recovery-targets'){
         if(!upgraded)return {ok:false,text:async()=>JSON.stringify({error:'ROUTE_NOT_FOUND'})};
         return respond({sessions:targets});

@@ -9,8 +9,8 @@ import tempfile
 import shutil
 from playwright.sync_api import sync_playwright
 ROOT=Path(__file__).resolve().parents[1]
-HOST='com.foolwork.cos_in_paseo_wake'
-CREDS=Path.home()/'.cos-in-paseo/bridge-credential.json'
+HOST='com.foolwork.chatmode_in_paseo_wake'
+CREDS=Path.home()/'.chatmode-in-paseo/bridge-credential.json'
 CHROME='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 cred=json.loads(CREDS.read_text())
 with tempfile.TemporaryDirectory(prefix='cip-native-host-check-') as profile:
@@ -34,7 +34,7 @@ with tempfile.TemporaryDirectory(prefix='cip-native-host-check-') as profile:
       result=worker.evaluate("""async () => {
         try {
           return {connected:true,value:await chrome.runtime.sendNativeMessage(
-            'com.foolwork.cos_in_paseo_wake',{v:1,action:'test_invalid'})};
+            'com.foolwork.chatmode_in_paseo_wake',{v:1,action:'test_invalid'})};
         } catch (e) {return {connected:false,error:String(e.message||e)}}
       }""")
       ok=extid==cred['extensionId'] and result.get('connected') and result.get('value')=={'ok':False,'error':'INVALID_REQUEST'}

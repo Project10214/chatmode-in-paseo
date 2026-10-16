@@ -28,7 +28,7 @@ class Runtime(BaseHTTPRequestHandler):
   def do_GET(self):
     name=self.path.split('?')[0]
     with lock:calls.append((name,'GET'))
-    if name=='/hello':return self._json({'product':'cos-in-paseo','protocol':5})
+    if name=='/hello':return self._json({'product':'chatmode-in-paseo','protocol':5})
     if name=='/recovery-targets':
       return self._json({'sessions':[{'sessionId':S_ID,'conversationId':C_ID,'tabId':TARGET_ID[0]}]})
     if name=='/active' or name=='/bindings':return self._json({'sessions':[]})
