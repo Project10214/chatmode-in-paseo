@@ -1,0 +1,6 @@
+{
+  "id": "cos-in-paseo",
+  "name": "CoS in Paseo",
+  "description": "Chatmode provider: Chrome bridge, live model/thinking/app choices, isolated conversations",
+  "requirements": { "paseo": ">=0.11.2 <0.12.0" }
+}

@@ -1,0 +1,91 @@
+name: "Bug report / 问题反馈"
+description: "Something is broken or behaves unexpectedly / 功能异常或行为不符合预期"
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please write in **English or 中文**.
+        感谢你的反馈！请用**中文或英文**填写。
+
+        **Security problem? / 安全问题？** Do not post it here. Use [private vulnerability reporting](https://github.com/Project10214/cos-in-paseo/security/advisories/new) instead.
+        请不要在这里公开，改用[私密漏洞报告](https://github.com/Project10214/cos-in-paseo/security/advisories/new)。
+
+        **Redact before pasting / 粘贴前请脱敏：** remove tokens, pairing codes, cookies, account details and private conversation content from logs and screenshots.
+        请从日志和截图中删除令牌、配对码、Cookie、账号信息和私人对话内容。
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: "Before you submit / 提交前确认"
+      options:
+        - label: "I searched existing issues and found no duplicate / 我已搜索现有 Issue，没有重复"
+          required: true
+        - label: "I removed secrets and private conversation content from everything I paste / 我已从粘贴内容中移除密钥和私人对话内容"
+          required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: "What happened? / 发生了什么？"
+      description: "What did you do, what did you expect, and what happened instead? / 你做了什么、期望什么、实际发生了什么？"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: "Steps to reproduce / 复现步骤"
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: "Plugin version / 插件版本"
+      description: "The `version` field in package.json / package.json 中的 version 字段"
+      placeholder: "0.1.0-alpha.4.7"
+    validations:
+      required: true
+  - type: input
+    id: extension-version
+    attributes:
+      label: "Chrome extension version / Chrome 扩展版本"
+      description: "Shown on chrome://extensions / 可在 chrome://extensions 中查看"
+      placeholder: "0.2.12"
+    validations:
+      required: true
+  - type: input
+    id: paseo-version
+    attributes:
+      label: "Paseo version / Paseo 版本"
+      placeholder: "0.11.2"
+  - type: input
+    id: chrome-version
+    attributes:
+      label: "Chrome version / Chrome 版本"
+  - type: input
+    id: node-version
+    attributes:
+      label: "Node.js version / Node.js 版本"
+      placeholder: "22.x"
+  - type: dropdown
+    id: os
+    attributes:
+      label: "Operating system / 操作系统"
+      options:
+        - "macOS"
+        - "Windows"
+        - "Linux"
+        - "Other / 其他"
+  - type: textarea
+    id: logs
+    attributes:
+      label: "Logs (redacted) / 日志（已脱敏）"
+      description: "Relevant log output or error messages. / 相关日志或错误信息。"
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: "Anything else? / 其他补充"

@@ -1,0 +1,27 @@
+name: "Question / 使用咨询"
+description: "Ask how to install, configure or use the project / 询问安装、配置或使用问题"
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please read the [product manual](https://github.com/Project10214/cos-in-paseo/blob/main/docs/PRODUCT_MANUAL.md) and the README first. Write in **English or 中文**.
+        请先阅读[产品说明书](https://github.com/Project10214/cos-in-paseo/blob/main/docs/PRODUCT_MANUAL.md)和 README。请用**中文或英文**填写。
+
+        **Redact before pasting / 粘贴前请脱敏：** no tokens, pairing codes, cookies or private conversation content. 请勿包含令牌、配对码、Cookie 或私人对话内容。
+  - type: textarea
+    id: question
+    attributes:
+      label: "Your question / 你的问题"
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: "What have you tried? / 你已经尝试了什么？"
+  - type: input
+    id: versions
+    attributes:
+      label: "Versions (plugin / extension / Paseo) / 版本（插件 / 扩展 / Paseo）"
+      placeholder: "0.1.0-alpha.4.7 / 0.2.12 / 0.11.2"

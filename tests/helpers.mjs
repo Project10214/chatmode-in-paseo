@@ -1,0 +1,35 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { Store } from '../server/store.mjs';
+import { Broker } from '../server/broker.mjs';
+import { validateCatalog } from '../server/protocol.mjs';
+export const rawCatalog = { defaultModel: 'm1', models: [
+  { id: 'm1', label: 'Model One', thinkingOptions: [{ id: 'standard', label: 'Standard' }, { id: 'extended', label: 'Extended' }], defaultThinkingOptionId: 'standard' },
+  { id: 'm2', label: 'Model Two', thinkingOptions: [] }
+], apps: [{ id: 'asdk_app_a', label: 'Development Mac' }, { id: 'asdk_app_b', label: 'Tasks' }] };
+export const selection = { model: 'm1', thinkingOption: 'standard', appIds: ['asdk_app_a'] };
+export async function until(fn) { for (let i = 0; i < 200; i++) { const value = fn(); if (value) return value; await new Promise(r => setTimeout(r, 5)); } throw new Error('Test wait timed out'); }
+export async function fixture(t, options = {}) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'cip-test-'));
+  const store = await new Store(directory).open(); await store.transaction(d => { d.catalog = validateCatalog(rawCatalog); });
+  const broker = new Broker(store, options); let nextTab = 100;
+  t.after(async () => { await broker.close(); await rm(directory, { recursive: true, force: true }); });
+  async function ready(chosen = selection) {
+    const s = await broker.create(chosen); const p = broker.configure(s.id, chosen); p.catch(() => {});
+    const c = await until(() => broker.queued().find(c => c.sessionId === s.id));
+    const tabId = ++nextTab; const claim = await broker.claim(c.id, tabId, `document-${tabId}`);
+    await broker.result(c.id, claim.lease, { config: broker.snapshot(s.id).config, tabId, url: 'https://chatgpt.com/' });
+    await p; return broker.snapshot(s.id);
+  }
+  async function sending(s, clientMessageId = 'message-1', value = 'hello', confirm = true) {
+    const result = await broker.prompt(s.id, clientMessageId, value);
+    const c = broker.queued().find(c => c.kind === 'send' && c.sessionId === s.id);
+    const claim = await broker.claim(c.id, s.tabId, s.documentKey);
+    await broker.authorize(c.id, claim.lease);
+    if (confirm) await broker.result(c.id, claim.lease, { receipt: true, config: s.config, nativeMessageId: `native-${clientMessageId}`, url: `https://chatgpt.com/c/chat-${s.tabId}` });
+    return { result, claim, event: { sessionId: s.id, turnId: result.turnId, lease: claim.lease, nativeMessageId: `native-${clientMessageId}`,
+      tabId: s.tabId, documentKey: s.documentKey, url: `https://chatgpt.com/c/chat-${s.tabId}` } };
+  }
+  return { directory, store, broker, ready, sending };
+}
