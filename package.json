@@ -1,0 +1,52 @@
+{
+  "name": "cos-in-paseo",
+  "version": "0.1.0-alpha.4.7",
+  "description": "Direct ChatGPT browser provider for Paseo; no CoS desktop app",
+  "private": true,
+  "license": "MIT",
+  "author": "Pennnnnnnnnn",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Project10214/cos-in-paseo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Project10214/cos-in-paseo/issues"
+  },
+  "homepage": "https://github.com/Project10214/cos-in-paseo#readme",
+  "keywords": ["paseo", "paseo-plugin", "chatgpt", "chrome-extension", "mv3"],
+  "type": "module",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check": "node scripts/check.mjs",
+    "typecheck": "tsc --noEmit",
+    "dev": "node server/standalone.mjs",
+    "test:dom": "python3 tests/dom-audit.py",
+    "test:browser": "python3 tests/browser-fixture.py",
+    "test:flow": "python3 tests/browser-provider-flow.py",
+    "test:sdk": "node --test tests/sdk-contract.mjs",
+    "test:mv3": "python3 tests/binding-mv3-flow.py",
+    "test:binding": "python3 tests/binding-identity-browser.py",
+    "test:receipt": "python3 tests/receipt-shell-browser.py",
+    "test:receipt-interaction": "python3 tests/receipt-interaction-browser.py",
+    "test:catalog": "python3 tests/catalog-browser-regression.py",
+    "test:native": "python3 tests/native-transplant.py",
+    "test:apps": "python3 tests/apps-headless.py",
+    "test:discovery": "python3 tests/discovery-browser.py",
+    "verify:upstream": "node scripts/verify-upstream.mjs",
+    "install:native-wake": "node scripts/install-native-wake.mjs"
+  },
+  "devDependencies": {
+    "@getpaseo/plugin": "0.11.2",
+    "@getpaseo/client": "0.11.2",
+    "@getpaseo/protocol": "0.11.2",
+    "@types/node": "22.15.30",
+    "@types/react": "19.1.6",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "5.9.3",
+    "zod": "4.4.3"
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "manifest_version": 3,
+  "name": "CoS in Paseo — Chatmode Bridge",
+  "version": "0.2.14",
+  "description": "Connect a local Paseo Chatmode provider directly to managed ChatGPT tabs. No CoS desktop app.",
+  "minimum_chrome_version": "125",
+  "permissions": [
+    "storage",
+    "tabs",
+    "alarms",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["upstream/cos-apps-observer.js", "upstream/cos-send-evidence.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "upstream/cos-controls.js",
+        "upstream/cos-native.js",
+        "upstream/cos-receipt-text.js",
+        "upstream/cos-request-receipt.js",
+        "upstream/cos-models.js",
+        "app-catalog.js",
+        "app-discovery.js",
+        "media-adapter.js",
+        "file-upload.js",
+        "dom-adapter.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "upstream/cos-transcript-core.js",
+        "upstream/cos-activity-main.js",
+        "upstream/cos-shell-public.js",
+        "upstream/cos-images-main.js",
+        "upstream/cos-picker-main.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "CoS in Paseo",
+    "default_popup": "popup.html"
+  },
+  "version_name": "0.2.14"
+}

@@ -1,0 +1,104 @@
+{
+  "version": "0.1.0-alpha.3.8",
+  "chromeVersion": "0.1.10",
+  "nodePassed": 151,
+  "browserAndUiPassed": 149,
+  "suites": [
+    {
+      "suite": "binding-identity-browser",
+      "passed": 5,
+      "scope": "offline real Chrome + shipped CoS/native projection; not signed-in acceptance"
+    },
+    {
+      "suite": "receipt-navigation-browser",
+      "passed": 5,
+      "scope": "offline real Chrome URL/history + shipped content.js; not logged-in acceptance"
+    },
+    {
+      "suite": "receipt-interaction-browser",
+      "passed": 3,
+      "scope": "offline Chromium with trusted user events; not logged-in acceptance"
+    },
+    {
+      "suite": "receipt-shell-browser",
+      "passed": 14,
+      "scope": "offline Chromium + shipped code; no logged-in sends"
+    },
+    {
+      "suite": "browser-provider-flow",
+      "passed": 9,
+      "scope": "Node Provider + real local Runtime + Chromium in-memory DOM/content script; synthetic Chrome tab API; NOT live ChatGPT/Paseo/MV3 installation"
+    },
+    {
+      "suite": "catalog-browser-regression",
+      "passed": 11,
+      "scope": "offline Chromium + shipped code, page-owned network fixture; not signed-in acceptance"
+    },
+    {
+      "suite": "native-transplant",
+      "passed": 16,
+      "scope": "Chromium + actual transplanted CoS modules; synthetic native DOM and React states; no real ChatGPT/Paseo"
+    },
+    {
+      "suite": "browser-fixture",
+      "passed": 7,
+      "scope": "Chromium in-memory DOM fixture ONLY; not real ChatGPT or full MV3/Paseo integration"
+    },
+    {
+      "suite": "discovery-browser",
+      "passed": 8,
+      "scope": "offline native browser tests, not signed-in account acceptance"
+    },
+    {
+      "suite": "apps-headless",
+      "passed": 9,
+      "scope": "offline real Chrome; not a signed-in live-site test"
+    },
+    {
+      "suite": "dom-audit",
+      "passed": 9,
+      "scope": "In-memory Chromium fixture only; no ChatGPT/Paseo live installation"
+    },
+    {
+      "suite": "images-public-browser",
+      "passed": 7,
+      "scope": "offline Chromium with shipped CoS extraction; no actual account"
+    },
+    {
+      "suite": "mv3-raw",
+      "passed": 7,
+      "scope": "REAL unpacked MV3 + Chrome tabs/worker/worlds + Node Runtime/Provider; ChatGPT page and network are OFFLINE FIXTURES, not a signed-in acceptance"
+    },
+    {
+      "suite": "mv3-escaped",
+      "passed": 8,
+      "scope": "REAL unpacked MV3 + Chrome tabs/worker/worlds + Node Runtime/Provider; ChatGPT page and network are OFFLINE FIXTURES, not a signed-in acceptance"
+    },
+    {
+      "suite": "images-mv3-url",
+      "passed": 6,
+      "scope": "REAL unpacked MV3 + Chrome tabs/worker/worlds + Node Runtime/Provider; ChatGPT page and network are OFFLINE FIXTURES, not a signed-in acceptance"
+    },
+    {
+      "suite": "images-mv3-blob",
+      "passed": 6,
+      "scope": "REAL unpacked MV3 + Chrome tabs/worker/worlds + Node Runtime/Provider; ChatGPT page and network are OFFLINE FIXTURES, not a signed-in acceptance"
+    },
+    {
+      "suite": "images-mv3-missing",
+      "passed": 6,
+      "scope": "REAL unpacked MV3 + Chrome tabs/worker/worlds + Node Runtime/Provider; ChatGPT page and network are OFFLINE FIXTURES, not a signed-in acceptance"
+    },
+    {
+      "suite": "ui-browser",
+      "passed": 13,
+      "scope": "Shipped TSX React/RN-web with fixture host RPC/modal; shipped Chrome popup with fixture runtime. Actual installed host contracts separately typechecked."
+    }
+  ],
+  "fullTypecheck": "PASS with real SDK/React Native declarations",
+  "installedSdkContract": "PASS",
+  "signedInImageAcceptance": false,
+  "originalFileDownloadImplemented": false,
+  "productionReloaded": false,
+  "historyResentOrReset": false
+}

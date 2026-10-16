@@ -1,0 +1,13 @@
+{
+  "passed": 7,
+  "checks": [
+    "dynamic model/thinking/app catalog from DOM",
+    "model + thinking + TWO native app chips confirmed",
+    "native text insertion and verified send receipt",
+    "completed answer anchored to the NEW native user message",
+    "authorization refusal causes NO native Send click",
+    "stop targets the exact native turn, not another tab",
+    "pre-existing draft is preserved and sending refused"
+  ],
+  "scope": "Chromium in-memory DOM fixture ONLY; not real ChatGPT or full MV3/Paseo integration"
+}

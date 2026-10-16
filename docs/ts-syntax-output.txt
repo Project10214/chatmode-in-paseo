@@ -1,0 +1,6 @@
+PASS index.server.ts
+PASS index.client.tsx
+PASS client/settings.tsx
+PASS shared/rpc.ts
+TypeScript compiler 5.8.3; 4 files checked for syntax only.
+SDK imports and application types are NOT resolved by transpileModule.

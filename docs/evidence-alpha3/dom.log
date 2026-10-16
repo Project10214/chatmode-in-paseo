@@ -1,0 +1,157 @@
+{
+  "scope": "In-memory Chromium fixture only; no ChatGPT/Paseo live installation",
+  "passed": 9,
+  "failed": 0,
+  "results": [
+    {
+      "test": "D00 original bundled fixture catalog must succeed",
+      "pass": true,
+      "expected": "2 models and 2 apps",
+      "actual": {
+        "catalog": {
+          "models": [
+            {
+              "id": "m1",
+              "label": "Model One",
+              "thinkingOptions": [
+                {
+                  "id": "standard",
+                  "label": "Standard"
+                },
+                {
+                  "id": "extended",
+                  "label": "Extended"
+                }
+              ],
+              "defaultThinkingOption": "standard"
+            },
+            {
+              "id": "m2",
+              "label": "Model Two",
+              "thinkingOptions": [],
+              "defaultThinkingOption": null
+            }
+          ],
+          "apps": [
+            {
+              "id": "asdk_app_a",
+              "label": "Development Mac"
+            },
+            {
+              "id": "asdk_app_b",
+              "label": "Tasks"
+            }
+          ],
+          "defaultModel": "m1"
+        }
+      }
+    },
+    {
+      "test": "D00b baseline selecting two app chips with supplied config",
+      "pass": true,
+      "expected": {
+        "model": "m1",
+        "thinkingOption": "extended",
+        "appIds": [
+          "asdk_app_a",
+          "asdk_app_b"
+        ]
+      },
+      "actual": {
+        "model": "m1",
+        "thinkingOption": "extended",
+        "appIds": [
+          "asdk_app_a",
+          "asdk_app_b"
+        ]
+      }
+    },
+    {
+      "test": "D01 multiline prompt must retain newlines and reach Send",
+      "pass": true,
+      "expected": "No INPUT_NOT_CONFIRMED caused by line breaks",
+      "actual": {
+        "ok": true,
+        "clicks": 1,
+        "clickedText": "First line\nSecond line"
+      }
+    },
+    {
+      "test": "D02 aria-disabled=false options are enabled",
+      "pass": true,
+      "expected": "2 selectable models",
+      "actual": {
+        "models": [
+          {
+            "id": "m1",
+            "label": "Model One",
+            "thinkingOptions": [
+              {
+                "id": "standard",
+                "label": "Standard"
+              },
+              {
+                "id": "extended",
+                "label": "Extended"
+              }
+            ],
+            "defaultThinkingOption": "standard"
+          },
+          {
+            "id": "m2",
+            "label": "Model Two",
+            "thinkingOptions": [],
+            "defaultThinkingOption": null
+          }
+        ]
+      }
+    },
+    {
+      "test": "D03 code-block Copy button must not prove final answer",
+      "pass": true,
+      "expected": false,
+      "actual": false
+    },
+    {
+      "test": "D04 Send must revalidate actual text/model after async authorization",
+      "pass": true,
+      "expected": "0 clicks after configuration/draft changes",
+      "actual": []
+    },
+    {
+      "test": "D05 pre-Send error must leave a safe retry path",
+      "pass": true,
+      "expected": "Retry is not blocked by its own unchanged draft",
+      "actual": {
+        "firstError": "SEND_NOT_READY",
+        "nextAttemptError": null,
+        "remainingDraft": ""
+      }
+    },
+    {
+      "test": "D06 no installed apps must not make the model catalog unavailable",
+      "pass": true,
+      "expected": "Model list remains usable with apps=[]",
+      "actual": {
+        "catalog": {
+          "models": [
+            {
+              "id": "m2",
+              "label": "Model Two",
+              "thinkingOptions": [],
+              "defaultThinkingOption": null
+            }
+          ],
+          "apps": [],
+          "defaultModel": "m2"
+        }
+      }
+    },
+    {
+      "test": "D07 rendered paragraphs must keep structural line breaks",
+      "pass": true,
+      "expected": "First paragraph\\nSecond paragraph",
+      "actual": "First paragraph\nSecond paragraph\nline1\nline2"
+    }
+  ]
+}

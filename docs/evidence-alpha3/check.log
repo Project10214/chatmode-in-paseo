@@ -1,0 +1,6 @@
+
+> cos-in-paseo@0.1.0-alpha.3 check
+> node scripts/check.mjs
+
+PASS: 28 JavaScript files parsed; JSON manifests valid; no cookie/debugger permissions.
+This is a syntax check, not SDK typechecking or a live ChatGPT acceptance test.

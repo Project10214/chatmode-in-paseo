@@ -1,0 +1,14 @@
+{
+  "passed": 8,
+  "checks": [
+    "one-time pairing with the real loopback Runtime",
+    "web model/thinking/app discovery travels through the Provider wire projection",
+    "two Provider sessions confirm DIFFERENT native model/thinking/app selections",
+    "host-injected MCP produces an explicit limitation notice, not a false tool connection",
+    "multiline message WITH the injected working-directory context receives a real fixture receipt",
+    "B completes and preserves line breaks while A is still generating",
+    "stopping A settles only A and does not cancel B",
+    "follow-up reuses B native conversation and performs exactly one new fixture Send"
+  ],
+  "scope": "Node Provider + real local Runtime + Chromium in-memory DOM/content script; synthetic Chrome tab API; NOT live ChatGPT/Paseo/MV3 installation"
+}

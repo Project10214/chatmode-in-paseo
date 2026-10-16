@@ -1,0 +1,57 @@
+{
+  "date": "2026-10-13",
+  "version": "0.1.0-alpha.3",
+  "extension_manifest_version": "0.1.2",
+  "bridge_protocol": 3,
+  "paseo_provider_protocol": 1,
+  "input_alpha2_zip_sha256": "863ad4e2b1e04ff15d1f36b48ba198857aae105516022dc4bd070d063089b83a",
+  "checks": {
+    "node": {
+      "status": "PASS",
+      "count": 86
+    },
+    "browser_fixture_checks": {
+      "status": "PASS",
+      "counts": {
+        "dom": 9,
+        "browser": 7,
+        "flow": 9,
+        "native": 16
+      },
+      "total": 41,
+      "scope": "In-memory Chromium synthetic UI/React states; synthetic Chrome tabs. Not real ChatGPT/Paseo/MV3."
+    },
+    "functional_total": 127,
+    "javascript_syntax": {
+      "status": "PASS",
+      "count": 28
+    },
+    "typescript_syntax_only": {
+      "status": "PASS",
+      "count": 4,
+      "compiler": "5.8.3"
+    },
+    "source_integrity": {
+      "status": "PASS",
+      "modules": 5
+    },
+    "sdk_typecheck": {
+      "status": "BLOCKED",
+      "reason": "Missing node/react types; exit 2"
+    },
+    "sdk_contract": {
+      "status": "BLOCKED",
+      "reason": "@getpaseo/plugin not installed; exit 1"
+    },
+    "dependency_install": {
+      "status": "BLOCKED",
+      "reason": "15 second bounded attempt exited 124; dependencies not obtained"
+    },
+    "live_acceptance": {
+      "status": "NOT_RUN"
+    },
+    "github_upload_ci": {
+      "status": "NOT_RUN"
+    }
+  }
+}

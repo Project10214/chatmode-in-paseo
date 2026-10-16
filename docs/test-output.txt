@@ -1,0 +1,505 @@
+
+> cos-in-paseo@0.1.0-alpha.2 test
+> node --test tests/*.test.mjs
+
+TAP version 13
+# Subtest: A01: configuration screen must have a reachable UI entry
+ok 1 - A01: configuration screen must have a reachable UI entry
+  ---
+  duration_ms: 6.515256
+  type: 'test'
+  ...
+# Verified a normal user-facing configuration entry is registered.
+# Subtest: A02: default host-injected Paseo MCP must not prevent every new chat
+ok 2 - A02: default host-injected Paseo MCP must not prevent every new chat
+  ---
+  duration_ms: 22.717281
+  type: 'test'
+  ...
+# {"id":"6ec38871-e79b-40c8-8866-4e3a5c439b26","kind":"open","sessionId":"84647090-8fdc-4f32-b923-4ccca05e4210","payload":{"config":{"model":"m1","thinkingOption":"standard","appIds":["asdk_app_a"]},"conversationId":null,"tabId":null},"phase":"queued","createdAt":1791889735488,"deadline":1791889825488}
+# Subtest: A03: completion racing with interrupt must not leave the session permanently stopping
+ok 3 - A03: completion racing with interrupt must not leave the session permanently stopping
+  ---
+  duration_ms: 26.6963
+  type: 'test'
+  ...
+# {"status":"idle","outcome":"completed"}
+# Subtest: A04: a timed-out claimed configuration must fence unconfirmed browser mutations
+ok 4 - A04: a timed-out claimed configuration must fence unconfirmed browser mutations
+  ---
+  duration_ms: 21.621873
+  type: 'test'
+  ...
+# {"status":"blocked","error":"BRIDGE_TIMEOUT"}
+# Subtest: A05: retrying an already-failed message ID must not launch an undisclosed turn
+ok 5 - A05: retrying an already-failed message ID must not launch an undisclosed turn
+  ---
+  duration_ms: 65.267857
+  type: 'test'
+  ...
+# {"disposition":[{"type":"session.prompt_result","sessionId":"host","clientMessageId":"retry-id","result":{"type":"failed","error":{"message":"SESSION_BUSY","code":"SESSION_BUSY"}}}],"queuedSend":false}
+# Subtest: A06: resuming a session must update stored cwd and system prompt from the new config
+ok 6 - A06: resuming a session must update stored cwd and system prompt from the new config
+  ---
+  duration_ms: 34.260209
+  type: 'test'
+  ...
+# {"reportedCwd":"/new-fixture","storedCwd":"/new-fixture","storedPrompt":"new instruction"}
+# Subtest: A07: message admission must reserve space for at least one assistant answer
+ok 7 - A07: message admission must reserve space for at least one assistant answer
+  ---
+  duration_ms: 19.223222
+  type: 'test'
+  ...
+# Subtest: A09: a slow operation on tab A must not stop the dispatcher from picking up Stop for B
+ok 8 - A09: a slow operation on tab A must not stop the dispatcher from picking up Stop for B
+  ---
+  duration_ms: 34.612514
+  type: 'test'
+  ...
+# {"commandPolls":2,"stopDispatched":true}
+# Subtest: A10: failed re-pairing must preserve an existing working connection
+ok 9 - A10: failed re-pairing must preserve an existing working connection
+  ---
+  duration_ms: 3.248959
+  type: 'test'
+  ...
+# {"result":{"ok":false,"error":"PAIRING_REJECTED"},"memoryToken":"valid-token","persistedToken":"valid-token"}
+# Subtest: A11: browser restart with a running session must restore tracking or report loss, not silently skip it
+ok 10 - A11: browser restart with a running session must restore tracking or report loss, not silently skip it
+  ---
+  duration_ms: 2.598951
+  type: 'test'
+  ...
+# {"activeRead":true,"monitorCalls":0,"lossReports":1}
+# Subtest: A12: saved new-agent defaults must be returned to Paseos create-agent catalog
+ok 11 - A12: saved new-agent defaults must be returned to Paseos create-agent catalog
+  ---
+  duration_ms: 17.684376
+  type: 'test'
+  ...
+# {"savedModel":"m2","formDefault":"m2"}
+# Subtest: A13: provider model fields must satisfy the published Paseo string-or-omitted contract
+ok 12 - A13: provider model fields must satisfy the published Paseo string-or-omitted contract
+  ---
+  duration_ms: 16.888944
+  type: 'test'
+  ...
+# {"incompatibleModels":[]}
+# Subtest: A13: an old CIP runtime is rejected before pairing or consuming a code
+ok 13 - A13: an old CIP runtime is rejected before pairing or consuming a code
+  ---
+  duration_ms: 2.117888
+  type: 'test'
+  ...
+# Subtest: two sessions send concurrently without sharing conversation identities
+ok 14 - two sessions send concurrently without sharing conversation identities
+  ---
+  duration_ms: 53.952627
+  type: 'test'
+  ...
+# Subtest: stable client ID deduplicates sending and rejects changed contents
+ok 15 - stable client ID deduplicates sending and rejects changed contents
+  ---
+  duration_ms: 18.695578
+  type: 'test'
+  ...
+# Subtest: busy session and global concurrency cap refuse additional sends
+ok 16 - busy session and global concurrency cap refuse additional sends
+  ---
+  duration_ms: 46.270941
+  type: 'test'
+  ...
+# Subtest: claim and Send authorization are one-shot durable gates
+ok 17 - claim and Send authorization are one-shot durable gates
+  ---
+  duration_ms: 12.841377
+  type: 'test'
+  ...
+# Subtest: native receipt cannot be recorded without authorization
+ok 18 - native receipt cannot be recorded without authorization
+  ---
+  duration_ms: 17.830976
+  type: 'test'
+  ...
+# Subtest: unconfirmed send is never requeued, and the session becomes blocked
+ok 19 - unconfirmed send is never requeued, and the session becomes blocked
+  ---
+  duration_ms: 13.733971
+  type: 'test'
+  ...
+# Subtest: an unclaimed timeout is not misreported as delivered
+ok 20 - an unclaimed timeout is not misreported as delivered
+  ---
+  duration_ms: 12.014482
+  type: 'test'
+  ...
+# Subtest: restart does not replay either claimed or authorized messages
+ok 21 - restart does not replay either claimed or authorized messages
+  ---
+  duration_ms: 14.838543
+  type: 'test'
+  ...
+# Subtest: cancel before authorization sends nothing and produces one terminal outcome
+ok 22 - cancel before authorization sends nothing and produces one terminal outcome
+  ---
+  duration_ms: 14.709934
+  type: 'test'
+  ...
+# Subtest: stop without a proven native anchor is unconfirmed, not canceled
+ok 23 - stop without a proven native anchor is unconfirmed, not canceled
+  ---
+  duration_ms: 21.7762
+  type: 'test'
+  ...
+# Subtest: wrong document, wrong turn and wrong native anchor cannot inject observations
+ok 24 - wrong document, wrong turn and wrong native anchor cannot inject observations
+  ---
+  duration_ms: 16.460845
+  type: 'test'
+  ...
+# Subtest: only proven final after a matching snapshot completes a turn
+ok 25 - only proven final after a matching snapshot completes a turn
+  ---
+  duration_ms: 15.159626
+  type: 'test'
+  ...
+# Subtest: native errors block a session rather than triggering another model or account
+ok 26 - native errors block a session rather than triggering another model or account
+  ---
+  duration_ms: 15.45511
+  type: 'test'
+  ...
+# Subtest: waiting for permission remains active and never auto-approves
+ok 27 - waiting for permission remains active and never auto-approves
+  ---
+  duration_ms: 21.16184
+  type: 'test'
+  ...
+# Subtest: configuration must be read back; echoing another model cannot commit
+ok 28 - configuration must be read back; echoing another model cannot commit
+  ---
+  duration_ms: 20.047402
+  type: 'test'
+  ...
+# Subtest: catalog preserves actual model-specific thinking defaults
+ok 29 - catalog preserves actual model-specific thinking defaults
+  ---
+  duration_ms: 1.186305
+  type: 'test'
+  ...
+# Subtest: model disappearance fails closed
+ok 30 - model disappearance fails closed
+  ---
+  duration_ms: 0.497799
+  type: 'test'
+  ...
+# Subtest: thinking options cannot cross models
+ok 31 - thinking options cannot cross models
+  ---
+  duration_ms: 0.232329
+  type: 'test'
+  ...
+# Subtest: unknown and duplicate app selections rejected
+ok 32 - unknown and duplicate app selections rejected
+  ---
+  duration_ms: 0.231899
+  type: 'test'
+  ...
+# Subtest: plain @names are never treated as native app IDs
+ok 33 - plain @names are never treated as native app IDs
+  ---
+  duration_ms: 0.238379
+  type: 'test'
+  ...
+# Subtest: ambiguous catalog labels with duplicate keys rejected
+ok 34 - ambiguous catalog labels with duplicate keys rejected
+  ---
+  duration_ms: 0.193011
+  type: 'test'
+  ...
+# Subtest: conversation identity only accepts HTTPS chatgpt.com
+ok 35 - conversation identity only accepts HTTPS chatgpt.com
+  ---
+  duration_ms: 0.349206
+  type: 'test'
+  ...
+# Subtest: agent options override defaults; toggles may remove an app
+ok 36 - agent options override defaults; toggles may remove an app
+  ---
+  duration_ms: 0.900545
+  type: 'test'
+  ...
+# Subtest: unsupported provider options are not silently discarded
+ok 37 - unsupported provider options are not silently discarded
+  ---
+  duration_ms: 0.436527
+  type: 'test'
+  ...
+# Subtest: unsupported uploads, steering, and structured output fail clearly
+ok 38 - unsupported uploads, steering, and structured output fail clearly
+  ---
+  duration_ms: 0.604019
+  type: 'test'
+  ...
+# Subtest: normal text and unordered app equality
+ok 39 - normal text and unordered app equality
+  ---
+  duration_ms: 0.310117
+  type: 'test'
+  ...
+# Subtest: direct provider negotiates only implemented capabilities
+ok 40 - direct provider negotiates only implemented capabilities
+  ---
+  duration_ms: 17.885874
+  type: 'test'
+  ...
+# Subtest: open emits confirmed config before readiness, including visible app toggles
+ok 41 - open emits confirmed config before readiness, including visible app toggles
+  ---
+  duration_ms: 22.877932
+  type: 'test'
+  ...
+# Subtest: Paseo MCP configs are refused rather than silently exposed or ignored
+ok 42 - Paseo MCP configs are refused rather than silently exposed or ignored
+  ---
+  duration_ms: 8.600875
+  type: 'test'
+  ...
+# Subtest: duplicate prompts emit one disposition and one started turn
+ok 43 - duplicate prompts emit one disposition and one started turn
+  ---
+  duration_ms: 64.86754
+  type: 'test'
+  ...
+# Subtest: a second provider connection cannot steal an attached native session
+ok 44 - a second provider connection cannot steal an attached native session
+  ---
+  duration_ms: 21.956296
+  type: 'test'
+  ...
+# Subtest: provider rejects non-implemented input operations at admission
+ok 45 - provider rejects non-implemented input operations at admission
+  ---
+  duration_ms: 8.053325
+  type: 'test'
+  ...
+# Subtest: closing a connection prevents queued work from opening tabs afterwards
+ok 46 - closing a connection prevents queued work from opening tabs afterwards
+  ---
+  duration_ms: 6.482005
+  type: 'test'
+  ...
+# Subtest: model changes choose that models own default, not an old thinking value
+ok 47 - model changes choose that models own default, not an old thinking value
+  ---
+  duration_ms: 27.231876
+  type: 'test'
+  ...
+# Subtest: closing while catalog awaits a browser cancels the actual queued command
+ok 48 - closing while catalog awaits a browser cancels the actual queued command
+  ---
+  duration_ms: 15.286782
+  type: 'test'
+  ...
+# Subtest: closing while session is opening prevents late queued opening
+ok 49 - closing while session is opening prevents late queued opening
+  ---
+  duration_ms: 16.129335
+  type: 'test'
+  ...
+# Subtest: closing after configuration was claimed fences uncertain browser effects
+ok 50 - closing after configuration was claimed fences uncertain browser effects
+  ---
+  duration_ms: 30.333964
+  type: 'test'
+  ...
+# Subtest: R01: duplicate Stop shares one command and final observation settles both waiters
+ok 51 - R01: duplicate Stop shares one command and final observation settles both waiters
+  ---
+  duration_ms: 36.73612
+  type: 'test'
+  ...
+# Subtest: R02: late old-turn failure cannot terminate the next admitted turn
+ok 52 - R02: late old-turn failure cannot terminate the next admitted turn
+  ---
+  duration_ms: 24.385737
+  type: 'test'
+  ...
+# Subtest: R03: busy rejection is durable and cannot be resubmitted after another connection opens
+ok 53 - R03: busy rejection is durable and cannot be resubmitted after another connection opens
+  ---
+  duration_ms: 21.4244
+  type: 'test'
+  ...
+# Subtest: R04: reserved prototype-like message identifiers are rejected
+ok 54 - R04: reserved prototype-like message identifiers are rejected
+  ---
+  duration_ms: 0.432751
+  type: 'test'
+  ...
+# Subtest: R05: final-slot admission reserves all supported response fragments
+ok 55 - R05: final-slot admission reserves all supported response fragments
+  ---
+  duration_ms: 72.388544
+  type: 'test'
+  ...
+# Subtest: R06: excessive response fragmentation terminates with a recorded limit, never a running loop
+ok 56 - R06: excessive response fragmentation terminates with a recorded limit, never a running loop
+  ---
+  duration_ms: 45.889782
+  type: 'test'
+  ...
+# Subtest: R07: whole-state byte reservation rejects before any Send intent or native authorization
+ok 57 - R07: whole-state byte reservation rejects before any Send intent or native authorization
+  ---
+  duration_ms: 522.921197
+  type: 'test'
+  ...
+# Subtest: R08: aggregate answer cap preserves history and a terminal failure
+ok 58 - R08: aggregate answer cap preserves history and a terminal failure
+  ---
+  duration_ms: 23.91654
+  type: 'test'
+  ...
+# Subtest: R09: proven document reload only rebinds observation, without another Send
+ok 59 - R09: proven document reload only rebinds observation, without another Send
+  ---
+  duration_ms: 11.308229
+  type: 'test'
+  ...
+# Subtest: R10: another native anchor or conversation cannot claim observation custody
+ok 60 - R10: another native anchor or conversation cannot claim observation custody
+  ---
+  duration_ms: 19.286177
+  type: 'test'
+  ...
+# Subtest: R11: a missing browser binding blocks exactly its own turn, without a fictitious live URL
+ok 61 - R11: a missing browser binding blocks exactly its own turn, without a fictitious live URL
+  ---
+  duration_ms: 23.001058
+  type: 'test'
+  ...
+# Subtest: R12: known not-clicked result after authorization is distinct from an unconfirmed Send
+ok 62 - R12: known not-clicked result after authorization is distinct from an unconfirmed Send
+  ---
+  duration_ms: 15.213086
+  type: 'test'
+  ...
+# Subtest: R13: late configuration after timeout cannot publish a new effective model
+ok 63 - R13: late configuration after timeout cannot publish a new effective model
+  ---
+  duration_ms: 17.215495
+  type: 'test'
+  ...
+# Subtest: R14: startup fences a previously claimed configuration even when its session was idle
+ok 64 - R14: startup fences a previously claimed configuration even when its session was idle
+  ---
+  duration_ms: 10.96918
+  type: 'test'
+  ...
+# Subtest: R15: updated context is sent as explicit user-level text on the next existing conversation turn
+ok 65 - R15: updated context is sent as explicit user-level text on the next existing conversation turn
+  ---
+  duration_ms: 12.98985
+  type: 'test'
+  ...
+# Subtest: R16: the host-shaped MCP exception is narrow and emits an explicit limitation notice
+ok 66 - R16: the host-shaped MCP exception is narrow and emits an explicit limitation notice
+  ---
+  duration_ms: 0.360092
+  type: 'test'
+  ...
+# Subtest: R17: saved thinking default updates both the model descriptor and catalog cache identity
+ok 67 - R17: saved thinking default updates both the model descriptor and catalog cache identity
+  ---
+  duration_ms: 5.123422
+  type: 'test'
+  ...
+# Subtest: R18: explicit abandonment never creates a Send, erases history or claims to stop the website
+ok 68 - R18: explicit abandonment never creates a Send, erases history or claims to stop the website
+  ---
+  duration_ms: 16.523058
+  type: 'test'
+  ...
+# Subtest: R19: permission and unknown-final notices stay distinct
+ok 69 - R19: permission and unknown-final notices stay distinct
+  ---
+  duration_ms: 14.518797
+  type: 'test'
+  ...
+# Subtest: store serializes parallel writes without losing data
+ok 70 - store serializes parallel writes without losing data
+  ---
+  duration_ms: 36.85585
+  type: 'test'
+  ...
+# Subtest: failed transaction cannot publish partial in-memory state
+ok 71 - failed transaction cannot publish partial in-memory state
+  ---
+  duration_ms: 3.197062
+  type: 'test'
+  ...
+# Subtest: corrupt state is preserved and refused, not reset to a fresh permissive state
+ok 72 - corrupt state is preserved and refused, not reset to a fresh permissive state
+  ---
+  duration_ms: 4.322636
+  type: 'test'
+  ...
+# Subtest: bridge exposes health but requires its own token for commands
+ok 73 - bridge exposes health but requires its own token for commands
+  ---
+  duration_ms: 56.34281
+  type: 'test'
+  ...
+# Subtest: pairing code is single-use
+ok 74 - pairing code is single-use
+  ---
+  duration_ms: 32.56668
+  type: 'test'
+  ...
+# Subtest: webpage Origin and DNS-rebinding Host rejected even with valid token
+ok 75 - webpage Origin and DNS-rebinding Host rejected even with valid token
+  ---
+  duration_ms: 20.780886
+  type: 'test'
+  ...
+# Subtest: other extension identity cannot reuse the paired token
+ok 76 - other extension identity cannot reuse the paired token
+  ---
+  duration_ms: 14.621527
+  type: 'test'
+  ...
+# Subtest: no file, shell, permission-changing or generic proxy endpoint exists
+ok 77 - no file, shell, permission-changing or generic proxy endpoint exists
+  ---
+  duration_ms: 17.698322
+  type: 'test'
+  ...
+# Subtest: oversized JSON is refused
+ok 78 - oversized JSON is refused
+  ---
+  duration_ms: 20.668542
+  type: 'test'
+  ...
+# Subtest: second runtime cannot take over the same state directory
+ok 79 - second runtime cannot take over the same state directory
+  ---
+  duration_ms: 6.746049
+  type: 'test'
+  ...
+# Subtest: concurrent attempts cannot consume the same newly issued pairing code twice
+ok 80 - concurrent attempts cannot consume the same newly issued pairing code twice
+  ---
+  duration_ms: 12.15203
+  type: 'test'
+  ...
+1..80
+# tests 80
+# suites 0
+# pass 80
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1311.631808

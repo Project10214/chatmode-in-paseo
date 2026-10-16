@@ -1,0 +1,14 @@
+{
+  "passed": 8,
+  "checks": [
+    "late editor hydration is awaited",
+    "disabled editor becomes writable before any operation",
+    "CoS passive list reads apps even when the @ menu is unavailable",
+    "a complete empty native list is distinct from an unavailable list",
+    "cancel during hydration stops before input or model changes",
+    "automatic discovery never overwrites a user draft",
+    "native CoS marks attach both exact app IDs without @ menu clicks",
+    "a same-named different app never substitutes for the configured host"
+  ],
+  "scope": "offline native browser tests, not signed-in account acceptance"
+}

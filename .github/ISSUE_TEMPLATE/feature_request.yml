@@ -1,0 +1,45 @@
+name: "Feature request / 功能建议"
+description: "Suggest an idea or improvement / 提出新想法或改进"
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please write in **English or 中文**. 请用**中文或英文**填写。
+
+        Core design principles of this project: never auto-resend a message whose delivery is unknown, and never auto-click ChatGPT authorization prompts. Please keep proposals consistent with them.
+        本项目的核心设计原则：送达结果不明的消息绝不自动重发，也绝不自动点击 ChatGPT 的授权提示。请让建议与这些原则保持一致。
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Problem or motivation / 问题或动机"
+      description: "What are you trying to do, and what gets in the way? / 你想做什么，遇到了什么障碍？"
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: "Proposed solution / 建议的方案"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Alternatives considered / 考虑过的替代方案"
+  - type: dropdown
+    id: area
+    attributes:
+      label: "Area / 涉及的部分"
+      options:
+        - "Chrome extension / Chrome 扩展"
+        - "Runtime and queue / Runtime 与队列"
+        - "Paseo plugin UI / Paseo 插件界面"
+        - "Documentation / 文档"
+        - "Other / 其他"
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: "Contribution / 参与"
+      options:
+        - label: "I would like to work on this myself / 我愿意自己来实现"

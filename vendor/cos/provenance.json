@@ -1,0 +1,196 @@
+{
+  "project": "totec448-spec/chat-on-steroids",
+  "commit": "ccd23b66cecf2f684fa3e12ca190297be02842cf",
+  "referenceVersion": "2.1.35",
+  "license": "MIT",
+  "additionalSourceCommits": ["e40562640361ca8f74158b2262ca8c555b00abed"],
+  "files": [
+    {
+      "localPath": "extension/upstream/cos-images-main.js",
+      "localSha256": "64315eae044a14e442442deed6cf675737a54ad54cf0abd3fdeb74c03d5f76f2",
+      "world": "MAIN",
+      "sourceCommit": "e40562640361ca8f74158b2262ca8c555b00abed",
+      "sourcePath": "extension/content.js",
+      "sourceBlobSha": "f5bfa3927b0d63cf6f287a79da43bb79b1ce8c0c",
+      "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/e40562640361ca8f74158b2262ca8c555b00abed/extension/content.js",
+      "sourceFunctions": ["generatedImagesOf", "nativeImageNode", "captureNativeImage"],
+      "sourceRangeHint": "content.js 4062–4217; generatedImagesOf and typed image completion from fiber.js 784–880, 2192–2275",
+      "relation": "function-level adaptation of exact public asset ownership and rendered-pixel capture; canvas preview only; no original-file fetch, URLs, secrets, tool arguments or Goal/Loop features"
+    },
+    {
+      "localPath": "extension/upstream/cos-receipt-text.js",
+      "localSha256": "d98197f3607756a78bd227ccd75f995f6de0c70f9dd6f3ed0d13bd7189bab551",
+      "world": "ISOLATED",
+      "sourceCommit": "e40562640361ca8f74158b2262ca8c555b00abed",
+      "sourcePath": "extension/content.js",
+      "sourceBlobSha": "f5bfa3927b0d63cf6f287a79da43bb79b1ce8c0c",
+      "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/e40562640361ca8f74158b2262ca8c555b00abed/extension/content.js",
+      "sourceFunctions": ["matchesSubmittedBootstrap"],
+      "sourceArrowFunctions": ["unescapeMarkdown"],
+      "sourceRangeHint": "827–828, 878–887",
+      "relation": "verbatim two-line decoder plus scoped raw-first/one-decode comparison; only current native user source can decode, retains CIP whitespace and identity checks; no continuation-marker exception or whole-file equivalence"
+    },
+    {
+      "localPath": "extension/upstream/cos-send-evidence.js",
+      "localSha256": "1b11dd45fc13e52fb1f362cc01ad72a905777b512dba3e19586ba5e21504101a",
+      "world": "MAIN",
+      "runAt": "document_start",
+      "sourceCommit": "e40562640361ca8f74158b2262ca8c555b00abed",
+      "sourcePath": "extension/usage.js",
+      "sourceBlobSha": "f64e811f4d1261616d90140641a5a21049bfd8fb",
+      "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/e40562640361ca8f74158b2262ca8c555b00abed/extension/usage.js",
+      "sourceFunctions": ["armRequest"],
+      "sourceRangeHint": "noteSendModel / installFetchObserver; bounded passive POST body inspection",
+      "relation": "adapted CoS native outgoing user-message UUID reader: bounded Request/POST clone, one elected new-conversation route, request-body SHA256, accepted SSE response fences; alpha.4.4 verifies that every selected app actually appears in the same native POST after body matching, without exposing app IDs, request text or parameters; only one UUID and bounded public proof stage cross worlds"
+    },
+    {
+      "localPath": "extension/upstream/cos-request-receipt.js",
+      "localSha256": "fb88d58f6d23033e9f47fad4df55aa2ced67a541d501586fedd4f483739be1e0",
+      "world": "ISOLATED",
+      "sourceCommit": "e40562640361ca8f74158b2262ca8c555b00abed",
+      "sourcePath": "extension/content.js",
+      "sourceBlobSha": "f5bfa3927b0d63cf6f287a79da43bb79b1ce8c0c",
+      "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/e40562640361ca8f74158b2262ca8c555b00abed/extension/content.js",
+      "sourceFunctions": ["arm"],
+      "sourceRangeHint": "sentRequestSince; one-shot arm/observe/disarm CIP adaptation",
+      "relation": "exposes only accepted native ID after this Send's click plus bounded proof-stage diagnostics, including app-reference omission without prompt content; never replay or permissive DOM fallback"
+    },
+    {
+      "localPath": "extension/upstream/cos-apps-observer.js",
+      "localSha256": "cc30b8a9e2d0ec3cf4942bd4e832f9bd3deb9013cea4fa6a44ae723e063028e1",
+      "world": "MAIN",
+      "runAt": "document_start",
+      "sourceCommit": "e40562640361ca8f74158b2262ca8c555b00abed",
+      "sourcePath": "extension/usage.js",
+      "sourceBlobSha": "f64e811f4d1261616d90140641a5a21049bfd8fb",
+      "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/e40562640361ca8f74158b2262ca8c555b00abed/extension/usage.js",
+      "sourceFunctions": ["inspectSystemHints"],
+      "sourceRangeHint": "188–238 and 517–end: bounded reader, fetch observer attachment and replay",
+      "relation": "scoped extraction/adaptation: generalized Core-only native hint IDs to all apps; complete-list requirement, order fences, exact nonces; no active network requests or credentials"
+    },
+    {
+      "localPath": "extension/upstream/cos-native.js",
+      "localSha256": "642228180f0fa1fefe69494222abe5f95cdd2914aaea7477b3ec9351bf12df6b",
+      "world": "ISOLATED",
+      "sourcePath": "extension/chatgpt-dom.js",
+      "sourceBlobSha": "00cb77438ff4b2e9d16fab556bc57757ac737921",
+      "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/ccd23b66cecf2f684fa3e12ca190297be02842cf/extension/chatgpt-dom.js",
+      "sourceFunctions": [
+        "insertPrompt",
+        "clearPromptExact",
+        "promptWithoutMentions",
+        "addAppMention",
+        "send"
+      ],
+      "sourceRangeHint": "2250–2630",
+      "relation": "function-level transplant with documented adaptations, including optional attachmentOnly for already-staged user files; not an unchanged whole file"
+    },
+    {
+      "localPath": "extension/upstream/cos-controls.js",
+      "localSha256": "23720467fed56c79c2d5797555948a612f7927381ba78c571260cc11d0f6de62",
+      "world": "ISOLATED",
+      "sourcePath": "extension/chatgpt-dom.js",
+      "sourceBlobSha": "00cb77438ff4b2e9d16fab556bc57757ac737921",
+      "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/ccd23b66cecf2f684fa3e12ca190297be02842cf/extension/chatgpt-dom.js",
+      "sourceFunctions": [
+        "onKeptPage",
+        "composerCssVisible",
+        "composer",
+        "renderedComposerNode",
+        "nativeComposerControls",
+        "approvalWaiting",
+        "generating",
+        "stopControls",
+        "sendControls",
+        "stopGeneration",
+        "prepareChatModelSurface"
+      ],
+      "sourceRangeHint": "845–1060, 1734–1777, 3000–3060; see function names",
+      "relation": "function-level transplant with documented adaptations; not an unchanged whole file"
+    },
+    {
+      "localPath": "extension/upstream/cos-models.js",
+      "localSha256": "7e98408afb163013df1e14090d0fd92cc8d2a6148b9e5f34cb5ddc404d9c8209",
+      "world": "ISOLATED",
+      "sourcePath": "extension/chatgpt-dom.js",
+      "sourceBlobSha": "00cb77438ff4b2e9d16fab556bc57757ac737921",
+      "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/ccd23b66cecf2f684fa3e12ca190297be02842cf/extension/chatgpt-dom.js",
+      "sourceFunctions": [
+        "readPickerState",
+        "modelPickerTrigger",
+        "pickerVersionNamed",
+        "modelPickerAccess",
+        "visibleModelSelection",
+        "collectModelChoices",
+        "inspectModelSettings",
+        "selectModelSettings"
+      ],
+      "sourceRangeHint": "approx. 2830–3175; function names are definitive",
+      "relation": "function-level transplant with documented adaptations; not an unchanged whole file"
+    },
+    {
+      "localPath": "extension/upstream/cos-picker-main.js",
+      "localSha256": "ab4ca1914f06e5badab3ca5f828638c142e7bef72a486bf71d187e3f70049e27",
+      "world": "MAIN",
+      "sourcePath": "extension/fiber.js",
+      "sourceBlobSha": "3f1bbf2e803f2d50b482572eb6ffd0d1b8592f7f",
+      "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/ccd23b66cecf2f684fa3e12ca190297be02842cf/extension/fiber.js",
+      "sourceFunctions": [
+        "committedPath",
+        "fiberOf",
+        "shellProExecutionModel",
+        "shellLaneTransportEffort",
+        "closedPickerSelection",
+        "readPickerSnapshot",
+        "readShellPickerSnapshot",
+        "pickerSnapshot"
+      ],
+      "sourceRangeHint": "265–330, 2615–2810; alpha3.6 search anchor follows e40562640361ca8f74158b2262ca8c555b00abed fiber.js:79–85",
+      "relation": "function-level transplant with documented adaptations; projection includes CoS SEARCH_TURN_ANCHOR and rejects layout-shaped message IDs; alpha.4.1 also projects only same-native-user public reasoning recaps and bounded tool-call details; not an unchanged whole file"
+    },
+    {
+      "localPath": "extension/upstream/cos-activity-main.js",
+      "localSha256": "7e55d8ca995f911b4eef0ef431114147d4d2e84643aace02a4cb233bcf4a6c5c",
+      "world": "MAIN",
+      "sourceCommit": "e40562640361ca8f74158b2262ca8c555b00abed",
+      "sourcePath": "extension/fiber.js",
+      "sourceBlobSha": "8ebcd1ee38a596847d10f37174dfbe26f0fb2c70",
+      "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/e40562640361ca8f74158b2262ca8c555b00abed/extension/fiber.js",
+      "sourceFunctions": ["viewCallsOf", "shellTurnTrace"],
+      "sourceRangeHint": "1793–1827, 2125–2185, 2192–2274",
+      "relation": "bounded public-status and native timeline adaptation: retains native tool IDs, visible public reasoning recaps, completion states, and strictly turn-owned visible DOM tool input/output excerpts with credential redaction; projects only safe action labels from exact opaque link_<hex>/<action> names observed on signed-in ChatGPT (never exposes internal link IDs); excludes private chain-of-thought, raw invocation arguments/results, unrelated URLs and credentials"
+    },
+    {
+      "localPath": "extension/upstream/cos-shell-public.js",
+      "localSha256": "4e0b379cbbe745857444a5b964ede6304f32b245de7612d1b46590dab2c95078",
+      "world": "MAIN",
+      "sourceCommit": "e40562640361ca8f74158b2262ca8c555b00abed",
+      "sourcePath": "extension/fiber.js",
+      "sourceBlobSha": "8ebcd1ee38a596847d10f37174dfbe26f0fb2c70",
+      "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/e40562640361ca8f74158b2262ca8c555b00abed/extension/fiber.js",
+      "sourceFunctions": ["shellTurnSource", "shellItemText", "unescapeFallbackMarkdown", "turnViewOf", "messagesFromTurnView", "shellQueries", "shellConversation"],
+      "sourceRangeHint": "1730–1799, 1829–1842, 2054–2122, 2192–2288",
+      "relation": "public-only function transplant; removes raw tool/media payloads, adds size/conflict refusals, sourceFor and explicit visible tool surface scoping for native Paseo detail cards; not an unchanged whole file"
+    },
+    {
+      "localPath": "extension/upstream/cos-transcript-core.js",
+      "localSha256": "1a33531c098797e2fe7b3b173e6f07845c4b241fb8c8bfacbc3a47b3e1d83a82",
+      "world": "MAIN",
+      "sourcePath": "extension/fiber.js",
+      "sourceBlobSha": "3f1bbf2e803f2d50b482572eb6ffd0d1b8592f7f",
+      "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/ccd23b66cecf2f684fa3e12ca190297be02842cf/extension/fiber.js",
+      "sourceFunctions": [
+        "channelOf",
+        "neverTerminalChannel",
+        "hiddenMessage",
+        "withoutAppMentions",
+        "authoredText",
+        "turnEndMessageId",
+        "turnMessagesOf",
+        "conversationEvidenceOf"
+      ],
+      "sourceRangeHint": "357–413, 455–498, 565–603, 888–922",
+      "relation": "function-level transplant with documented adaptations; not an unchanged whole file"
+    }
+  ]
+}

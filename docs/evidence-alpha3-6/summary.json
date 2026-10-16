@@ -1,0 +1,71 @@
+{
+  "version": "0.1.0-alpha.3.6",
+  "chromeVersion": "0.1.8",
+  "nodePassed": 129,
+  "browserPassed": 103,
+  "browserSuites": [
+    {
+      "name": "binding-identity-browser",
+      "passed": 5,
+      "scope": "offline real Chrome + shipped CoS/native projection; not signed-in acceptance"
+    },
+    {
+      "name": "receipt-navigation-browser",
+      "passed": 5,
+      "scope": "offline real Chrome URL/history + shipped content.js; not logged-in acceptance"
+    },
+    {
+      "name": "receipt-interaction-browser",
+      "passed": 3,
+      "scope": "offline Chromium with trusted user events; not logged-in acceptance"
+    },
+    {
+      "name": "receipt-shell-browser",
+      "passed": 14,
+      "scope": "offline Chromium + shipped code; no logged-in sends"
+    },
+    {
+      "name": "browser-provider-flow",
+      "passed": 9,
+      "scope": "Node Provider + real local Runtime + Chromium in-memory DOM/content script; synthetic Chrome tab API; NOT live ChatGPT/Paseo/MV3 installation"
+    },
+    {
+      "name": "catalog-browser-regression",
+      "passed": 11,
+      "scope": "offline Chromium + shipped code, page-owned network fixture; not signed-in acceptance"
+    },
+    {
+      "name": "native-transplant",
+      "passed": 16,
+      "scope": "Chromium + actual transplanted CoS modules; synthetic native DOM and React states; no real ChatGPT/Paseo"
+    },
+    {
+      "name": "browser-fixture",
+      "passed": 7,
+      "scope": "Chromium in-memory DOM fixture ONLY; not real ChatGPT or full MV3/Paseo integration"
+    },
+    {
+      "name": "discovery-browser",
+      "passed": 8,
+      "scope": "offline native browser tests, not signed-in account acceptance"
+    },
+    {
+      "name": "apps-headless",
+      "passed": 9,
+      "scope": "offline real Chrome; not a signed-in live-site test"
+    },
+    {
+      "name": "dom-audit",
+      "passed": 9,
+      "scope": "In-memory Chromium fixture only; no ChatGPT/Paseo live installation"
+    },
+    {
+      "name": "mv3-installed-sdk",
+      "passed": 7,
+      "scope": "REAL unpacked MV3 + Chrome tabs/worker/worlds + Node Runtime/Provider; ChatGPT page and network are OFFLINE FIXTURES, not a signed-in acceptance"
+    }
+  ],
+  "realInstalledSdkValidated": true,
+  "signedInAccountAcceptance": false,
+  "fullTypecheckExecuted": false
+}

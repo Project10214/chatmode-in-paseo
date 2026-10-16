@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CoS in Paseo</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand-mark" aria-hidden="true">↔</div>
+    <div class="brand-copy">
+      <h1>CoS in Paseo</h1>
+      <p>ChatGPT × Paseo</p>
+    </div>
+    <span id="version" class="version" aria-label="Chrome 扩展版本"></span>
+  </header>
+
+  <main>
+    <section id="dashboard" class="view" aria-label="连接概况">
+      <div id="connection" class="connection" data-state="checking">
+        <div class="connection-top">
+          <span class="connection-state"><span id="dot" class="dot"></span><span id="state-label">正在检查</span></span>
+          <span id="activity" class="session-chip" hidden></span>
+        </div>
+        <h2 id="connection-title" tabindex="-1">正在检查连接</h2>
+        <p id="connection-description">正在联系当前电脑上的 Paseo…</p>
+        <div class="endpoint-line">
+          <span class="endpoint-label">本机服务</span>
+          <code id="address">127.0.0.1:17843</code>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="open-chat" type="button" class="primary">打开 ChatGPT <span aria-hidden="true">↗</span></button>
+        <button id="show-pair" type="button" aria-controls="pair-section">配对设置</button>
+      </div>
+    </section>
+
+    <section id="pair-section" class="view" aria-labelledby="pair-title" hidden>
+      <button id="back-home" type="button" class="back">← 返回概况</button>
+      <div class="view-heading">
+        <span class="eyebrow">本机连接</span>
+        <h2 id="pair-title" tabindex="-1">连接 Paseo</h2>
+        <p>在 Paseo 的 Chatmode 配置页生成一次性配对码，然后在这里完成连接。</p>
+      </div>
+      <form id="pair" autocomplete="off">
+        <label for="endpoint">本机地址</label>
+        <input id="endpoint" name="endpoint" type="url" value="http://127.0.0.1:17843"
+          autocomplete="off" spellcheck="false" required>
+        <label for="code">一次性配对码</label>
+        <div class="secret">
+          <input id="code" name="code" type="password" autocomplete="off" spellcheck="false"
+            required placeholder="输入 Paseo 中的配对码">
+          <button id="reveal" type="button" aria-label="显示配对码">显示</button>
+        </div>
+        <button id="connect" type="submit" class="primary full"><span id="connect-label">连接 Paseo</span> <span aria-hidden="true">→</span></button>
+      </form>
+      <p class="footnote">仅连接本机 127.0.0.1，不修改 ChatGPT 登录，也不会代你批准工具权限。</p>
+    </section>
+
+    <section id="disconnect-confirm" class="view" aria-labelledby="disconnect-title" hidden>
+      <button id="back-from-disconnect" type="button" class="back">← 返回</button>
+      <div class="view-heading">
+        <span class="eyebrow">连接管理</span>
+        <h2 id="disconnect-title" tabindex="-1">确认断开桥接？</h2>
+        <p>断开只会停止 Chrome 与 Paseo 的通信。ChatGPT 网页或 MCP 中已经开始的任务不会自动停止。</p>
+      </div>
+      <div class="actions confirm-actions">
+        <button id="cancel-disconnect" type="button">继续保持连接</button>
+        <button id="confirm-disconnect" type="button" class="danger">确认断开</button>
+      </div>
+    </section>
+
+    <p id="status" role="status" aria-live="polite" hidden></p>
+  </main>
+
+  <footer>
+    <span class="privacy">本机通信 <span aria-hidden="true">·</span> 不自动授权</span>
+    <button id="disconnect" type="button" class="text-button" disabled hidden>断开连接</button>
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>

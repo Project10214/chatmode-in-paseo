@@ -1,0 +1,22 @@
+{
+  "passed": 16,
+  "checks": [
+    "CoS MAIN reader + native DOM traversal discovers two model families/efforts and switches Work to Chat",
+    "catalog traversal restores exact original version/effort and closes native picker",
+    "model and thinking selection uses CoS native key actions with observed confirmation; two real fixture app chips",
+    "removed nearest-effort fallback: unavailable xhigh refuses and restores high without Send",
+    "account-evaluated model denial cannot be selected via otherwise visible UI",
+    "transplanted insertPrompt/addAppMention/send preserves Chinese/code/newlines and confirms first native route birth",
+    "second Send uses same native conversation with distinct receipt; old user DOM node never accepts it",
+    "CoS committedPath follows root.current through stale Fiber alternates, not stale props",
+    "cyclic/uncommitted Fiber yields no model proof instead of guessing",
+    "CoS shell powerSelections reader unifies observed instant/thinking family without a hardcoded catalog",
+    "hidden retained old editor cannot capture native input",
+    "original locale-free Stop square is recognized and clicked only inside the owned composer",
+    "copied public-text and terminal readers supply raw public Markdown; private analysis never crosses the projection",
+    "original turnEndMessageId prevents an older completed answer from ending a newer textless generation",
+    "finished_successfully alone is not completion without native end_turn=true",
+    "oversized native text fails visibly rather than silently accepting an upstream-truncated answer"
+  ],
+  "scope": "Chromium + actual transplanted CoS modules; synthetic native DOM and React states; no real ChatGPT/Paseo"
+}

@@ -1,0 +1,187 @@
+✔ A01: configuration screen must have a reachable UI entry (4.051459ms)
+ℹ Verified a normal user-facing configuration entry is registered.
+✔ A02: default host-injected Paseo MCP must not prevent every new chat (207.153542ms)
+ℹ {"type":"session.ready","requestId":"open","sessionId":"host"}
+✔ A03: completion racing with interrupt must not leave the session permanently stopping (561.252875ms)
+ℹ {"status":"idle","outcome":"completed"}
+✔ A04: a timed-out claimed configuration must fence unconfirmed browser mutations (394.42225ms)
+ℹ {"status":"blocked","error":"BRIDGE_TIMEOUT"}
+✔ A05: retrying an already-failed message ID must not launch an undisclosed turn (464.505291ms)
+ℹ {"disposition":[{"type":"session.prompt_result","sessionId":"host","clientMessageId":"retry-id","result":{"type":"failed","error":{"message":"SESSION_BUSY","code":"SESSION_BUSY"}}}],"queuedSend":false}
+✔ A06: resuming a session must update stored cwd and system prompt from the new config (594.283916ms)
+ℹ {"reportedCwd":"/new-fixture","storedCwd":"/new-fixture","storedPrompt":"new instruction"}
+✔ A07: message admission must reserve space for at least one assistant answer (228.85275ms)
+✖ A09: a slow operation on tab A must not stop the dispatcher from picking up Stop for B (1222.464084ms)
+✖ A10: failed re-pairing must preserve an existing working connection (1.872666ms)
+✖ A11: browser restart with a running session must restore tracking or report loss, not silently skip it (1.414167ms)
+ℹ {"activeRead":false,"monitorCalls":0,"lossReports":0}
+✖ A12: saved new-agent defaults must be returned to Paseos create-agent catalog (1325.331458ms)
+✖ A13: provider model fields must satisfy the published Paseo string-or-omitted contract (1270.405833ms)
+✖ A13: an old CIP runtime is rejected before pairing or consuming a code (1.554125ms)
+✔ two sessions send concurrently without sharing conversation identities (722.494875ms)
+✔ stable client ID deduplicates sending and rejects changed contents (348.2165ms)
+✔ busy session and global concurrency cap refuse additional sends (692.732709ms)
+✔ claim and Send authorization are one-shot durable gates (351.067584ms)
+✔ native receipt cannot be recorded without authorization (207.537708ms)
+✔ unconfirmed send is never requeued, and the session becomes blocked (260.26025ms)
+✔ an unclaimed timeout is not misreported as delivered (177.015917ms)
+✔ restart does not replay either claimed or authorized messages (200.848042ms)
+✔ cancel before authorization sends nothing and produces one terminal outcome (178.443042ms)
+✔ stop without a proven native anchor is unconfirmed, not canceled (131.768125ms)
+✔ wrong document, wrong turn and wrong native anchor cannot inject observations (150.505083ms)
+✔ only proven final after a matching snapshot completes a turn (407.581ms)
+✔ native errors block a session rather than triggering another model or account (265.348208ms)
+✔ waiting for permission remains active and never auto-approves (222.684375ms)
+✔ configuration must be read back; echoing another model cannot commit (114.158333ms)
+✔ DIA1 diagnostics discard arbitrary text, endpoints, tokens and unknown stages (0.804541ms)
+✔ DIA2 failed catalog returns fresh connection and keeps last confirmed catalog (1.700458ms)
+✔ DIA3 offline refresh refuses without opening a tab or queue entry (0.1395ms)
+✔ DIA4 overlapping catalog requests share one browser operation (5.985291ms)
+✔ DIA5 catalog diagnostic survives receipt and restart-readable state (224.323291ms)
+✔ FB1 refresh returns before a browser response; status remains readable during the wait (3.094083ms)
+✔ FB2 late native success is visible on ordinary polling without a second refresh (0.79675ms)
+✔ FB3 late failure is retained and not hidden by a healthy Chrome connection (0.853ms)
+✔ FB4 refresh attaches to an existing provider discovery without opening another tab (1.733459ms)
+✔ I01 opening and configuring Paseo sessions never launches a tab before first Send (284.551583ms)
+✔ I02 duplicate first Send creates exactly one open and one native Send intent (400.732083ms)
+✔ I03 Stop during first-tab preparation cancels the queued open, never authorizes Send (349.2175ms)
+✔ I04 native-config uncertainty during first Send blocks the session instead of sending anyway (289.408167ms)
+✔ I05 preparing A does not block independent B; configuration cannot race first Send on A (507.344417ms)
+✔ I06 abort is checked inside atomic Send admission, not merely before the asynchronous disk queue (279.234417ms)
+✔ catalog preserves actual model-specific thinking defaults (0.517875ms)
+✔ model disappearance fails closed (0.278375ms)
+✔ thinking options cannot cross models (0.077042ms)
+✔ unknown and duplicate app selections rejected (0.104708ms)
+✔ plain @names are never treated as native app IDs (0.084792ms)
+✔ ambiguous catalog labels with duplicate keys rejected (0.065375ms)
+✔ conversation identity only accepts HTTPS chatgpt.com (0.155208ms)
+✔ agent options override defaults; toggles may remove an app (0.470042ms)
+✔ unsupported provider options are not silently discarded (0.08875ms)
+✔ unsupported uploads, steering, and structured output fail clearly (0.165042ms)
+✔ normal text and unordered app equality (0.129541ms)
+✔ direct provider negotiates only implemented capabilities (102.569125ms)
+✔ open emits desired config with pending notice before readiness, including visible app toggles (360.06ms)
+✔ Paseo MCP configs are refused rather than silently exposed or ignored (116.200083ms)
+✔ duplicate prompts emit one disposition and one started turn (488.000417ms)
+✔ a second provider connection cannot steal an attached native session (378.4035ms)
+✔ provider rejects non-implemented input operations at admission (90.649084ms)
+✔ closing a connection prevents queued work from opening tabs afterwards (94.430542ms)
+✔ model changes choose that models own default, not an old thinking value (454.904708ms)
+✖ closing while catalog awaits a browser cancels the actual queued command (1292.308833ms)
+✔ closing while session is opening prevents late queued opening (240.631041ms)
+✔ closing after configuration was claimed fences uncertain browser effects (370.65775ms)
+✔ R01: duplicate Stop shares one command and final observation settles both waiters (588.085916ms)
+✔ R02: late old-turn failure cannot terminate the next admitted turn (591.021042ms)
+✔ R03: busy rejection is durable and cannot be resubmitted after another connection opens (428.537583ms)
+✔ R04: reserved prototype-like message identifiers are rejected (0.502042ms)
+✔ R05: final-slot admission reserves all supported response fragments (919.719791ms)
+✔ R06: excessive response fragmentation terminates with a recorded limit, never a running loop (523.852625ms)
+✔ R07: whole-state byte reservation rejects before any Send intent or native authorization (327.819291ms)
+✔ R08: aggregate answer cap preserves history and a terminal failure (357.5405ms)
+✔ R09: proven document reload only rebinds observation, without another Send (309.581875ms)
+✔ R10: another native anchor or conversation cannot claim observation custody (214.558625ms)
+✔ R11: a missing browser binding blocks exactly its own turn, without a fictitious live URL (271.901125ms)
+✔ R12: known not-clicked result after authorization is distinct from an unconfirmed Send (108.236ms)
+✔ R13: late configuration after timeout cannot publish a new effective model (127.570334ms)
+✔ R14: startup fences a previously claimed configuration even when its session was idle (105.062125ms)
+✔ R15: updated context is sent as explicit user-level text on the next existing conversation turn (165.161167ms)
+✔ R16: the host-shaped MCP exception is narrow and emits an explicit limitation notice (0.374834ms)
+✔ R17: saved thinking default updates both the model descriptor and catalog cache identity (31.3555ms)
+✔ R18: explicit abandonment never creates a Send, erases history or claims to stop the website (122.304ms)
+✔ R19: permission and unknown-final notices stay distinct (126.035208ms)
+✔ store serializes parallel writes without losing data (838.86875ms)
+✔ failed transaction cannot publish partial in-memory state (49.886375ms)
+✔ corrupt state is preserved and refused, not reset to a fresh permissive state (41.796792ms)
+✔ bridge exposes health but requires its own token for commands (201.8965ms)
+✔ pairing code is single-use (152.207292ms)
+✔ webpage Origin and DNS-rebinding Host rejected even with valid token (153.554208ms)
+✔ other extension identity cannot reuse the paired token (174.126ms)
+✔ no file, shell, permission-changing or generic proxy endpoint exists (181.156291ms)
+✔ oversized JSON is refused (210.494333ms)
+✔ second runtime cannot take over the same state directory (150.060916ms)
+✔ concurrent attempts cannot consume the same newly issued pairing code twice (160.636041ms)
+ℹ tests 95
+ℹ suites 0
+ℹ pass 88
+ℹ fail 7
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6342.30075
+
+✖ failing tests:
+
+test at tests/adversarial.test.mjs:125:1
+✖ A09: a slow operation on tab A must not stop the dispatcher from picking up Stop for B (1222.464084ms)
+  Error: Test wait timed out
+      at until (file:///Volumes/penndisk/HarnessSpace/Project10214/cos-in-paseo/tests/helpers.mjs:12:162)
+      at async TestContext.<anonymous> (file:///Volumes/penndisk/HarnessSpace/Project10214/cos-in-paseo/tests/adversarial.test.mjs:129:2)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7)
+
+test at tests/adversarial.test.mjs:136:1
+✖ A10: failed re-pairing must preserve an existing working connection (1.872666ms)
+  TypeError: Cannot read properties of undefined (reading 'token')
+      at TestContext.<anonymous> (file:///Volumes/penndisk/HarnessSpace/Project10214/cos-in-paseo/tests/adversarial.test.mjs:138:65)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7)
+
+test at tests/adversarial.test.mjs:142:1
+✖ A11: browser restart with a running session must restore tracking or report loss, not silently skip it (1.414167ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== true
+  
+      at TestContext.<anonymous> (file:///Volumes/penndisk/HarnessSpace/Project10214/cos-in-paseo/tests/adversarial.test.mjs:146:9)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/adversarial.test.mjs:150:1
+✖ A12: saved new-agent defaults must be returned to Paseos create-agent catalog (1325.331458ms)
+  Error: Test wait timed out
+      at until (file:///Volumes/penndisk/HarnessSpace/Project10214/cos-in-paseo/tests/helpers.mjs:12:162)
+      at async TestContext.<anonymous> (file:///Volumes/penndisk/HarnessSpace/Project10214/cos-in-paseo/tests/adversarial.test.mjs:154:10)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7)
+
+test at tests/adversarial.test.mjs:162:1
+✖ A13: provider model fields must satisfy the published Paseo string-or-omitted contract (1270.405833ms)
+  Error: Test wait timed out
+      at until (file:///Volumes/penndisk/HarnessSpace/Project10214/cos-in-paseo/tests/helpers.mjs:12:162)
+      at async TestContext.<anonymous> (file:///Volumes/penndisk/HarnessSpace/Project10214/cos-in-paseo/tests/adversarial.test.mjs:165:10)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7)
+
+test at tests/adversarial.test.mjs:178:1
+✖ A13: an old CIP runtime is rejected before pairing or consuming a code (1.554125ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'BRIDGE_UNAVAILABLE'
+  - 'PROTOCOL_MISMATCH'
+  
+      at TestContext.<anonymous> (file:///Volumes/penndisk/HarnessSpace/Project10214/cos-in-paseo/tests/adversarial.test.mjs:182:42)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'BRIDGE_UNAVAILABLE',
+    expected: 'PROTOCOL_MISMATCH',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/provider.test.mjs:70:1
+✖ closing while catalog awaits a browser cancels the actual queued command (1292.308833ms)
+  Error: Test wait timed out
+      at until (file:///Volumes/penndisk/HarnessSpace/Project10214/cos-in-paseo/tests/helpers.mjs:12:162)
+      at async TestContext.<anonymous> (file:///Volumes/penndisk/HarnessSpace/Project10214/cos-in-paseo/tests/provider.test.mjs:73:13)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:969:7)
