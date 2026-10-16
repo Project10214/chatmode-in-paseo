@@ -269,6 +269,16 @@ export class Broker {
   async create(selection, { cwd = '', systemPrompt = '' } = {}) {
     const id = randomUUID();
     await this.store.transaction(d => {
+      // Sessions are never deleted elsewhere, so at the cap evict the least
+      // recently active ones that are settled, detached and have no pending command.
+      if (Object.keys(d.sessions).length >= LIMITS.sessions) {
+        const busy = new Set(Object.values(d.commands).filter(pending).map(c => c.sessionId));
+        const lastActive = s => Math.max(s.createdAt ?? 0, s.boundAt ?? 0, s.turn?.createdAt ?? 0, s.turn?.lastObservedAt ?? 0);
+        const evictable = Object.values(d.sessions)
+          .filter(s => ['idle', 'abandoned'].includes(s.status) && !this.owners.has(s.id) && !busy.has(s.id))
+          .sort((a, b) => lastActive(a) - lastActive(b));
+        for (const s of evictable) { if (Object.keys(d.sessions).length < LIMITS.sessions) break; delete d.sessions[s.id]; }
+      }
       invariant(Object.keys(d.sessions).length < LIMITS.sessions, 'SESSION_LIMIT');
       const config = validateSelection(selection, d.catalog);
       d.sessions[id] = { id, config, cwd: text(cwd, 8000, true), systemPrompt: text(systemPrompt, 16000, true), conversationId: null, tabId: null,
