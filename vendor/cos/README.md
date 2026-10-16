@@ -61,7 +61,7 @@ DOM 回退删除、Runtime ID 校验、15 秒观察恢复、Chrome 当前标签�
 
 `cos-images-main.js` 移植并适配 e4056264 的 `fiber.js:generatedImagesOf/shellTurnSource` 图片身份和完成逻辑，以及 `content.js:nativeImageNode/captureNativeImage` 的已加载像素读取。只输出公开原生消息 ID、assetId、尺寸及压缩 WebP 字节，不转发签名 URL、Cookie、私有工具数据。`cos-picker-main.js` 增加对应的受限描述投影和 nonce 图片请求。未移植 `exportNativeImage` 原图下载；Paseo 卡片明确标注压缩预览，并提供原对话网页入口。
 
-## 2026-10-16 · 原生附件发送（Chrome 0.2.20 / Paseo alpha.4.13）
+## 2026-10-16 · 原生附件发送（Chrome 0.2.21 / Paseo alpha.4.14）
 
 依据 GitHub 上游主分支 `totec448-spec/chat-on-steroids` 的 `extension/chatgpt-dom.js`（所读 blob SHA `f9036940bacc0c63ef4f3dcc173de5fdd0a18c2c`）中的 `uploadImages` / `composerFileName`（MIT），在 `extension/file-upload.js` 中移植附件送达证据：以新增的移除按钮和精确文件名确认每个文件，等上传进度消失、Send 可用。
 
@@ -69,6 +69,6 @@ DOM 回退删除、Runtime ID 校验、15 秒观察恢复、Chrome 当前标签�
 
 **先附件、后正文。**上游与早期本项目都先写正文再上传；上传失败时，正文会留在 ChatGPT 持久化的首页草稿里。现在附件确认后才写正文和 `@` 应用；正文仍用 CoS `insertPrompt` 写入，不走粘贴。未发送的失败只移除插件本次新增、且文件名属于本次的附件，再清理本次正文。本项目自有的大小约束、SHA-256、浏览器 lease/文档/会话身份、失败防重发保留不变。
 
-**只有附件的用户消息。**上游 `publicTranscript` 只收录有文字的消息，只发文件的用户消息因此被跳过；网络请求证据遇到附件也按设计放弃。真实账号实发时，只带图片的消息已送达却无法确认回执。`cos-picker-main.js` 现在保留这类用户消息：正文只取其中的字符串部分（只有文件时为空），文件指针、文件名和元数据都不带出，使其能按原生用户消息 ID 确认回执。
+**只有附件的用户消息。**上游 `publicTranscript` 只收录有文字的消息，只发文件的用户消息因此被跳过；网络请求证据遇到附件也按设计放弃。真实账号实发时，只带图片的消息已送达却无法确认回执。`cos-picker-main.js` 现在保留这类用户消息：正文只取其中的字符串部分（只有文件时为空），文件指针、文件名和元数据都不带出，使其能按原生用户消息 ID 确认回执。当前网页走 `cos-shell-public.js` 的类型化投影，它在此之前已丢掉文件数据，所以对这条路径上的原生用户项，正文为空即保留（ChatGPT 不会发送既无文字也无文件的用户消息）。
 
 本地无需安装 CoS 桌面程序，不主张两套 runtime/文件协议字节等价；**真实账号的端到端附件发送仍待专项验收**。

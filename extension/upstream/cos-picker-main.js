@@ -200,7 +200,9 @@
   // CIP addition: a user turn can carry only files. Its string parts (none for
   // a file-only turn) become its text, so an attachment-only Send still has an
   // exact native user identity. Asset pointers, file names and file metadata
-  // never cross the projection.
+  // never cross the projection. The typed shell/view projection drops file
+  // data before this point, so there an empty native user item is enough:
+  // ChatGPT does not send a user turn with neither text nor files.
   function attachedFiles(message) {
     const files=message?.metadata?.attachments;
     if(Array.isArray(files)&&files.length>0&&files.length<=64)return true;
@@ -252,7 +254,7 @@
             return{path:location.pathname,available:false,messages:[],error:'TRANSCRIPT_LIMIT'};
         }
         let raw=core.authoredText(message);
-        if(raw==null&&role==='user'&&attachedFiles(message))raw=stringParts(content);
+        if(raw==null&&role==='user'&&(typed?.recognized||attachedFiles(message)))raw=stringParts(content);
         if(raw==null && id!==terminal)continue;
         const text=role==='user'?core.withoutAppMentions(raw??''):(raw??'');
         if(seen.has(id)){if(seen.get(id)!==text)return{path:location.pathname,available:false,messages:[],error:'TRANSCRIPT_CONFLICT'};continue;}

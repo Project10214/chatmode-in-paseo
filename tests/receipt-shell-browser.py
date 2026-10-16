@@ -38,6 +38,10 @@ with sync_playwright() as pw:
     assert rows[1]['final'] and rows[1]['text']=='Hi，我在。'
     assert 'PRIVATE' not in json.dumps(rows) and 'SECRET' not in json.dumps(rows)
     checks.append('cold/reloaded document reads native shell user receipt and final; no analysis/tool values')
+    p.evaluate("shellEntry.turn.items[0].message=''")
+    rows=read(p)
+    assert [(r['id'],r['role'],r['text']) for r in rows][:1]==[('native-user-1','user','')],rows
+    checks.append('a file-only native shell user turn keeps its exact ID with empty text, so an attachment-only Send can be receipted')
     p.evaluate("shellEntry.turn.status='in_progress'");rows=read(p);assert not rows[-1]['final']
     checks.append('complete item alone cannot finish an in-progress native turn')
     p.evaluate("shellEntry.turn.status='complete';shellEntry.turn.items[2].completed=false");assert not read(p)[-1]['final']
