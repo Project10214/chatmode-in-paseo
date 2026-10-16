@@ -36,3 +36,23 @@ test('installed SDK validates catalog, configuration, opening, messages and term
   await until(() => events.some(e => e.type === 'session.turn' && e.state === 'canceled'));
   assert.equal(events.some(e => e.type === 'session.runtime_failed'), false);
 });
+
+test('installed SDK accepts archive persistence and the provider acknowledges an unloaded Agent', async t => {
+  assert.ok(CAPABILITIES.includes('session.archive'));
+  const f=await fixture(t), s=await f.ready(), events=[];
+  const p=await createProvider({...f,status:()=>({connected:true})}, e=>ProviderEventSchema.parse(e))
+    .connect({versions:[1],capabilities:CAPABILITIES});
+  t.after(()=>p.close());
+  p.onEvent(e=>events.push(e));
+  const input=ProviderInputSchema.parse({type:'session.archive',requestId:'sdk-archive',
+    persistence:{version:1,data:{id:s.id}}});
+  await p.send(input);
+  await until(()=>events.some(e=>e.type==='request.completed'&&e.requestId==='sdk-archive'));
+  assert.equal(f.broker.queued().filter(c=>c.kind==='close-tab').length,1);
+  assert.ok(CAPABILITIES.includes('session.unarchive'));
+  await p.send(ProviderInputSchema.parse({type:'session.unarchive',requestId:'sdk-unarchive',
+    persistence:{version:1,data:{id:s.id}}}));
+  await until(()=>events.some(e=>e.type==='request.completed'&&e.requestId==='sdk-unarchive'));
+  assert.equal(f.broker.queued().filter(c=>c.kind==='close-tab').length,0);
+  assert.equal(f.broker.snapshot(s.id).tabId,s.tabId);
+});

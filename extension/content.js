@@ -280,6 +280,19 @@
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id) return;
     if (message.type === 'cancel-command') { cancelled.add(message.id); respond({ ok: true }); return; }
+    if (message.type === 'archive-idle') {
+      // This is a read-only probe. Never close a page with a draft, generation,
+      // pending approval or active turn observer, even if Paseo says it is idle.
+      let idle = false;
+      try {
+        const controls = globalThis.CIP_COS_CONTROLS, box = controls?.composer?.();
+        idle = !disposed && !!box && D.authored(box) === '' &&
+          controls.generating() === false && controls.approvalWaiting() === false &&
+          monitor === null;
+      } catch { /* Unknown native page state is not proof of idleness. */ }
+      respond({ ok: true, value: { idle, documentKey, url: location.href } });
+      return;
+    }
     if (message.type === 'catalog-idle') { const box = globalThis.CIP_COS_CONTROLS.composer(); respond({ ok: true, value: { idle: !!box && D.authored(box) === '' && D.messages().length === 0, documentKey } }); return; }
     if (message.type === 'identity' && disposed) { respond({ ok: false, error: 'PAGE_GONE' }); return; }
     if (message.type === 'identity') {

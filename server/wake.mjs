@@ -4,15 +4,17 @@
 // Never call send(), run(), refreshAgent(), or native ChatGPT Send here.
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export function sessionIdFromPersistence(persistence) {
+  const id=persistence?.data?.id;
+  return persistence?.version===1&&typeof id==='string'&&UUID.test(id)?id:null;
+}
+
 export function sessionIdFromAgent(agent) {
   if(agent?.provider!=='chatmode'||agent?.persistence?.provider!=='chatmode')return null;
   const raw=agent.persistence.sessionId;
   if(typeof raw!=='string'||!raw.startsWith('plugin:')||raw.length>1200)return null;
-  try{
-    const parsed=JSON.parse(raw.slice(7));
-    const id=parsed?.data?.id;
-    return parsed?.version===1&&typeof id==='string'&&UUID.test(id)?id:null;
-  }catch{return null;}
+  try { return sessionIdFromPersistence(JSON.parse(raw.slice(7))); }
+  catch { return null; }
 }
 
 export function createWakeCoordinator() {

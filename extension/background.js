@@ -114,13 +114,56 @@ async function postReceipt(id, row, profile = config) {
   }
   await saveLedger();
 }
+async function closeArchivedTab(command, claim, profile) {
+  const { tabId, documentKey, conversationId: expectedConversation } = command.payload;
+  const skip = skipped => ({ closed: false, skipped });
+  const owned = () => tabs[tabId]?.sessionId === command.sessionId &&
+    tabs[tabId]?.documentKey === documentKey;
+  const sameConversation = url => conversation(url) === (expectedConversation ?? null);
+  if (tabs[tabId]?.sessionId !== command.sessionId) return skip('TAB_NOT_OWNED');
+  if (!owned()) return skip('DOCUMENT_CHANGED');
+  let current;
+  try { current = await chrome.tabs.get(tabId); }
+  catch { return skip('TAB_MISSING'); }
+  if (current.active) return skip('ACTIVE_TAB');
+  if (!sameConversation(current.url)) return skip('WRONG_CONVERSATION');
+  const probe = await tabRpc(tabId, { type: 'archive-idle' }).catch(() => null);
+  if (probe?.ok !== true) return skip('PAGE_UNAVAILABLE');
+  if (probe.value?.documentKey !== documentKey) return skip('DOCUMENT_CHANGED');
+  if (!sameConversation(probe.value?.url)) return skip('WRONG_CONVERSATION');
+  if (probe.value?.idle !== true) return skip('PAGE_BUSY');
+
+  // A new Send may have started since the archive event. Recheck the Runtime
+  // before any browser side effect, then recheck the page immediately before removal.
+  const gate = await api('/verify-tab-close', { id: claim.id, lease: claim.lease }, true, profile);
+  if (gate?.allowed !== true) return skip('SESSION_BUSY');
+  const finalProbe = await tabRpc(tabId, { type: 'archive-idle' }).catch(() => null);
+  if (finalProbe?.ok !== true) return skip('PAGE_UNAVAILABLE');
+  if (finalProbe.value?.documentKey !== documentKey) return skip('DOCUMENT_CHANGED');
+  if (!sameConversation(finalProbe.value?.url)) return skip('WRONG_CONVERSATION');
+  if (finalProbe.value?.idle !== true) return skip('PAGE_BUSY');
+  if (tabs[tabId]?.sessionId !== command.sessionId) return skip('TAB_NOT_OWNED');
+  if (!owned()) return skip('DOCUMENT_CHANGED');
+  try { current = await chrome.tabs.get(tabId); }
+  catch { return skip('TAB_MISSING'); }
+  if (current.active) return skip('ACTIVE_TAB');
+  if (!sameConversation(current.url)) return skip('WRONG_CONVERSATION');
+  await chrome.tabs.remove(tabId);
+  delete tabs[tabId];
+  await saveTabs();
+  return { closed: true };
+}
 async function execute(command) {
   if (Object.hasOwn(ledger, command.id)) return;
   const profile = config;
   ledger[command.id] = { phase: 'reserved', command, endpoint: profile.endpoint, at: Date.now() }; await saveLedger();
   let claim, tabId, reopened = false; const temporary = command.kind === 'catalog';
   try {
-    if(command.kind==='ensure') {
+    if(command.kind==='close-tab') {
+      tabId=command.payload.tabId;
+      // Claim exactly the saved document; the page is never trusted until
+      // closeArchivedTab independently checks identity and idleness.
+    } else if(command.kind==='ensure') {
       tabId=command.payload.tabId;
       let actual; try { actual=await chrome.tabs.get(tabId); } catch {}
       if(actual && conversation(actual.url)===command.payload.conversationId) {
@@ -142,15 +185,23 @@ async function execute(command) {
       if (!tabs[tabId] || tabs[tabId].sessionId !== command.sessionId) throw codeError('TAB_NOT_OWNED');
     }
     ledger[command.id].tabId = tabId; await saveLedger();
-    const page = await identity(tabId, command.kind==='ensure'?command.payload:null);
+    const page = command.kind === 'close-tab'
+      ? { documentKey: command.payload.documentKey }
+      : await identity(tabId, command.kind==='ensure'?command.payload:null);
     if (config !== profile) throw codeError('CONNECTION_CHANGED');
     claim = await api('/claim', { id: command.id, tabId, documentKey: page.documentKey, ...(command.kind==='ensure'?{url:page.url,nativeMessageId:page.nativeMessageId,reopened}:{}) }, true, profile);
     ledger[command.id] = { ...ledger[command.id], phase: 'claimed', lease: claim.lease, documentKey: page.documentKey };
-    tabs[tabId] = { ...tabs[tabId], documentKey: page.documentKey }; await saveLedger(); await saveTabs();
+    await saveLedger();
+    if (command.kind !== 'close-tab') {
+      tabs[tabId] = { ...tabs[tabId], documentKey: page.documentKey };
+      await saveTabs();
+    }
     // The Runtime extends a file Send's deadline by its upload size (max ~5 minutes).
     const cap = claim.payload?.files?.length ? 300000 : 90000;
     const budget = Number.isFinite(claim.deadline) ? Math.min(cap, Math.max(1, claim.deadline - Date.now() - 1000)) : 60000;
-    const reply = await tabRpc(tabId, { type: 'command', command: claim }, budget);
+    const reply = command.kind === 'close-tab'
+      ? { ok: true, value: await closeArchivedTab(command, claim, profile) }
+      : await tabRpc(tabId, { type: 'command', command: claim }, budget);
     const result = reply?.ok ? reply.value : { error: reply?.error ?? 'CONTENT_UNAVAILABLE', notSent: reply?.notSent === true, notApplied: reply?.notApplied === true, diagnostic: reply?.diagnostic };
     // A failed message may still have created its OWN conversation URL.
     // Verify the currently owned Chrome tab rather than trusting a page string.
