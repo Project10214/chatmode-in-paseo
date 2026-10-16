@@ -59,8 +59,11 @@ test('TEXT11 diagnostic records keep match class and bounded counts, never text'
   assert.deepEqual(safeDiagnostic({stage:'receipt',bodyMatch:'PRIVATE',exactUserCount:-1,escapedUserCount:129}), {stage:'receipt'});
 });
 test('TEXT12 decoder is the pinned upstream expression, not a Markdown parser', async t => {
-  const upstream = await readFile(new URL('../.work/receipt-20261013/upstream/content.js', import.meta.url), 'utf8').catch(() => null);
-  if (!upstream) return t.skip('Pinned source archive not present; literal contract tests still run.');
+  // Optional comparison file; it is git-ignored. See docs/TESTING.md for how to fetch it.
+  const pinned = process.env.CIP_UPSTREAM_CONTENT_JS
+    ?? new URL('../vendor/cos/reference/e40562640361ca8f74158b2262ca8c555b00abed/extension/content.js', import.meta.url);
+  const upstream = await readFile(pinned, 'utf8').catch(() => null);
+  if (!upstream) return t.skip('Pinned upstream content.js not present (see docs/TESTING.md); literal contract tests still run.');
   const lines = source.split('\n');
   const start = lines.findIndex(line => line.startsWith('  const unescapeMarkdown ='));
   assert.ok(start >= 0);

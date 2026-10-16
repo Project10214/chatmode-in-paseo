@@ -8,7 +8,6 @@ A project line "matches" when, after collapsing whitespace, it is identical to a
 (>= MIN_LEN chars) somewhere in either upstream checkout. That undercounts renamed or
 reformatted code and overcounts boilerplate, so numbers are indicative, not exact.
 """
-import hashlib
 import json
 import os
 import sys
@@ -201,18 +200,6 @@ def main():
     srcs = Counter(f"{f.get('sourcePath', f.get('sourceUrl', '?'))}@{f.get('sourceCommit', prov.get('commit', ''))[:8]}" for f in fl)
     print(f"modules: {len(fl)}; recorded source functions: {funcs}; license: {prov.get('license')}")
     print('upstream sources used: ' + ', '.join(f'{k} x{v}' for k, v in sorted(srcs.items())))
-
-    print('\n## .work upstream copies vs pinned upstream (sha256)')
-    for name in ('content.js', 'fiber.js'):
-        wp = os.path.join(project, '.work/receipt-20261013/upstream', name)
-        if not os.path.exists(wp):
-            continue
-        h = hashlib.sha256(open(wp, 'rb').read()).hexdigest()
-        for tag, root in roots:
-            up = os.path.join(root, 'extension', name)
-            if os.path.exists(up):
-                same = h == hashlib.sha256(open(up, 'rb').read()).hexdigest()
-                print(f'  .work/.../{name} vs {tag}/extension/{name}: {"IDENTICAL" if same else "differs"}')
 
 
 if __name__ == '__main__':

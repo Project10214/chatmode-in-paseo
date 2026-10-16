@@ -39,6 +39,18 @@ npm run test:mv3        # Chrome MV3 通信层回归（需要隔离的浏览器�
 
 没有依赖或浏览器环境时写 **BLOCKED**，不能改称 PASS。离线 Chrome 测试必须使用独立 profile 和临时 Runtime；不要把生产 ChatGPT 账号或运行中的会话当夹具。修复问题时，同时加一条**能复现旧问题**的测试和相应的反向/异常测试。
 
+### 可选：上游逐字比对（TEXT12）
+
+`tests/receipt-text.test.mjs` 的 TEXT12 会把本项目的解码表达式与固定提交的上游 `extension/content.js` 逐字比对。上游文件不随仓库发布；没有它时该测试自动跳过，其余测试照常运行。要启用比对：
+
+```sh
+d=vendor/cos/reference/e40562640361ca8f74158b2262ca8c555b00abed/extension
+mkdir -p "$d" && curl -L -o "$d/content.js" \
+  https://raw.githubusercontent.com/totec448-spec/chat-on-steroids/e40562640361ca8f74158b2262ca8c555b00abed/extension/content.js
+```
+
+`vendor/cos/reference/` 已被 git 忽略；也可以用环境变量 `CIP_UPSTREAM_CONTENT_JS` 指向该文件。
+
 ## 2. 真实账号验收
 
 改动涉及真实用户行为时，使用**专用的 ChatGPT 账号/会话和专用 Paseo Agent**。只抓关键场景，**按任务选择，不是每次都跑满 T1–T8**：
