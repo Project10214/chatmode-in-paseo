@@ -110,6 +110,7 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
               await broker.inputFiles.remove(value.id);
             break;
           case '/authorize': result = await broker.authorize(value.id, value.lease); break;
+          case '/verify-tab-close': result = broker.verifyTabClose(value.id, value.lease); break;
           case '/bind-conversation':
             result = await broker.bindConversation(value.id,value.lease,
               {tabId:value.tabId,documentKey:value.documentKey,url:value.url});break;

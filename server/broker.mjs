@@ -267,6 +267,10 @@ export class Broker {
     });
     await Promise.all(Object.values(this.store.read().commands).filter(c => c.discarded)
       .map(c => this.inputFiles.remove(c.id)));
+    // Resume an interrupted archive after a restart; this is a single
+    // recovery pass over persisted intents, not a periodic Agent scan.
+    for (const session of Object.values(this.store.read().sessions))
+      if (session.archiveIntent) await this.finishArchive(session.id);
   }
   subscribe(id, fn) { this.events.on(id, fn); return () => this.events.off(id, fn); }
   emit(id, event) { for (const fn of this.events.listeners(id)) { try { fn(structuredClone(event)); } catch {} } this.slots.pump(); }
@@ -325,6 +329,77 @@ export class Broker {
     });
     return command;
   }
+  // One close attempt per tab/document. A skipped, timed-out or unknown result
+  // must never trigger repeated attempts against the same browser document.
+  async enqueueTabClose(id) {
+    invariant(!this.closed, 'RUNTIME_CLOSED');
+    return this.store.transaction(d => {
+      const s = d.sessions[id];
+      if (!s || !s.archiveIntent?.id || s.status !== 'idle' || !Number.isInteger(s.tabId) || s.tabId < 0 ||
+          typeof s.documentKey !== 'string' || this.locks.has(id) ||
+          Object.values(d.commands).some(c => c.sessionId === id && pending(c)) ||
+          (s.tabCloseAttempt?.tabId === s.tabId && s.tabCloseAttempt?.documentKey === s.documentKey) ||
+          Object.values(d.commands).filter(pending).length >= LIMITS.commands) return null;
+      const attempt = {tabId:s.tabId,documentKey:s.documentKey,createdAt:now()};
+      const c = {id:randomUUID(),kind:'close-tab',sessionId:id,
+        payload:{tabId:s.tabId,documentKey:s.documentKey,conversationId:s.conversationId,archiveId:s.archiveIntent.id},
+        phase:'queued',createdAt:attempt.createdAt,deadline:attempt.createdAt+this.commandTimeout};
+      s.tabCloseAttempt = attempt;
+      d.commands[c.id] = c;
+      return c;
+    }, {control:true});
+  }
+  // Paseo archives can arrive while no Provider session is attached. Keep
+  // the intent durable; final compaction waits for a settled, tabless session.
+  async archiveSession(id) {
+    if (!id || this.closed) return { moved: false };
+    const state = this.store.read();
+    if (state.archiveIndex?.[id] || !state.sessions[id]) return { moved: false };
+    await this.store.transaction(d => {
+      const s = d.sessions[id];
+      if (s && !s.archiveIntent) s.archiveIntent = { id: randomUUID(), requestedAt: now() };
+    }, { control: true });
+    return this.finishArchive(id);
+  }
+  async unarchiveSession(id) {
+    if (!id || this.closed) return { restored: false };
+    return this.store.unarchiveSession(id);
+  }
+  // Drive one archived session toward its final state: close an idle tab once,
+  // then move the record out of state.json when it is settled and tabless.
+  // Anything not ready yet is left in place; later events call this again.
+  async finishArchive(id) {
+    if (!id || this.closed) return { moved: false };
+    const s = this.store.read().sessions[id];
+    if (!s?.archiveIntent) return { moved: false };
+    if (s.status === 'idle' && Number.isInteger(s.tabId)) {
+      try { await this.enqueueTabClose(id); } catch { /* retried by a later event */ }
+    }
+    return this.maybeArchive(id);
+  }
+  // Archive I/O must never turn a completed close into a failed browser
+  // receipt. If a disk write fails, state.json retains the entire session.
+  async maybeArchive(id) {
+    if (!id || !this.store.read().sessions[id]?.archiveIntent) return { moved: false };
+    try {
+      return await this.store.archiveSession(id, (s, data) =>
+        ['idle', 'abandoned'].includes(s.status) &&
+        s.tabId === null && s.documentKey == null &&
+        !this.locks.has(id) &&
+        !Object.values(data.commands).some(c => c.sessionId === id && pending(c)));
+    } catch {
+      return { moved: false, error: 'ARCHIVE_WRITE_FAILED' };
+    }
+  }
+  verifyTabClose(id, lease) {
+    const d = this.store.read(), c = d.commands[id], s = c?.sessionId && d.sessions[c.sessionId];
+    return {allowed:Boolean(c?.kind === 'close-tab' && c.phase === 'claimed' && c.lease === lease &&
+      c.deadline > now() && s?.status === 'idle' &&
+      s.archiveIntent?.id === c.payload?.archiveId &&
+      s.tabId === c.tabId && s.documentKey === c.documentKey &&
+      !this.locks.has(s.id) &&
+      !Object.values(d.commands).some(other => other.id !== id && other.sessionId === s.id && pending(other)))};
+  }
   async cancelControl(id) {
     const result = await this.store.transaction(d => {
       const c = d.commands[id];
@@ -364,7 +439,13 @@ export class Broker {
     return this.store.transaction(d => {
       const c = d.commands[id]; invariant(c && c.phase === 'queued' && c.deadline > now(), 'COMMAND_NOT_CLAIMABLE');
       const s = c.sessionId && d.sessions[c.sessionId];
-      if(c.kind==='ensure') {
+      if(c.kind==='close-tab') {
+        invariant(s && s.archiveIntent?.id === c.payload.archiveId && s.status==='idle' && s.tabId===c.payload.tabId &&
+          s.documentKey===c.payload.documentKey && tabId===s.tabId &&
+          documentKey===s.documentKey && !this.locks.has(s.id) &&
+          !Object.values(d.commands).some(other=>other.id!==id&&other.sessionId===s.id&&pending(other)),
+          'TAB_CLOSE_UNAVAILABLE');
+      } else if(c.kind==='ensure') {
         invariant(s && s.status==='idle' && s.tabId===c.payload.tabId && s.documentKey===c.payload.previousDocumentKey,'PAGE_IDENTITY_MISMATCH');
         invariant(conversationId(proof.url)===s.conversationId,'WRONG_CONVERSATION');
         // The page can contain a newer user turn after reconnecting. It is
@@ -486,6 +567,18 @@ export class Broker {
         invariant(s && s.turn?.id === c.payload.turnId && result.stopped === true && result.nativeMessageId === s.turn?.nativeMessageId, 'STOP_UNCONFIRMED');
         if (!s.turn.outcome) { finishTurn(s, 'canceled'); s.status = 'idle'; affected = { id: s.id, turnId: s.turn.id, state: 'canceled', activityItem:settleActivity(s,'canceled') }; }
         c.result = { stopped: true };
+      } else if (c.kind === 'close-tab') {
+        const skipReasons = ['ACTIVE_TAB','DOCUMENT_CHANGED','PAGE_BUSY','PAGE_UNAVAILABLE',
+          'TAB_MISSING','TAB_NOT_OWNED','WRONG_CONVERSATION','SESSION_BUSY'];
+        invariant(result.closed === true || (result.closed === false && skipReasons.includes(result.skipped)), 'TAB_CLOSE_UNCONFIRMED');
+        if (result.closed === true) {
+          invariant(s && s.status === 'idle' && s.tabId === c.tabId && s.documentKey === c.documentKey,
+            'PAGE_IDENTITY_MISMATCH');
+          s.tabId = null;
+          s.documentKey = null;
+          // Conversation binding is durable and is used when a new Send reopens the tab.
+        }
+        c.result = result.closed ? { closed: true } : { closed: false, skipped: result.skipped };
       } else throw new BridgeError('UNKNOWN_COMMAND');
       c.phase = 'done'; return { value: c.result };
     });
@@ -493,6 +586,9 @@ export class Broker {
     this.settle(id, output.error, output.value);
     if (affected) this.emit(affected.id, affected);
     if (output.pending) this.emit(output.pending.id, output.pending);
+    const finished = this.store.read().commands[id];
+    if (finished && ['close-tab', 'stop'].includes(finished.kind))
+      await this.finishArchive(finished.sessionId);
     return { accepted: true };
   }
   /** Save desired settings before a browser has been attached. Not a native application receipt. */
@@ -582,6 +678,7 @@ export class Broker {
     }, { control: true });
     if (discardedId) await this.inputFiles.remove(discardedId);
     if (result) this.emit(id, result);
+    if (result) await this.finishArchive(id);
   }
   async observe(event) {
     invariant(object(event), 'INVALID_EVENT');
@@ -717,6 +814,7 @@ export class Broker {
     });
     for (const id of settledStops) this.settle(id, null, { stopped: true, reason: 'already-completed' });
     if (notification) this.emit(notification.id, notification);
+    if (notification) await this.finishArchive(event.sessionId);
     return { accepted: true, active: !this.snapshot(event.sessionId).turn?.outcome };
   }
   async interrupt(id) {
@@ -774,6 +872,7 @@ export class Broker {
       s.status = 'abandoned'; s.abandonedAt = now();
       // This only ends local tracking; it does NOT claim the website or MCP stopped.
     }, { control: true });
+    await this.finishArchive(id);
     return { abandoned: true };
   }
   async tick(time = now()) {
@@ -809,6 +908,8 @@ export class Broker {
     for (const s of Object.values(this.store.read().sessions))
       if(busy(s)&&time-(s.turn.lastObservedAt??s.turn.createdAt)>this.turnTimeout)
         await this.failTurn(s.id,'TURN_TIMEOUT',true);
+    for (const id of new Set(expired.map(command => command.sessionId)))
+      await this.finishArchive(id);
   }
   async close() {
     this.slots.close(); this.closed = true;

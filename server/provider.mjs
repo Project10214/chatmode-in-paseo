@@ -3,10 +3,11 @@ import { createHash } from 'node:crypto';
 import { phaseLabel } from './activity.mjs';
 import { catalogService } from './catalog.mjs';
 import { createChromeWake } from './chrome-wake.mjs';
+import { sessionIdFromPersistence } from './wake.mjs';
 
 const wakeChrome = createChromeWake();
 
-export const CAPABILITIES = ['prompt.message', 'prompt.image', 'session.configure', 'session.persistence', 'timeline.plugin'];
+export const CAPABILITIES = ['prompt.message', 'prompt.image', 'session.configure', 'session.persistence', 'session.archive', 'session.unarchive', 'timeline.plugin'];
 const errorOf = e => ({ message: e instanceof BridgeError ? e.message : 'Chatmode operation failed; inspect the bridge status.', code: e.code ?? 'BRIDGE_FAILURE' });
 /** @returns {import('@getpaseo/plugin/server/provider').ProviderRegistration} */
 export function createProvider(runtime, validateEvent = value => value) {
@@ -466,10 +467,24 @@ function createConnection(runtime, capabilities, validateEvent) {
       case 'session.interrupt': {
         const binding = host(input.sessionId); binding.preparing?.abort(); const { id } = binding; await broker.interrupt(id); emit({ type: 'request.completed', requestId: input.requestId }); return;
       }
+      case 'session.archive': {
+        // Paseo sends persistence even when the Agent has no open Provider session.
+        // The record stays in state.json until the close has actually settled.
+        const id = sessionIdFromPersistence(input.persistence);
+        if (id) await broker.archiveSession(id);
+        emit({ type: 'request.completed', requestId: input.requestId });
+        return;
+      }
+      case 'session.unarchive': {
+        const id = sessionIdFromPersistence(input.persistence);
+        if (id) await broker.unarchiveSession(id);
+        emit({ type: 'request.completed', requestId: input.requestId });
+        return;
+      }
       case 'session.close': {
         const binding = host(input.sessionId); binding.controller.abort();
         let failure;
-        try { await broker.interrupt(binding.id); }
+        try { if (store.read().sessions[binding.id]) await broker.interrupt(binding.id); }
         catch (e) { failure = errorOf(e); }
         finally {
           binding.unsubscribe(); if (broker.owners.get(binding.id) === binding) broker.owners.delete(binding.id); sessions.delete(input.sessionId);
@@ -487,7 +502,7 @@ function createConnection(runtime, capabilities, validateEvent) {
     async send(input) {
       invariant(!closed && !closing, 'CONNECTION_CLOSED');
       // Do not await a browser roundtrip here: acceptance is separate from lifecycle events.
-      invariant(['catalog', 'session.open', 'session.prompt', 'session.configure', 'session.interrupt', 'session.close'].includes(input.type), 'CAPABILITY_UNSUPPORTED');
+      invariant(['catalog', 'session.open', 'session.prompt', 'session.configure', 'session.interrupt', 'session.archive', 'session.unarchive', 'session.close'].includes(input.type), 'CAPABILITY_UNSUPPORTED');
       queueMicrotask(() => dispatch(input).catch(e => {
         if (input.type === 'session.prompt') disposition(input.sessionId, input.prompt.clientMessageId, { type: 'failed', error: errorOf(e) });
         else if ('requestId' in input) emit({ type: 'request.failed', requestId: input.requestId, error: errorOf(e) });
