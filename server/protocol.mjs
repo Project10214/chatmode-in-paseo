@@ -1,5 +1,5 @@
 export const PROTOCOL = 5; // CIP browser bridge; Paseo Provider protocol remains v1.
-export const PRODUCT = 'cos-in-paseo';
+export const PRODUCT = 'chatmode-in-paseo';
 export const LIMITS = Object.freeze({ text: 64000, answer: 256000, body: 768000, apps: 32, models: 100, commands: 64, history: 1000, turnFragments: 16, sessions: 100 });
 export class BridgeError extends Error {
   constructor(code, message = code) { super(message); this.name = 'BridgeError'; this.code = code; }

@@ -623,7 +623,7 @@ export class Broker {
       }
       if (event.kind === 'image') {
         const key=`${event.messageId}:${event.assetId}`, rowId=`image:${s.turn.id}:${key}`;
-        const row={type:'plugin',id:rowId,pluginId:'cos-in-paseo',kind:'generated-image',version:1,data:image};
+        const row={type:'plugin',id:rowId,pluginId:'chatmode-in-paseo',kind:'generated-image',version:1,data:image};
         const old=s.history.findIndex(x=>x.id===rowId);
         if(old>=0 && JSON.stringify(s.history[old])===JSON.stringify(row))return null;
         s.turn.imageKeys??=[];
@@ -636,7 +636,7 @@ export class Broker {
       }
       if (event.kind === 'activity') {
         const rowId=`activity:${s.turn.id}`;
-        const row={type:'plugin',id:rowId,pluginId:'cos-in-paseo',kind:'native-activity',version:1,
+        const row={type:'plugin',id:rowId,pluginId:'chatmode-in-paseo',kind:'native-activity',version:1,
           data:{turnId:s.turn.id,...activity}};
         const index=s.history.findIndex(x=>x.id===rowId);
         if(index>=0 && JSON.stringify(s.history[index])===JSON.stringify(row))return null;

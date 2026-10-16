@@ -9,8 +9,8 @@ body:
         Thanks for taking the time to report a bug! Please write in **English or 中文**.
         感谢你的反馈！请用**中文或英文**填写。
 
-        **Security problem? / 安全问题？** Do not post it here. Use [private vulnerability reporting](https://github.com/Project10214/cos-in-paseo/security/advisories/new) instead.
-        请不要在这里公开，改用[私密漏洞报告](https://github.com/Project10214/cos-in-paseo/security/advisories/new)。
+        **Security problem? / 安全问题？** Do not post it here. Use [private vulnerability reporting](https://github.com/Project10214/chatmode-in-paseo/security/advisories/new) instead.
+        请不要在这里公开，改用[私密漏洞报告](https://github.com/Project10214/chatmode-in-paseo/security/advisories/new)。
 
         **Redact before pasting / 粘贴前请脱敏：** remove tokens, pairing codes, cookies, account details and private conversation content from logs and screenshots.
         请从日志和截图中删除令牌、配对码、Cookie、账号信息和私人对话内容。

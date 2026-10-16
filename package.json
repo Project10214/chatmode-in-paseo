@@ -1,5 +1,5 @@
 {
-  "name": "cos-in-paseo",
+  "name": "chatmode-in-paseo",
   "version": "0.1.0-alpha.4.7",
   "description": "Direct ChatGPT browser provider for Paseo; no CoS desktop app",
   "private": true,
@@ -7,12 +7,12 @@
   "author": "Pennnnnnnnnn",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Project10214/cos-in-paseo.git"
+    "url": "git+https://github.com/Project10214/chatmode-in-paseo.git"
   },
   "bugs": {
-    "url": "https://github.com/Project10214/cos-in-paseo/issues"
+    "url": "https://github.com/Project10214/chatmode-in-paseo/issues"
   },
-  "homepage": "https://github.com/Project10214/cos-in-paseo#readme",
+  "homepage": "https://github.com/Project10214/chatmode-in-paseo#readme",
   "keywords": ["paseo", "paseo-plugin", "chatgpt", "chrome-extension", "mv3"],
   "type": "module",
   "engines": {

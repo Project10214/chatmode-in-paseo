@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: "Report a security vulnerability privately / 私密报告安全漏洞"
-    url: "https://github.com/Project10214/cos-in-paseo/security/advisories/new"
+    url: "https://github.com/Project10214/chatmode-in-paseo/security/advisories/new"
     about: "Do not open a public issue for security problems. / 安全问题请勿公开提交 Issue。"
   - name: "Product manual / 产品说明书"
-    url: "https://github.com/Project10214/cos-in-paseo/blob/main/docs/PRODUCT_MANUAL.md"
+    url: "https://github.com/Project10214/chatmode-in-paseo/blob/main/docs/PRODUCT_MANUAL.md"
     about: "Read the manual before asking. / 提问前请先阅读说明书。"

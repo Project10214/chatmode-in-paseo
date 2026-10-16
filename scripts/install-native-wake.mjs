@@ -11,17 +11,17 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-export const HOST_NAME = 'com.foolwork.cos_in_paseo_wake';
+export const HOST_NAME = 'com.foolwork.chatmode_in_paseo_wake';
 
 export function wakeHostManifest(extensionId, executable) {
   if(!/^[a-p]{32}$/.test(extensionId)) throw new Error('INVALID_EXTENSION_ID');
   if(!path.isAbsolute(executable)) throw new Error('INVALID_HOST_PATH');
-  return {name:HOST_NAME,description:'Wake Paseo for a paired CoS in Paseo Chrome extension',
+  return {name:HOST_NAME,description:'Wake Paseo for a paired Chatmode in Paseo Chrome extension',
     path:executable,type:'stdio',allowed_origins:[`chrome-extension://${extensionId}/`]};
 }
 
 export async function installNativeWake({
-  stateDir=process.env.CIP_STATE_DIR ?? path.join(os.homedir(),'.cos-in-paseo'),
+  stateDir=process.env.CIP_STATE_DIR ?? path.join(os.homedir(),'.chatmode-in-paseo'),
   manifestDir=path.join(os.homedir(),'Library/Application Support/Google/Chrome/NativeMessagingHosts'),
   hostPath=fileURLToPath(new URL('./native-wake-host.py',import.meta.url))
 }={}) {

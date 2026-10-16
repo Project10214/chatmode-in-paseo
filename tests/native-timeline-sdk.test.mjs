@@ -8,7 +8,7 @@ try{
   ({ProviderEventSchema}=await import(process.env.CIP_SDK_MODULE??'@getpaseo/plugin/server/provider'));
 }catch{}
 
-test('COS2-SDK: the installed Paseo Provider validates actual native reasoning/tool calls and endings',
+test('TIMELINE-SDK: the installed Paseo Provider validates actual native reasoning/tool calls and endings',
   {skip:!ProviderEventSchema&&'Paseo SDK not installed (run npm install --ignore-scripts)'},async t=>{
     const f=await fixture(t),s=await f.ready(),{event}=await f.sending(s);
     const conn=await createProvider({...f,status:()=>({connected:true})},

@@ -96,7 +96,7 @@ test('REOPEN-V5 only offline transport can wake Paseo, never an auth/protocol er
   await f.wake(new TypeError('Connection refused'));
   const native=f.calls.filter(x=>x.native);
   assert.equal(native.length,1,'cooldown avoids a restart loop');
-  assert.equal(native[0].native,'com.foolwork.cos_in_paseo_wake');
+  assert.equal(native[0].native,'com.foolwork.chatmode_in_paseo_wake');
   assert.equal(JSON.stringify(native[0].payload),JSON.stringify({v:1,action:'wake'}));
   assert.equal(f.calls.filter(x=>x.route==='/authorize'||x.route==='/claim').length,0);
 });

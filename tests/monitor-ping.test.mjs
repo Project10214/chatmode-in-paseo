@@ -44,7 +44,7 @@ function fixture({final=true}={}){
  };
 }
 
-test('COS1 monitor pulse drives an identity-bound native completion when browser tab timers are throttled',async()=>{
+test('TURN monitor pulse drives an identity-bound native completion when browser tab timers are throttled',async()=>{
  const f=fixture();
  const first=await f.monitor();
  assert.equal(first.ok,true);
@@ -60,7 +60,7 @@ test('COS1 monitor pulse drives an identity-bound native completion when browser
  assert.equal(f.sendCount(),0,'monitor must never issue native Send');
  assert.ok(f.refreshCount()>=2);
 });
-test('COS1 monitor pulse does not invent completion while native turn is still in_progress',async()=>{
+test('TURN monitor pulse does not invent completion while native turn is still in_progress',async()=>{
  const f=fixture({final:false});
  await f.monitor();f.setTime(8000);await f.monitor();
  assert.equal(f.events.some(x=>x.kind==='completed'),false);

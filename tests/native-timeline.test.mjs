@@ -14,7 +14,7 @@ const tool=(id,extra={})=>({type:'mcp-tool-call',callId:id,completed:false,
   invocation:{server:'mymac',tool:'run_shell_command',
     arguments:{password:'PRIVATE_TOKEN'},response:{secret:'NEVER_EXPOSE'}},...extra});
 
-test('COS2-01: public reasoning recap and separate tool call identities, no hidden CoT or raw arguments',()=>{
+test('TIMELINE-01: public reasoning recap and separate tool call identities, no hidden CoT or raw arguments',()=>{
   const value=project({status:'in_progress',items:[
     {type:'chatgpt-reasoning-group',id:'reason-1',
       reasoningRecap:{type:'show',summary:'正在比较两种实现方案'},
@@ -30,7 +30,7 @@ test('COS2-01: public reasoning recap and separate tool call identities, no hidd
   assert.equal(JSON.stringify(value).includes('PRIVATE_TOKEN'),false);
   assert.equal(JSON.stringify(value).includes('NEVER_EXPOSE'),false);
 });
-test('COS2-02: hidden reasoning groups, raw analysis and untrusted tool names never leak',()=>{
+test('TIMELINE-02: hidden reasoning groups, raw analysis and untrusted tool names never leak',()=>{
   const value=project({status:'in_progress',items:[
     {type:'chatgpt-reasoning-group',reasoningRecap:{type:'hide_all',summary:'HIDDEN'},
       items:[tool('nested')]},
@@ -47,7 +47,7 @@ test('COS2-02: hidden reasoning groups, raw analysis and untrusted tool names ne
   assert.equal(value.calls[0].status,'completed');
 });
 
-test('COS2-03: server strictly rejects arbitrary private details and foreign call status',()=>{
+test('TIMELINE-03: server strictly rejects arbitrary private details and foreign call status',()=>{
   for(const bad of [
     {type:'tool_call',callId:'call-a',name:'mymac · run_shell_command',kind:'tool',status:'running',
       arguments:{private:'SECRET'}},
@@ -58,7 +58,7 @@ test('COS2-03: server strictly rejects arbitrary private details and foreign cal
   ])assert.throws(()=>nativeTimelineItem(bad,'turn-1'));
 });
 
-test('COS2-04: broker native tool cards are upserted per callId with streamed status and reasoning',async t=>{
+test('TIMELINE-04: broker native tool cards are upserted per callId with streamed status and reasoning',async t=>{
   const f=await fixture(t),s=await f.ready(),{event}=await f.sending(s);
   const seen=[];f.broker.subscribe(s.id,v=>seen.push(v));
   const observation=item=>f.broker.observe({...event,kind:'native_timeline',item});
@@ -91,7 +91,7 @@ test('COS2-04: broker native tool cards are upserted per callId with streamed st
   assert.equal(finished.turn.outcome,'completed');
 });
 
-test('COS2-05: Paseo emits NATIVE reasoning and tool_call, retaining distinct identities',async t=>{
+test('TIMELINE-05: Paseo emits NATIVE reasoning and tool_call, retaining distinct identities',async t=>{
   const f=await fixture(t),events=[];
   const runtime={...f,status:()=>({connected:true})};
   const conn=await createProvider(runtime).connect({versions:[1],capabilities:CAPABILITIES});
@@ -125,7 +125,7 @@ test('COS2-05: Paseo emits NATIVE reasoning and tool_call, retaining distinct id
   assert.equal(replay.filter(x=>x.type==='timeline.item'&&x.item?.type==='reasoning').length,1);
 });
 
-test('COS2-REAL: signed-in ChatGPT link_<hex>/read tool IDs yield two separate public Paseo tool cards',()=>{
+test('TIMELINE-REAL: signed-in ChatGPT link_<hex>/read tool IDs yield two separate public Paseo tool cards',()=>{
   // Captured public metadata only, from actual user-visible, completed ChatGPT
   // turn after two independent mymac read calls on unpredictable test files.
   // Never include invocation arguments or tool result payloads in the fixture.
@@ -159,7 +159,7 @@ test('COS2-REAL: signed-in ChatGPT link_<hex>/read tool IDs yield two separate p
   assert.deepEqual(JSON.parse(JSON.stringify(ctx.CIP_COS_ACTIVITY.viewCallsOf(turn.items)))
     .map(x=>x.label),['mymac · read','mymac · read']);
 });
-test('COS2-REAL-SAFETY: linked-tool decoder rejects paths, URLs and hidden connector calls',()=>{
+test('TIMELINE-REAL-SAFETY: linked-tool decoder rejects paths, URLs and hidden connector calls',()=>{
   const raw=[
     tool('ok',{invocation:{server:'mymac',tool:'link_'+ 'a'.repeat(32)+'/read'}}),
     tool('path',{invocation:{server:'mymac',tool:'link_'+ 'a'.repeat(32)+'/../../private'}}),

@@ -8,7 +8,7 @@ const executions = new Map(), receipts = new Map(), monitors = new Map(), heartb
 const idleScannedAt = new Map(), idleHints = new Map();
 let lastIdleNoticeAt=0;
 let activeSessions = [], lastNativeWakeAt = 0;
-const NATIVE_WAKE_HOST = 'com.foolwork.cos_in_paseo_wake';
+const NATIVE_WAKE_HOST = 'com.foolwork.chatmode_in_paseo_wake';
 const codeError = code => Object.assign(new Error(code), { code });
 async function load() {
   if (!loaded) loaded = (async () => {
@@ -571,7 +571,7 @@ async function pump() {
     if (!config.token) return;
     const profile = config;
     const hello = await api('/hello', undefined, false, profile);
-    if (hello.protocol !== PROTOCOL || hello.product !== 'cos-in-paseo') throw codeError('PROTOCOL_MISMATCH');
+    if (hello.protocol !== PROTOCOL || hello.product !== 'chatmode-in-paseo') throw codeError('PROTOCOL_MISMATCH');
     if(upgradeRecovery)await recoverAfterUpdate(profile);
     if(updateEventPending)return; // Update arrived during an already running pump.
     const recovering=new Set(upgradeRecovery?.targets?.filter(t=>!['done','skipped'].includes(t.phase))
@@ -623,7 +623,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const intent = ++pairingIntent;
       // Do not consume a code or replace credentials on an incompatible old runtime.
       const hello = await api('/hello', undefined, false, candidate);
-      if (hello.protocol !== PROTOCOL || hello.product !== 'cos-in-paseo') throw codeError('PROTOCOL_MISMATCH');
+      if (hello.protocol !== PROTOCOL || hello.product !== 'chatmode-in-paseo') throw codeError('PROTOCOL_MISMATCH');
       if (intent !== pairingIntent) throw codeError('PAIRING_CANCELLED');
       const r = await api('/pair', { code: message.code, extensionId: chrome.runtime.id }, false, candidate);
       if (r.protocol !== PROTOCOL || !/^[a-f0-9]{64}$/.test(r.token)) throw codeError('PROTOCOL_MISMATCH');

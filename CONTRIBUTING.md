@@ -1,7 +1,7 @@
 # Contributing / 贡献指南
 
-Thank you for your interest in CoS in Paseo! Issues and pull requests are welcome, in **English or 中文**.
-感谢关注 CoS in Paseo！欢迎用**中文或英文**提交 Issue 和 Pull Request。
+Thank you for your interest in Chatmode in Paseo! Issues and pull requests are welcome, in **English or 中文**.
+感谢关注 Chatmode in Paseo！欢迎用**中文或英文**提交 Issue 和 Pull Request。
 
 [English](#english) · [中文](#中文)
 
@@ -11,7 +11,7 @@ Thank you for your interest in CoS in Paseo! Issues and pull requests are welcom
 
 ### Before you start
 
-- Search existing [issues](https://github.com/Project10214/cos-in-paseo/issues) and pull requests first.
+- Search existing [issues](https://github.com/Project10214/chatmode-in-paseo/issues) and pull requests first.
 - For anything bigger than a small fix, open an issue to discuss it before writing code.
 - Security problems: do **not** open a public issue. See [SECURITY.md](SECURITY.md).
 
@@ -41,7 +41,7 @@ Thank you for your interest in CoS in Paseo! Issues and pull requests are welcom
 
 - `extension/upstream/*.js` are adapted from [Chat On Steroids](https://github.com/totec448-spec/chat-on-steroids) (MIT). If you change one, update its hash and notes in `vendor/cos/provenance.json` and `vendor/cos/README.md` (`npm run verify:upstream` enforces the hash) and keep the notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - Keep the safety principles: queued is not delivered; never auto-resend a message whose delivery is unknown; never expose hidden reasoning, cookies, tokens or account objects; never auto-click ChatGPT authorization prompts; the local service listens on 127.0.0.1 only.
-- Never commit credentials, pairing codes, runtime state (`.state/`, `~/.cos-in-paseo/`) or real ChatGPT conversation content. Redact logs and screenshots before attaching them to issues or pull requests.
+- Never commit credentials, pairing codes, runtime state (`.state/`, `~/.chatmode-in-paseo/`) or real ChatGPT conversation content. Redact logs and screenshots before attaching them to issues or pull requests.
 - Keep a single Provider, a single shared Runtime and a single Chrome extension; do not add parallel services. Chatmode UI changes must only affect Chatmode: do not take over Paseo's global message components.
 - Changes that can only be verified with a real logged-in ChatGPT session are not covered by CI. Describe how you tested them by hand in the pull request.
 
@@ -63,7 +63,7 @@ By submitting a contribution you agree that it is licensed under the repository'
 
 ### 开始之前
 
-- 请先搜索现有的 [Issue](https://github.com/Project10214/cos-in-paseo/issues) 和 Pull Request，避免重复。
+- 请先搜索现有的 [Issue](https://github.com/Project10214/chatmode-in-paseo/issues) 和 Pull Request，避免重复。
 - 除小修小补外，较大的改动请先开 Issue 讨论，再动手写代码。
 - 安全问题**不要**公开提 Issue，请见 [SECURITY.md](SECURITY.md)。
 
@@ -93,7 +93,7 @@ By submitting a contribution you agree that it is licensed under the repository'
 
 - `extension/upstream/*.js` 改编自 [Chat On Steroids](https://github.com/totec448-spec/chat-on-steroids)（MIT）。修改这些文件时，请同步更新 `vendor/cos/provenance.json` 中的哈希和 `vendor/cos/README.md` 中的说明（`npm run verify:upstream` 会校验哈希），并保留 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 中的声明。
 - 守住安全原则：已排队不等于已送达；送达结果不明的消息绝不自动重发；绝不暴露隐藏思考、Cookie、令牌或账号对象；绝不自动点击 ChatGPT 的授权提示；本机服务只监听 127.0.0.1。
-- 切勿提交凭据、配对码、运行状态（`.state/`、`~/.cos-in-paseo/`）或真实的 ChatGPT 对话内容。在 Issue 或 PR 中附日志、截图前请先脱敏。
+- 切勿提交凭据、配对码、运行状态（`.state/`、`~/.chatmode-in-paseo/`）或真实的 ChatGPT 对话内容。在 Issue 或 PR 中附日志、截图前请先脱敏。
 - 保持一套 Provider、一套共享 Runtime、一个 Chrome 扩展，不要另起并行服务。Chatmode 的界面改动只能影响 Chatmode，不要接管 Paseo 全局的消息组件。
 - 只能用真实登录的 ChatGPT 会话验证的改动，CI 无法覆盖。请在 PR 中说明你是如何手动验证的。
 
