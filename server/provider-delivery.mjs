@@ -6,10 +6,12 @@ import {createNativeDelivery,normalizeProjectedView} from './native-delivery.mjs
 import {invariant} from './protocol.mjs';
 
 export function createProviderDelivery({sessionId,hostId,store,readHost,emit,isCurrent,isReady,notice,initialSources=[]}) {
-  const generation=randomUUID(),sources=new Map(),submitted=new Map();
+  const generation=randomUUID(),sources=new Map(),submitted=new Map(),seeded=new Set();
   for(const row of Array.isArray(initialSources)?initialSources:[])
-    if(row&&typeof row.id==='string'&&typeof row.messageId==='string'&&typeof row.text==='string')
+    if(row&&typeof row.id==='string'&&typeof row.messageId==='string'&&typeof row.text==='string'){
       sources.set(row.id,{type:'assistant_message',id:row.id,messageId:row.messageId,text:row.text});
+      seeded.add(row.id);
+    }
   let coordinator=null,timer=null,inflight=null,closed=false,agentId=null,lastNotice=null;
   // A delivery that stayed unfinished after a binding/readiness transition must
   // retry even without a new source event. No host ACK is implied.
@@ -44,25 +46,41 @@ export function createProviderDelivery({sessionId,hostId,store,readHost,emit,isC
   };
   async function initialize(view) {
     const prior=store.read().sessions[sessionId]?.nativeDelivery;
+    let priorUnconfirmed=false;
     if(prior&&prior.generation!==generation){
       invariant(prior.agentId===agentId,'HOST_AGENT_MISMATCH');
-      invariant(prior.durable?.scope?.hostEpoch===view.hostEpoch,'HOST_EPOCH_MISMATCH');
-      // Reconcile the PREVIOUS scope read-only against this same Agent's actual
-      // retained projection. Never emit on an old binding or relabel old
-      // attempts as unsent. Only positive content / its recorded marker settles it.
-      let reconciled=prior.durable;
-      const previous=createNativeDelivery({...prior.durable.scope,initialState:prior.durable,
-        emit:()=>false,isReady:()=>false,persist:async value=>{reconciled=value;},readHost:async()=>view});
-      let result;
-      try {result=await previous.observeHost({...view,...prior.durable.scope});}
-      finally {await previous.close();}
-      invariant(!result.issues.length&&!reconciled.deliveries.some(row=>row.pending),'DELIVERY_PRIOR_UNCONFIRMED');
+      try{
+        invariant(prior.durable?.scope?.hostEpoch===view.hostEpoch,'HOST_EPOCH_MISMATCH');
+        // Reconcile the PREVIOUS scope read-only against this same Agent's actual
+        // retained projection. Never emit on an old binding or relabel old
+        // attempts as unsent. Only positive content / its recorded marker settles it.
+        let reconciled=prior.durable;
+        const previous=createNativeDelivery({...prior.durable.scope,initialState:prior.durable,
+          emit:()=>false,isReady:()=>false,persist:async value=>{reconciled=value;},readHost:async()=>view});
+        let result;
+        try {result=await previous.observeHost({...view,...prior.durable.scope});}
+        finally {await previous.close();}
+        invariant(!result.issues.length&&!reconciled.deliveries.some(row=>row.pending),'DELIVERY_PRIOR_UNCONFIRMED');
+      }catch(error){
+        // A new host epoch (reload/reconnect) cannot prove or repair the old
+        // native message. Do not replay it: keep its source and report once.
+        // New turns must still work instead of being blocked by the old scope.
+        if(error?.code!=='HOST_EPOCH_MISMATCH'&&error?.code!=='DELIVERY_PRIOR_UNCONFIRMED'&&
+           error?.code!=='HOST_BODY_INVALID')throw error;
+        priorUnconfirmed=true;
+      }
     }
     invariant(current(),'DELIVERY_BINDING_EXPIRED');
     coordinator=createNativeDelivery({sessionId:hostId,bindingGeneration:generation,hostEpoch:view.hostEpoch,
       emit:async event=>ready()?emit(event):false,persist,isReady:publicationReady,
       readHost:async()=>{const result=await readHost(generation,current);return result.view;}});
     await persist(coordinator.snapshot().durable);
+    if(priorUnconfirmed){
+      // Seeded sources belong to the rejected old scope. Never forward them
+      // into the new epoch; the ledger still holds the full original text.
+      for(const id of seeded)sources.delete(id);
+      lastNotice='DELIVERY_PRIOR_UNCONFIRMED';notice(['DELIVERY_PRIOR_UNCONFIRMED']);
+    }
   }
   async function pass() {
     if(!ready()||!sources.size)return;
