@@ -139,7 +139,7 @@ export function GeneratedFile({ item, theme, layout }: PluginTimelineItemProps<A
   const artifact = item.data, c = theme.colors, read = useRpc(readArtifact);
   const resource = artifact.status === 'available' ? artifact.resource : null;
   const resourceLabel = artifact.provenance === 'native-original' ? '原文件' : artifact.provenance === 'visible-image-resource' ? '网页显示图片' : '预览图';
-  const [content,setContent] = useState<string|null>(null), [busy,setBusy] = useState(false);
+  const [content,setContent] = useState<string|null>(null), [thumbnail,setThumbnail] = useState<string|null>(null), [busy,setBusy] = useState(false);
   const [error,setError] = useState(''), [expanded,setExpanded] = useState(false), [notice,setNotice] = useState('');
   const [download,setDownload] = useState<PreparedArtifactDownload|null>(null);
   const epoch = useRef(0), prepared = useRef<PreparedArtifactDownload|null>(null);
@@ -154,9 +154,24 @@ export function GeneratedFile({ item, theme, layout }: PluginTimelineItemProps<A
   const boundedImage = Boolean(resource?.width && resource.height && resource.width <= 30000 && resource.height <= 30000 && resource.width * resource.height <= 30000000);
   const previewable = Boolean(resource && ((image && boundedImage && resource.bytes <= 4 * 1024 * 1024) || (text && resource.bytes <= 1024 * 1024)));
   const load = (generation: number) => collectArtifactBase64(resource!, offset => read({sessionId:artifact.sessionId,sourceId:artifact.sourceId,digest:resource!.digest,offset}), () => epoch.current === generation);
+  // Show a bounded inline preview for images; the modal/download paths reuse the
+  // same verified bytes and never claim the preview is the original file.
+  useEffect(() => {
+    setThumbnail(null);
+    if (!resource || !previewable || !image) return;
+    const generation = epoch.current; let live = true;
+    void (async () => {
+      try {
+        const encoded = await load(generation);
+        if (live && generation === epoch.current) setThumbnail('data:' + resource.mimeType + ';base64,' + encoded);
+      } catch { /* The explicit preview action reports the error. */ }
+    })();
+    return () => { live = false; };
+  }, [artifact.sessionId, artifact.sourceId, resource?.digest, resource?.mimeType, resource?.bytes, previewable, image]);
   const preview = async () => {
     if (!resource || !previewable || busy) return;
     if (content !== null) { setExpanded(true); return; }
+    if (thumbnail) { setContent(thumbnail); setExpanded(true); return; }
     const generation = epoch.current; setBusy(true); setError('');
     try {
       const encoded = await load(generation);
@@ -199,7 +214,11 @@ export function GeneratedFile({ item, theme, layout }: PluginTimelineItemProps<A
     <View style={{flexDirection:'row',gap:8,alignItems:'center'}}><Icon name={artifact.kind === 'image' ? 'Image' : 'File'} size={18} color={c.foreground}/><Text style={{color:c.foreground,fontWeight:'600',flex:1}}>{resource?.name ?? (artifact.kind === 'image' ? '图片' : '文件')}</Text></View>
     {!!artifact.sourceText && <Text selectable style={{color:c.foreground,lineHeight:20}}>{artifact.sourceText}</Text>}
     <Text style={{color:c.foregroundMuted}}>{resource ? `${resourceLabel}已缓存 · ${resource.bytes} 字节` : reasons[artifact.status === 'unsupported' ? artifact.reason : 'resource_unavailable']}</Text>
-    {previewable && <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void preview(); }} style={{minHeight:44,justifyContent:'center'}}><Text style={{color:c.foreground}}>{busy ? '正在读取…' : image ? `查看${resourceLabel}` : '预览文件'}</Text></Pressable>}
+    {previewable && image && <Pressable accessibilityRole="imagebutton" accessibilityLabel={resourceLabel} onPress={() => { void preview(); }} style={{borderRadius:8,overflow:'hidden',backgroundColor:c.surface1,minHeight:120}}>
+      {thumbnail ? <Image source={{uri:thumbnail}} resizeMode="contain" style={{width:'100%',height:220}} onError={() => setThumbnail(null)}/> :
+        <Text style={{color:c.foregroundMuted,paddingVertical:24,textAlign:'center'}}>{busy ? '正在读取预览…' : '正在加载预览…'}</Text>}
+    </Pressable>}
+    {previewable && !image && <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void preview(); }} style={{minHeight:44,justifyContent:'center'}}><Text style={{color:c.foreground}}>{busy ? '正在读取…' : '预览文件'}</Text></Pressable>}
     {resource && !previewable && <Text style={{color:c.foregroundMuted}}>此资源暂不支持内嵌预览。</Text>}
     {resource && (downloadable ? <Pressable accessibilityRole="button" disabled={busy} onPress={download ? save : () => { void prepare(); }} style={{minHeight:44,justifyContent:'center'}}><Text style={{color:c.foreground}}>{busy ? '正在读取…' : download ? `下载${resourceLabel}` : '准备下载'}</Text></Pressable> : <Text style={{color:c.foregroundMuted}}>当前环境不支持文件下载。</Text>)}
     {!!notice && <Text accessibilityLiveRegion="polite" style={{color:c.foregroundMuted}}>{notice}</Text>}

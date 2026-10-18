@@ -321,8 +321,22 @@
     if (!await atStage('chat-surface', () => C.prepareChatModelSurface(stillCurrent))) throw errorStage(Object.assign(new Error('CHAT_SURFACE_UNCONFIRMED'), {code:'CHAT_SURFACE_UNCONFIRMED'}), 'chat-surface');
     if (nativeShape()) {
       nativeMode = true;
-      if (!await M.selectModelSettings(config.model, config.thinkingOption, stillCurrent)) fail('MODEL_OR_THINKING_UNAVAILABLE');
-      await refreshModelProof();
+      // The intelligence picker mounts after the composer. A single read can
+      // race that mount and report "model unavailable" on a healthy page.
+      // Re-check readiness and retry briefly before reporting the failure.
+      const budget = Number.isFinite(deadline)
+        ? Math.max(1500, Math.min(6000, deadline - Date.now() - 30000)) : 6000;
+      const end = Date.now() + budget;
+      let selected = false;
+      while (stillCurrent()) {
+        if (await C.prepareChatModelSurface(stillCurrent) &&
+            await M.selectModelSettings(config.model, config.thinkingOption, stillCurrent)) {
+          try { await refreshModelProof(); selected = true; break; } catch { /* picker not readable yet */ }
+        }
+        if (Date.now() >= end) break;
+        await delay(250);
+      }
+      if (!selected) fail('MODEL_OR_THINKING_UNAVAILABLE');
     } else { await select('model', config.model); await select('thinking', config.thinkingOption); }
     guard();
     await atStage('apps', () => setApps(config.appIds, guard, ready)); guard();
@@ -340,8 +354,14 @@
         throw draftError('catalog-start', composer(), ready, 'CATALOG_TAB_NOT_EMPTY');
       const stillCurrent = () => { try { guard(); return true; } catch { return false; } };
       if (!await atStage('chat-surface', () => C.prepareChatModelSurface(stillCurrent))) throw errorStage(Object.assign(new Error('CHAT_SURFACE_UNCONFIRMED'), {code:'CHAT_SURFACE_UNCONFIRMED'}), 'chat-surface');
-      let reason = '';
-      const result = await atStage('models', () => M.inspectModelSettings(stillCurrent, value => { reason = value; }));
+      let reason = '', result = null;
+      const end = Date.now() + 6000;
+      while (stillCurrent()) {
+        reason = '';
+        result = await atStage('models', () => M.inspectModelSettings(stillCurrent, value => { reason = value; }));
+        if (result || Date.now() >= end) break;
+        await delay(250);
+      }
       if (!result) { const code = 'PICKER_' + (reason || 'UNAVAILABLE').toUpperCase(); throw errorStage(Object.assign(new Error(code), {code}), 'models'); }
       const current = await refreshModelProof(); guard();
       const models = result.map(model => ({ id: model.id, label: model.label,
