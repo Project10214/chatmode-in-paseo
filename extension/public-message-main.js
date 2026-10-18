@@ -189,12 +189,14 @@
     }
     // Local-chatgpt aliases are not resolved by scanning hidden caches. Missing
     // or conflicting exact model scope is a per-source refusal, not a guess.
-    // The current page can expose a local clientThreadId that differs from the
-    // URL conversation id. An explicit conversationId is authoritative; only
-    // when no model scope carries one may the local thread id stand in.
+    // The current page can expose a local clientThreadId or a parent-level
+    // local id that differs from the URL conversation id. Require ONE exact
+    // positive scope proof; a conflicting value is rejected per message by the
+    // explicit conversationId check below, never averaged or guessed.
     const scopes = conversations.length ? conversations : localScopes;
     if (!scopes.length) fail('PUBLIC_MESSAGE_SCOPE_MISSING');
-    if (scopes.some(value => value !== cid)) fail('PUBLIC_MESSAGE_CONVERSATION_UNPROVEN');
+    if (!scopes.includes(cid)) fail(conversations.length
+      ? 'PUBLIC_MESSAGE_CONVERSATION_UNPROVEN' : 'PUBLIC_MESSAGE_THREAD_UNPROVEN');
     const all = new Set(direct);
     for (const turn of new Set(turns)) {
       const items = own(turn, 'items');
