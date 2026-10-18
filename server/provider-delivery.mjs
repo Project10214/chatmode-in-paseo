@@ -78,6 +78,20 @@ export function createProviderDelivery({sessionId,hostId,store,readHost,emit,isC
     if(priorUnconfirmed){
       // Seeded sources belong to the rejected old scope. Never forward them
       // into the new epoch; the ledger still holds the full original text.
+      // Show only the missing suffix as an explicitly labelled page card so the
+      // user is not left with a silently truncated native answer.
+      for(const source of prior.durable?.sources??[]){
+        let boundary=prior.durable?.deliveries?.find(row=>row.sourceId===source.id)?.confirmedText?.length??0;
+        for(const attempt of prior.durable?.attempts??[])
+          if(attempt.sourceId===source.id&&['sent','confirmed'].includes(attempt.status))
+            boundary=Math.max(boundary,Number.isSafeInteger(attempt.to)?attempt.to:0);
+        const suffix=String(source.text??'').slice(boundary);
+        if(!suffix)continue;
+        const id='recovery:'+source.id;
+        await emit({type:'timeline.item',sessionId:hostId,item:{type:'plugin',pluginId:'chatmode-in-paseo',
+          id,kind:'page-source',version:1,data:{source:{id,userMessageId:null,role:'page',lane:'output',
+            kind:'notice',text:'正文后续（原生同步未确认）：\n'+suffix,format:'text',order:[],sourceKind:'recovery'}}}});
+      }
       for(const id of seeded)sources.delete(id);
       lastNotice='DELIVERY_PRIOR_UNCONFIRMED';notice(['DELIVERY_PRIOR_UNCONFIRMED']);
     }
