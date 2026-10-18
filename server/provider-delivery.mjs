@@ -5,9 +5,15 @@ import {randomUUID} from 'node:crypto';
 import {createNativeDelivery,normalizeProjectedView} from './native-delivery.mjs';
 import {invariant} from './protocol.mjs';
 
-export function createProviderDelivery({sessionId,hostId,store,readHost,emit,isCurrent,isReady,notice}) {
+export function createProviderDelivery({sessionId,hostId,store,readHost,emit,isCurrent,isReady,notice,initialSources=[]}) {
   const generation=randomUUID(),sources=new Map(),submitted=new Map();
+  for(const row of Array.isArray(initialSources)?initialSources:[])
+    if(row&&typeof row.id==='string'&&typeof row.messageId==='string'&&typeof row.text==='string')
+      sources.set(row.id,{type:'assistant_message',id:row.id,messageId:row.messageId,text:row.text});
   let coordinator=null,timer=null,inflight=null,closed=false,agentId=null,lastNotice=null;
+  // A delivery that stayed unfinished after a binding/readiness transition must
+  // retry even without a new source event. No host ACK is implied.
+  const watchdog=setInterval(()=>{if(current()&&unfinished()&&!inflight)kick();},2500);watchdog.unref?.();
   const current=()=>!closed&&isCurrent();
   const ready=()=>current()&&isReady();
   // A source may change while a durable prepare write is awaiting its return.
@@ -99,7 +105,7 @@ export function createProviderDelivery({sessionId,hostId,store,readHost,emit,isC
   return {
     submit(item){if(!current())return;sources.set(item.id,structuredClone(item));kick();},
     kick,
-    close(){closed=true;clearTimeout(timer);timer=null;void coordinator?.close();},
+    close(){closed=true;clearTimeout(timer);timer=null;clearInterval(watchdog);void coordinator?.close();},
     async drain(){if(inflight)await inflight;}
   };
 }

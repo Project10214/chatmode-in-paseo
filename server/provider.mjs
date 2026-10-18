@@ -231,7 +231,7 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
       if(run?.active&&run.id===event.turnId)announce(hostId,event.turnId);
       return;
     }
-    if(event.state==='page-standby') {end(hostId,event.turnId,'completed');return;}
+    if(event.state==='page-standby') {end(hostId,event.turnId,'completed');binding.delivery?.kick();return;}
     if(event.state==='approval') {
       if(!capabilities.includes('permission')) {
         // Without permission UI this card is a notice; track it so an external
@@ -394,6 +394,15 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
             const active=()=>!closed&&!closing&&!broker.closed&&sessions.get(hostId)===binding&&
               !binding.controller.signal.aborted&&broker.owners.get(binding.id)===binding;
             binding.delivery=createProviderDelivery({sessionId:s.id,hostId,store,isCurrent:active,
+              // A reopened/cold binding may have no new source event for an
+              // answer whose delivery stopped at a confirmed prefix. Seed ONLY
+              // unfinished durable sources so a suffix batch can be repaired;
+              // fully confirmed history is never replayed.
+              initialSources:(()=>{const prior=broker.snapshot(s.id).nativeDelivery?.durable;
+                return (prior?.sources??[]).filter(source=>{
+                  const row=prior.deliveries?.find(item=>item.sourceId===source.id);
+                  return row&&(row.pending||row.confirmedText!==source.text);
+                }).map(source=>({id:source.id,messageId:source.messageId,text:source.text}));})(),
               isReady:()=>binding.ready&&binding.confirmed&&!binding.deferred&&!binding.releasing,
               readHost:async(bindingGeneration,isCurrent)=>{
                 if(!binding.agentId){requestBarrier(hostId,binding);throw new BridgeError('HOST_AGENT_UNAVAILABLE');}
@@ -441,6 +450,7 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
           if(input.history==='replay')for(const item of broker.snapshot(s.id).history)emitItem(input.sessionId,item);
           emit({type:'session.ready',requestId:input.requestId,sessionId:input.sessionId});
           binding.ready=true;
+          binding.delivery?.kick();
           const current=broker.snapshot(s.id),run=current.observation?.run;
           if(run?.active)observe(input.sessionId,{state:'page-running',turnId:run.id});
           for(const approval of Object.values(current.approvals??{}))
