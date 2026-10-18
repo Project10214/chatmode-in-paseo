@@ -167,11 +167,11 @@
     fail('PUBLIC_MESSAGE_RAW_UNAVAILABLE');
   }
   function candidates(proof, id, cid) {
-    const entries = [], turns = [], direct = [], scopes = [];
+    const entries = [], turns = [], direct = [], conversations = [], localScopes = [];
     const scope = value => {
       for (const key of ['conversationId', 'clientThreadId']) {
         const found = own(value, key);
-        if (found != null) scopes.push(found);
+        if (found != null) (key === 'conversationId' ? conversations : localScopes).push(found);
       }
     };
     for (const fiber of proof.chain) {
@@ -189,7 +189,12 @@
     }
     // Local-chatgpt aliases are not resolved by scanning hidden caches. Missing
     // or conflicting exact model scope is a per-source refusal, not a guess.
-    if (!scopes.length || scopes.some(value => value !== cid)) fail('PUBLIC_MESSAGE_CONVERSATION_UNPROVEN');
+    // The current page can expose a local clientThreadId that differs from the
+    // URL conversation id. An explicit conversationId is authoritative; only
+    // when no model scope carries one may the local thread id stand in.
+    const scopes = conversations.length ? conversations : localScopes;
+    if (!scopes.length) fail('PUBLIC_MESSAGE_SCOPE_MISSING');
+    if (scopes.some(value => value !== cid)) fail('PUBLIC_MESSAGE_CONVERSATION_UNPROVEN');
     const all = new Set(direct);
     for (const turn of new Set(turns)) {
       const items = own(turn, 'items');

@@ -257,7 +257,12 @@
         (work && tertiary && role === 'assistant')) {
       kind = 'reasoning'; lane = 'process';
     } else if (role !== 'page' && !node.matches('[role="alert"],[role="status"]')) {
-      kind = 'message'; lane = work || channel === 'commentary' ? 'process' : 'output';
+      // A formal assistant answer must carry exactly one native message id.
+      // Work summaries/commentary without one are process content, not answers.
+      const nativeAssistant = role === 'assistant' && nativeIds(node).length === 1;
+      kind = 'message';
+      lane = work || channel === 'commentary' || (role === 'assistant' && !nativeAssistant)
+        ? 'process' : 'output';
     }
     if (row.media) kind = row.mediaKind;
     const result = { role, lane, kind, text: row.text, format: 'text', order: row.order };
@@ -456,6 +461,12 @@
           }
           if (item.role === 'user') userMessageId = item.nativeMessageId || item.id;
           const inTurn = row.node.closest('[data-turn-key],section[data-testid^="conversation-turn"]');
+          // The composer disclaimer is fixed UI chrome, not a page notice. It has
+          // no turn/native identity; keep all other page errors and notices.
+          if (item.role === 'page' && item.kind === 'notice' && !inTurn &&
+              item.nativeMessageId === undefined &&
+              /ChatGPT can make mistakes|ChatGPT 可能会犯错|ChatGPT 可能會出錯/i.test(item.text))
+            continue;
           item.userMessageId = item.role === 'page' && item.kind === 'notice' && !inTurn ? null : userMessageId;
           if (row.media) {
             mediaNodes.set(item.id,{node:row.node,kind:row.mediaKind,cid});
