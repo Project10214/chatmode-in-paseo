@@ -214,6 +214,32 @@
     const parts=Array.isArray(content?.parts)?content.parts:[];
     return parts.filter(part=>typeof part==='string').join('\n').slice(0,256000);
   }
+  const CITATION=/\\?:(?:\\?:)?chatgpt-content-reference\\?\{[^}\n]*\}/g;
+  function citationLink(pill) {
+    let url;
+    try { url=new URL(pill.href); } catch { return null; }
+    if(!/^https?:$/.test(url.protocol))return null;
+    if(url.searchParams.get('utm_source')==='chatgpt.com')url.searchParams.delete('utm_source');
+    const href=url.href,label=(pill.innerText||'').split('\n')[0].replace(/[\[\]\\<>]/g,'').trim().slice(0,80);
+    if(!label||href.length>2000||/[\s<>]/.test(href))return null;
+    return `[${label}](<${href}>)`;
+  }
+  // The same native message can be read through several anchors of one turn,
+  // and only some of them contain its pills. Duplicate detection keeps using
+  // the raw text; a row is rendered once, by a section that holds its pills.
+  function citeSection(section,out,ids) {
+    const rows=out.filter(row=>ids.includes(row.id)&&row.role==='assistant'&&row.text.search(CITATION)>=0);
+    if(!rows.length)return;
+    const pills=[...section.querySelectorAll('a[data-testid="chatgpt-citation"]')].filter(n=>!n.closest(OWN_SURFACES));
+    const count=rows.reduce((n,row)=>n+row.text.match(CITATION).length,0);
+    if(count!==pills.length||count>256)return;
+    const links=pills.map(citationLink);
+    if(links.some(link=>!link))return;
+    let at=0;
+    for(const row of rows){
+      row.text=row.text.replace(CITATION,(_,offset,whole)=>(offset>0&&!/\s/.test(whole[offset-1])?' ':'')+links[at++]);
+    }
+  }
   function publicTranscript() {
     imageReader?.begin();
     const core=globalThis.CIP_COS_PUBLIC_CORE;
@@ -225,7 +251,7 @@
     const sections=[...document.querySelectorAll(selector)].filter(n=>
       !n.closest(`${OWN_SURFACES},.markdown,[contenteditable],[hidden],[aria-hidden="true"],[inert]`) &&
       ![...function*(n){for(let p=n;p;p=p.parentElement)yield p}(n)].some(p=>getComputedStyle(p).display==='none')).slice(-12);
-    const out=[],seen=new Map();let total=0,available=false,lastTerminal=null,latestActivity=null,latestTimeline=null;
+    const out=[],seen=new Map(),issues=[],activities=[];let total=0,available=false,latestActivity=null,latestTimeline=null;
     const coverage={sourceSections:Math.min(128,sections.length),sourceMatches:0,sourceUsers:0};
     for(const section of sections){
       const fiber=fiberOf(section);if(!fiber)continue;
@@ -240,7 +266,9 @@
       const messages=typed?.recognized?typed.messages:core.turnMessagesOf(fiber);
       if(!messages||messages.length>500)continue;
       imageReader?.add({fiber,section,messages,scope});
-      available=true;const terminal=typed?.recognized?typed.terminal:core.turnEndMessageId(messages);lastTerminal=terminal;
+      available=true;const terminal=typed?.recognized?typed.terminal:core.turnEndMessageId(messages);
+      const owner=messages.filter(m=>m?.author?.role==='user').at(-1)?.id;
+      const sectionIds=[];
       for(const message of messages){
         const role=message?.author?.role,id=message?.id;
         if(!['user','assistant'].includes(role)||typeof id!=='string'||!id||id.length>200)continue;
@@ -255,26 +283,42 @@
         }
         let raw=core.authoredText(message);
         if(raw==null&&role==='user'&&(typed?.recognized||attachedFiles(message)))raw=stringParts(content);
-        if(raw==null && id!==terminal)continue;
+        if(raw==null && id!==terminal && message.metadata?.cipProseReadable!==false)continue;
         const text=role==='user'?core.withoutAppMentions(raw??''):(raw??'');
+        const issue=message.metadata?.cipProseIssue;
+        if(typeof issue==='string'&&/^ANSWER_[A-Z_]{1,70}$/.test(issue)&&!issues.some(x=>x.messageId===id))
+          issues.push({messageId:id,userMessageId:owner??null,code:issue});
+        sectionIds.push(id);
         if(seen.has(id)){if(seen.get(id)!==text)return{path:location.pathname,available:false,messages:[],error:'TRANSCRIPT_CONFLICT'};continue;}
         total+=text.length;if(total>512000)return{path:location.pathname,available:false,messages:[],error:'TRANSCRIPT_LIMIT'};
-        seen.set(id,text);out.push({id,role,text,final:role==='assistant'&&id===terminal});
+        const messageState=message.metadata?.cipMessageState??
+          (role==='user'||message.status==='finished_successfully'?'complete':'pending');
+        const readable=message.metadata?.cipProseReadable!==false;
+        seen.set(id,text);out.push({id,role,text,final:role==='assistant'&&id===terminal&&!issue&&readable,
+          messageState,readable,format:message.metadata?.cipProseFormat??'text',
+          ...(issue?{error:issue}:{}),...(Array.isArray(message.metadata?.cipPosition)?{position:message.metadata.cipPosition}:{})});
         if(role==='user')coverage.sourceUsers=Math.min(128,coverage.sourceUsers+1);
       }
-      const owner=messages.filter(m=>m?.author?.role==='user').at(-1)?.id;
+      // CIP addition: ChatGPT draws each inline citation directive as a source
+      // pill. Pair them in page order only when the counts match exactly;
+      // otherwise leave the directives for the receiver to drop, never guess.
+      citeSection(section,out,sectionIds);
       // Only the same exact native user identity may own public work status.
-      if(typed?.activity && typeof owner==='string' && seen.has(owner))
+      if(typed?.activity && typeof owner==='string' && seen.has(owner)){
         latestActivity={userMessageId:owner,...typed.activity};
+        const at=activities.findIndex(x=>x.userMessageId===owner);
+        if(at<0)activities.push(latestActivity);else activities[at]=latestActivity;
+      }
       if(typed?.timeline && typeof owner==='string' && seen.has(owner))
         latestTimeline={userMessageId:owner,...typed.timeline};
     }
-    for(const row of out)row.final=row.role==='assistant'&&row.id===lastTerminal;
+    // Each native turn retains its own final identity. A later user does not
+    // erase the old turn's completion proof needed for identity-based recovery.
     // Source mounted != confirmed user. A shell placeholder can return zero
     // user rows; allow only the existing explicit data-message-id DOM reader
     // to act as fallback (never accept a layout/search key as identity).
     const identified=out.some(row=>row.role==='user');
-    return {path:location.pathname,available:available&&identified,messages:out,coverage,...imageReader?.project(),activity:identified?latestActivity:null,timeline:identified?latestTimeline:null};
+    return {path:location.pathname,available:available&&identified,messages:out,issues,activities,coverage,...imageReader?.project(),activity:identified?latestActivity:null,timeline:identified?latestTimeline:null};
   }
   // CIP addition, not an upstream app catalog: resolve only rows in an owned @ portal.
   // Only own data properties are read; callbacks/getters, account stores and credentials are excluded.
@@ -330,13 +374,24 @@
   });
   addEventListener('message', event => {
     const data = event.data;
-    if (event.source !== window || event.origin !== location.origin || !['cip-cos-picker-ask','cip-cos-transcript-ask','cip-cos-apps-ask'].includes(data?.source) ||
+    if (event.source !== window || event.origin !== location.origin || !['cip-cos-picker-ask','cip-cos-transcript-ask-v2','cip-cos-apps-ask'].includes(data?.source) ||
         typeof data.nonce !== 'string' || !/^[a-zA-Z0-9-]{16,64}$/.test(data.nonce) || reading) return;
+    const transcript=data.source==='cip-cos-transcript-ask-v2',apps=data.source==='cip-cos-apps-ask';let value=null;
+    if(transcript&&data.v!==2)return;
     reading = true;
-    const transcript=data.source==='cip-cos-transcript-ask',apps=data.source==='cip-cos-apps-ask';let value=null;
     try { currentPaths=new WeakMap();value=apps?appMenuSnapshot(data.nonce):transcript?publicTranscript():pickerSnapshot(); }
-    catch { if(transcript)value={path:location.pathname,available:false,messages:[],error:'TRANSCRIPT_UNCONFIRMED'}; }
+    catch(e) { if(transcript){
+      // Only these fixed, content-free codes may cross worlds. Any general
+      // Fiber/DOM interruption remains retryable as TRANSCRIPT_UNCONFIRMED.
+      const code=typeof e?.code==='string'?e.code:e?.message;
+      const allow=['ANSWER_RAW_DIVERGED','ANSWER_FINAL_MISMATCH',
+        'ANSWER_DERIVED_NON_PREFIX','ANSWER_FINAL_UNREADABLE',
+        'ANSWER_SAFE_CURSOR_REGRESSION','ANSWER_STREAM_CAPACITY',
+        'ANSWER_STREAM_PROCESSOR_UNAVAILABLE'];
+      value={path:location.pathname,available:false,messages:[],
+        error:allow.includes(code)?code:'TRANSCRIPT_UNCONFIRMED'};
+    }}
     finally { currentPaths=null;reading=false; }
-    post({source:apps?'cip-cos-apps-reply':transcript?'cip-cos-transcript-reply':'cip-cos-picker-reply',nonce:data.nonce,v:1,[apps?'apps':transcript?'transcript':'picker']:value},location.origin);
+    post({source:apps?'cip-cos-apps-reply':transcript?'cip-cos-transcript-reply-v2':'cip-cos-picker-reply',nonce:data.nonce,v:transcript?2:1,[apps?'apps':transcript?'transcript':'picker']:value},location.origin);
   });
 })();

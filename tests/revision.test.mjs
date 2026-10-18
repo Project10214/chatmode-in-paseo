@@ -1,28 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture, selection, until } from './helpers.mjs';
+import { fixture, pageView, selection, until } from './helpers.mjs';
+import { ProviderEventSchema } from '@getpaseo/plugin/server/provider';
 import { createProvider, hostMcpNotice, wireModels, CAPABILITIES } from '../server/provider.mjs';
 import { MAX_STATE_BYTES, CONTROL_RESERVE_BYTES } from '../server/store.mjs';
 import { LIMITS, identifier } from '../server/protocol.mjs';
 
-test('R01: duplicate Stop shares one command and final observation settles both waiters', async t => {
-  const f = await fixture(t), s = await f.ready(), { event } = await f.sending(s);
+test('R01: duplicate Stop shares one command; the result settles both waiters', async t => {
+  const f = await fixture(t), s = await f.ready(); await f.sending(s);
+  await f.view(s, { state: 'running' });
   const a = f.broker.interrupt(s.id), b = f.broker.interrupt(s.id);
   a.catch(() => {}); b.catch(() => {});
-  await until(() => f.broker.queued().some(c => c.kind === 'stop'));
+  const command = await until(() => f.broker.queued().find(c => c.kind === 'stop'));
   assert.equal(f.broker.queued().filter(c => c.kind === 'stop').length, 1);
-  await f.broker.observe({ ...event, kind: 'snapshot', messageId: 'answer', text: 'done' });
-  await f.broker.observe({ ...event, kind: 'completed', messageId: 'answer', finalConfirmed: true });
-  assert.equal((await a).stopped, true); assert.equal((await b).stopped, true);
-  assert.equal(f.broker.snapshot(s.id).status, 'idle'); assert.equal(f.broker.queued().length, 0);
+  const claim = await f.broker.claim(command.id, s.tabId, s.documentKey);
+  await f.broker.result(command.id, claim.lease, { stopped: true });
+  assert.deepEqual(await a, { stopped: true });
+  assert.deepEqual(await b, { stopped: true });
+  assert.equal(f.broker.queued().length, 0);
+  // A click receipt is not the page ending; the visible standby frame is.
+  await f.view(s, { state: 'standby' });
+  assert.equal(f.broker.snapshot(s.id).status, 'idle');
 });
 test('R02: late old-turn failure cannot terminate the next admitted turn', async t => {
   const f = await fixture(t), s = await f.ready(), { event } = await f.sending(s);
-  await f.broker.observe({ ...event, kind: 'snapshot', messageId: 'answer', text: 'done' });
-  await f.broker.observe({ ...event, kind: 'completed', messageId: 'answer', finalConfirmed: true });
+  await f.view(f.broker.snapshot(s.id), { state: 'standby' });
   const next = await f.broker.prompt(s.id, 'next', 'next task');
   await f.broker.failTurn(s.id, 'STOP_UNCONFIRMED', true, event.turnId);
-  assert.equal(f.broker.snapshot(s.id).turn.id, next.turnId); assert.equal(f.broker.snapshot(s.id).turn.outcome, null);
+  assert.equal(f.broker.snapshot(s.id).turn.id, next.turnId);
+  assert.equal(f.broker.snapshot(s.id).turn.outcome, null);
 });
 test('R03: busy rejection is durable and cannot be resubmitted after another connection opens', async t => {
   const f = await fixture(t), s = await f.ready();
@@ -36,39 +42,29 @@ test('R03: busy rejection is durable and cannot be resubmitted after another con
 test('R04: reserved prototype-like message identifiers are rejected', () => {
   for (const id of ['__proto__', 'constructor', 'prototype']) assert.throws(() => identifier(id), /INVALID_ID/);
 });
-test('R05: final-slot admission reserves all supported response fragments', async t => {
-  const f = await fixture(t), s = await f.ready();
-  const count = LIMITS.history - LIMITS.turnFragments - 1;
-  await f.store.transaction(d => { d.sessions[s.id].history = Array.from({ length: count }, (_, i) => ({ type: 'assistant_message', id: `past:${i}`, text: 'past' })); });
-  const { event } = await f.sending(s);
-  for (let i = 0; i < LIMITS.turnFragments; i++) await f.broker.observe({ ...event, kind: 'snapshot', messageId: `fragment-${i}`, text: `part ${i}` });
-  await f.broker.observe({ ...event, kind: 'completed', finalConfirmed: true, messageId: `fragment-${LIMITS.turnFragments - 1}` });
-  assert.equal(f.broker.snapshot(s.id).status, 'idle'); assert.equal(f.broker.snapshot(s.id).history.length, LIMITS.history);
-});
-test('R06: excessive response fragmentation terminates with a recorded limit, never a running loop', async t => {
-  const f = await fixture(t), s = await f.ready(), { event } = await f.sending(s);
-  for (let i = 0; i <= LIMITS.turnFragments; i++) await f.broker.observe({ ...event, kind: 'snapshot', messageId: `fragment-${i}`, text: 'part' });
-  const after = f.broker.snapshot(s.id); assert.equal(after.status, 'blocked'); assert.equal(after.turn.outcome, 'failed'); assert.equal(after.error, 'TURN_OUTPUT_LIMIT');
-});
 test('R07: whole-state byte reservation rejects before any Send intent or native authorization', async t => {
   const f = await fixture(t), s = await f.ready();
   await f.store.transaction(d => { d.testPadding = 'x'.repeat(MAX_STATE_BYTES - CONTROL_RESERVE_BYTES - 100000); });
   await assert.rejects(f.broker.prompt(s.id, 'too-full', 'do not send'), /STATE_CAPACITY_RESERVED/);
   assert.equal(f.broker.snapshot(s.id).status, 'idle'); assert.equal(f.broker.queued().length, 0);
 });
-test('R08: aggregate answer cap preserves history and a terminal failure', async t => {
-  const f = await fixture(t), s = await f.ready(), { event } = await f.sending(s);
-  await f.broker.observe({ ...event, kind: 'snapshot', messageId: 'a1', text: 'x'.repeat(200000) });
-  const result = await f.broker.observe({ ...event, kind: 'snapshot', messageId: 'a2', text: 'y'.repeat(100000) });
-  assert.equal(result.active, false); assert.equal(f.broker.snapshot(s.id).error, 'TURN_OUTPUT_LIMIT');
-  assert.equal(f.broker.snapshot(s.id).history.at(-1).text.length, 200000);
-});
 test('R09: proven document reload only rebinds observation, without another Send', async t => {
-  const f = await fixture(t), s = await f.ready(), { event } = await f.sending(s);
-  const updated = await f.broker.rebindObservation({ ...event, previousDocumentKey: event.documentKey, documentKey: 'replacement-document', tabId: s.tabId + 10 });
-  assert.equal(updated.documentKey, 'replacement-document'); assert.equal(f.broker.queued().length, 0);
-  await assert.rejects(f.broker.observe({ ...event, kind: 'snapshot', messageId: 'old', text: 'old' }), /PAGE_IDENTITY_MISMATCH/);
-  await f.broker.observe({ ...event, ...updated, kind: 'snapshot', messageId: 'current', text: 'recovered' });
+  const f = await fixture(t), s = await f.ready(); await f.sending(s);
+  const before = f.broker.snapshot(s.id);
+  const updated = await f.broker.rebindObservation({ sessionId: s.id,
+    observationLease: before.observation.lease, previousDocumentKey: before.documentKey,
+    documentKey: 'replacement-document', tabId: before.tabId,
+    url: 'https://chatgpt.com/c/' + before.conversationId });
+  const after = f.broker.snapshot(s.id);
+  assert.equal(after.documentKey, 'replacement-document');
+  assert.notEqual(updated.observationLease, before.observation.lease);
+  assert.equal(Object.values(f.store.read().commands).filter(c => c.kind === 'send').length, 1);
+  await assert.rejects(f.broker.observeView({ ...pageView(after), observationLease: before.observation.lease }),
+    /OBSERVATION_LEASE_MISMATCH/);
+  const accepted = await f.broker.observeView(pageView(after, { items: [{
+    id: 'current', userMessageId: null, role: 'assistant', lane: 'output', kind: 'message',
+    text: 'recovered', format: 'text', order: [1], nativeMessageId: 'native-current' }] }));
+  assert.equal(accepted.accepted, true);
 });
 test('R10: another native anchor or conversation cannot claim observation custody', async t => {
   const f = await fixture(t), s = await f.ready(), { event } = await f.sending(s);
@@ -76,12 +72,18 @@ test('R10: another native anchor or conversation cannot claim observation custod
   for (const patch of [{ nativeMessageId: 'other' }, { url: 'https://chatgpt.com/c/not-owned' }, { previousDocumentKey: 'stale' }, { lease: 'wrong' }]) await assert.rejects(f.broker.rebindObservation({ ...proof, ...patch }));
   assert.equal(f.broker.snapshot(s.id).documentKey, event.documentKey);
 });
-test('R11: a missing browser binding blocks exactly its own turn, without a fictitious live URL', async t => {
+test('R11: a lost observation affects only its own session, without a fictitious live URL or Stop', async t => {
   const f = await fixture(t), a = await f.ready(), b = await f.ready();
-  const x = await f.sending(a, 'a'), y = await f.sending(b, 'b');
-  await f.broker.observe({ ...x.event, kind: 'binding_lost', url: undefined });
-  assert.equal(f.broker.snapshot(a.id).error, 'BROWSER_BINDING_LOST'); assert.equal(f.broker.snapshot(b.id).status, 'running');
-  assert.equal(f.broker.snapshot(b.id).turn.id, y.event.turnId);
+  await f.sending(a, 'a');
+  const y = await f.sending(b, 'b');
+  await f.broker.observeGap({ ...pageView(f.broker.snapshot(a.id)), reason: 'PAGE_CLOSED' });
+  const lost = f.broker.snapshot(a.id);
+  assert.equal(lost.observation.gap.reason, 'PAGE_CLOSED');
+  assert.equal(lost.turn.outcome, null, 'a gap is not a failed native turn');
+  const other = f.broker.snapshot(b.id);
+  assert.equal(other.turn.id, y.event.turnId);
+  assert.equal(other.status, 'running');
+  assert.equal(Object.values(f.store.read().commands).some(c => c.kind === 'stop'), false);
 });
 test('R12: known not-clicked result after authorization is distinct from an unconfirmed Send', async t => {
   const f = await fixture(t), s = await f.ready(), { claim } = await f.sending(s, 'notsent', 'notsent', false);
@@ -103,14 +105,15 @@ test('R14: startup fences a previously claimed configuration even when its sessi
   await f.broker.claim(c.id, s.tabId, s.documentKey); await f.broker.recover();
   assert.equal(f.broker.snapshot(s.id).status, 'blocked'); assert.equal(f.broker.queued().length, 0);
 });
-test('R15: updated context is sent as explicit user-level text on the next existing conversation turn', async t => {
-  const f = await fixture(t), s = await f.ready(), { event } = await f.sending(s);
-  await f.broker.observe({ ...event, kind: 'snapshot', messageId: 'a', text: 'done' });
-  await f.broker.observe({ ...event, kind: 'completed', messageId: 'a', finalConfirmed: true });
+test('R15: updated context is sent as explicit user-level text on the next turn', async t => {
+  const f = await fixture(t), s = await f.ready(); await f.sending(s);
+  await f.view(f.broker.snapshot(s.id), { state: 'standby' });
   await f.broker.updateContext(s.id, { cwd: '/new-place', systemPrompt: 'New user-level instruction' });
   await f.broker.prompt(s.id, 'context-update', 'next');
   const command = f.broker.queued().find(c => c.kind === 'send');
-  assert.match(command.payload.text, /user-level instructions/); assert.match(command.payload.text, /\/new-place/); assert.match(command.payload.text, /New user-level instruction/);
+  assert.match(command.payload.text, /user-level instructions/);
+  assert.match(command.payload.text, /\/new-place/);
+  assert.match(command.payload.text, /New user-level instruction/);
 });
 test('R16: the host-shaped MCP exception is narrow and emits an explicit limitation notice', () => {
   assert.equal(hostMcpNotice({}), null);
@@ -135,9 +138,36 @@ test('R18: explicit abandonment never creates a Send, erases history or claims t
   assert.deepEqual(result, { abandoned: true }); assert.equal(f.broker.snapshot(s.id).status, 'abandoned'); assert.deepEqual(f.broker.snapshot(s.id).history, history);
   assert.equal(f.broker.queued().length, 0);
 });
-test('R19: permission and unknown-final notices stay distinct', async t => {
-  const f = await fixture(t), s = await f.ready(), { event } = await f.sending(s), observed = [];
-  f.broker.subscribe(s.id, x => observed.push(x));
-  await f.broker.observe({ ...event, kind: 'waiting', reason: 'final-unconfirmed' });
-  assert.equal(observed[0].reason, 'final-unconfirmed'); assert.equal(f.broker.snapshot(s.id).status, 'running');
+test('R19: an open approval and an externally closed card produce distinct notices', async t => {
+  const f = await fixture(t), events = [];
+  // A client without permission UI receives notices instead of a request.
+  const provider = await createProvider({ ...f, status: () => ({ connected: true }) },
+    value => ProviderEventSchema.parse(value))
+    .connect({ versions: [1], capabilities: CAPABILITIES.filter(c => c !== 'permission') });
+  t.after(() => provider.close()); provider.onEvent(e => events.push(e));
+  const s = await f.ready(); await f.sending(s);
+  await provider.send({ type: 'session.open', requestId: 'notice-open', sessionId: 'notice-host',
+    history: 'skip', config: { cwd: '/fixture', env: {}, settings: {}, mcpServers: {}, persist: true,
+      model: s.config.model, thinkingOption: s.config.thinkingOption,
+      providerOptions: { appIds: s.config.appIds } }, persistence: { version: 1, data: { id: s.id } } });
+  await until(() => events.some(e => e.type === 'session.ready'));
+  const card = { state: 'open', key: '6f1c2d3e-0000-4000-8000-000000000001', app: 'mymac',
+    tool: 'run_shell_command', input: JSON.stringify({ args: { command: 'node --version' } }) };
+  await f.view(s, { state: 'standby', approvals: [card] });
+  await until(() => events.some(e => e.notice?.title === '请在网页处理授权'));
+  await f.view(s, { state: 'standby', approvals: [], closedApprovals: [card.key] });
+  const closed = await until(() => events.find(e => e.notice?.title === '网页授权框已关闭'));
+  const open = events.find(e => e.notice?.title === '请在网页处理授权');
+  assert.notEqual(open.notice.id, closed.notice.id);
+  assert.doesNotMatch(closed.notice.title, /批准|已处理/);
+  assert.equal(f.broker.snapshot(s.id).approvals[card.key].answered, undefined,
+    'closing externally is not a recorded allow/deny');
 });
+
+/* Retired assertions (mechanism removed):
+ * R05/R06/R08 per-turn response-fragment admission and aggregate answer caps ->
+ *   there is no per-turn fragment counter any more. Capacity is the bounded
+ *   frame size and explicit PAGE_ENTRY_TOO_LARGE (MON-09/MON-10), no 16-message
+ *   or 300k per-turn cutoff (CM-R10), plus the whole-state byte reservation
+ *   still asserted by R07.
+ */

@@ -14,8 +14,8 @@ async function privateJson(file, data) {
   await fs.writeFile(temp, JSON.stringify(data, null, 2), { mode: 0o600, flag: 'wx' });
   await fs.rename(temp, file);
 }
-/** @param {{directory?: string, port?: number, maxConcurrent?: number, commandTimeout?: number, turnTimeout?: number, onExternalTurn?: (sessionId: string) => unknown}} options */
-export async function createRuntime({ directory, port = 17843, maxConcurrent = 2, commandTimeout = 90000, turnTimeout, onExternalTurn } = {}) {
+/** @param {{directory?: string, port?: number, maxConcurrent?: number, commandTimeout?: number, onExternalTurn?: (sessionId: string) => unknown}} options */
+export async function createRuntime({ directory, port = 17843, maxConcurrent = 2, commandTimeout = 90000, onExternalTurn } = {}) {
   invariant(typeof directory === 'string' && path.isAbsolute(directory), 'ABSOLUTE_STATE_DIRECTORY_REQUIRED');
   invariant(Number.isInteger(port) && port >= 0 && port <= 65535, 'INVALID_PORT');
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -29,7 +29,7 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
   const sockets = new Set(); const epoch = randomUUID();
   try {
     store = await new Store(directory).open();
-    broker = new Broker(store, { maxConcurrent, commandTimeout, turnTimeout }); await broker.recover();
+    broker = new Broker(store, { maxConcurrent, commandTimeout }); await broker.recover();
     await broker.inputFiles.pruneOlderThan();
     const credentialPath = path.join(directory, 'bridge-credential.json');
     let credential = null;
@@ -75,6 +75,7 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
         }
         invariant(credential && equal(req.headers.authorization, `Bearer ${credential.token}`) && req.headers['x-cip-extension'] === credential.extensionId, 'AUTH_REQUIRED');
         invariant(!origin || origin === `chrome-extension://${credential.extensionId}`, 'ORIGIN_REJECTED');
+        invariant(!broker.closed,'RUNTIME_CLOSED');
         lastSeen = Date.now();
         if (req.method === 'GET' && route === '/commands') {
           // Only the paired, updated extension can trigger automatic discovery. Health reads cannot.
@@ -83,14 +84,8 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
             catalogService(runtimeHandle).noteBrowser(`${credential.extensionId}:${browser}`);
           return json(res, 200, { commands: broker.queued().filter(c=>!c.payload?.files?.length||fileCapable), epoch }, origin);
         }
-        if (req.method === 'GET' && route === '/active') return json(res, 200, { sessions: Object.values(store.read().sessions)
-          .filter(s => (['running', 'stopping'].includes(s.status) || (s.status === 'sending' && s.turn?.receiptPending === true)) &&
-            s.turn?.lease && s.conversationId && !s.turn.outcome)
-          .map(s => ({ sessionId: s.id, tabId: s.tabId, documentKey: s.documentKey, conversationId: s.conversationId,
-            turnId: s.turn.id, lease: s.turn.lease, nativeMessageId: s.turn.nativeMessageId ?? null,
-            receiptPending: s.turn.receiptPending === true })) }, origin);
-        if (req.method === 'GET' && route === '/bindings')
-          return json(res, 200, { sessions: broker.idleBindings() }, origin);
+        if (req.method === 'GET' && route === '/observations')
+          return json(res,200,{sessions:broker.observationBindings()},origin);
         if (req.method === 'GET' && route === '/recovery-targets')
           return json(res, 200, { sessions: broker.recoveryTargets() }, origin);
         invariant(req.method === 'POST', 'ROUTE_NOT_FOUND');
@@ -143,20 +138,17 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
             break;
           }
           case '/rebind-observation': result = await broker.rebindObservation(value); break;
-          case '/external-gap': result = await broker.noteExternalGap(value); break;
-          case '/external-turn':
-            result = await broker.importExternalTurn(value);
-            if(result.imported && typeof onExternalTurn==='function')
-              void Promise.resolve().then(()=>onExternalTurn(result.sessionId)).catch(()=>{});
+          case '/page-view':
+            result=await broker.observeView(value);
+            if(!result.duplicate&&!result.stale&&typeof onExternalTurn==='function')
+              void Promise.resolve().then(()=>onExternalTurn(value.sessionId)).catch(()=>{});
             break;
-          case '/event': {
-            result = await broker.observe(value);
-            if (['completed', 'failed', 'binding_lost'].includes(value.kind)) console.warn('[CIP observation]', JSON.stringify({
-              kind: value.kind, error: value.error ? safeError(value.error) : null,
-              diagnostic: safeDiagnostic(value.diagnostic), active: result.active
-            }));
-            break;
-          }
+          case '/observation-gap': result=await broker.observeGap(value);break;
+          case '/receipt-observation': result=await broker.recoverReceipt(value);break;
+          case '/artifact/begin': result=await broker.artifactTransfer.begin(value);break;
+          case '/artifact/chunk': result=await broker.artifactTransfer.chunk(value);break;
+          case '/artifact/commit': result=await broker.artifactTransfer.commit(value);break;
+          case '/artifact/unsupported': result=await broker.artifactTransfer.unsupported(value);break;
           default: throw Object.assign(new Error('ROUTE_NOT_FOUND'), { code: 'ROUTE_NOT_FOUND' });
         }
         json(res, 200, result, origin);

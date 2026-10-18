@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createProvider, CAPABILITIES } from '../server/provider.mjs';
-import { fixture, selection, until } from './helpers.mjs';
+import { fixture, selection, until, sourceItem } from './helpers.mjs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
@@ -206,13 +206,15 @@ test('ARCHIVE-CANCEL: unarchive before a pending close cancels the close authori
 
 test('ARCHIVE-AFTER-TURN: archiving a running session waits, then closes the tab and moves the record', async t => {
   const f = await fixture(t), s = await f.ready();
-  const x = await f.sending(s);
+  await f.sending(s);
   const client = await connect(f); t.after(() => client.connection.close());
   await client.send('session.archive', s.id, 'archive-while-running');
   assert.ok(f.store.read().sessions[s.id]);
   assert.equal(f.broker.queued().some(c => c.kind === 'close-tab'), false);
-  await f.broker.observe({ ...x.event, kind: 'snapshot', messageId: 'answer', text: 'done' });
-  await f.broker.observe({ ...x.event, kind: 'completed', messageId: 'answer', finalConfirmed: true });
+  assert.ok(f.broker.observationBindings().some(binding=>binding.sessionId===s.id),'pending archive must keep observing');
+  await f.view(s,{state:'running',items:[sourceItem('answer','done')]});
+  assert.equal(f.broker.queued().some(c=>c.kind==='close-tab'),false,'body alone does not prove standby');
+  await f.view(s,{state:'standby'});
   const close = await until(() => f.broker.queued().find(c => c.kind === 'close-tab'));
   const claim = await f.broker.claim(close.id, s.tabId, s.documentKey);
   await f.broker.result(close.id, claim.lease, { closed: true });

@@ -1,5 +1,5 @@
 /* Paseo-specific adapter over transplanted CoS native controls, picker and Send engine.
- * Generic @ catalog, exact per-session configuration and bounded message projection remain CIP code.
+ * Generic @ catalog, exact configuration, user receipt fences and explicit actions remain CIP code.
  * See vendor/cos/README.md for precise origin and intentional differences. */
 (() => {
   'use strict';
@@ -15,115 +15,29 @@
     return selected;
   }
 
-  // Narrow IPC adapter around the copied CoS public-message/terminal readers.
-  // Page evidence is untrusted. Only exact native ids, public prose and a final boolean enter this cache.
-  let transcript=null, transcriptRequest=null;
-  // Only one Send may belong to this document at a time. Retain the exact
-  // pre-click user IDs and text after a soft receipt deadline, not a new Send.
-  let pendingReceiptProbe=null;
-  async function refreshTranscript() {
-    // Restored documents have not configured a model yet. They still need the
-    // native reader to prove the current user message before reattaching observation.
-    if(!nativeMode && !nativeShape())return;
-    nativeMode=true;
-    if(transcriptRequest)return transcriptRequest;
-    const path=location.pathname;
-    transcriptRequest=new Promise(resolve=>{
-      const nonce=crypto.randomUUID();let done=false;
-      const finish=value=>{if(done)return;done=true;clearTimeout(timer);window.removeEventListener('message',receive);
-        if(location.pathname===path)transcript=value;resolve();};
-      const receive=event=>{
-        const d=event.data;
-        if(event.source!==window||event.origin!==location.origin||d?.source!=='cip-cos-transcript-reply'||d.nonce!==nonce||d.v!==1)return;
-        const value=d.transcript;
-        if(value?.path!==path||!Array.isArray(value.messages)||value.messages.length>1000||typeof value.available!=='boolean')return finish(null);
-        if(value.error)return finish({path,error:'TRANSCRIPT_UNCONFIRMED',available:false,messages:[]});
-        let chars=0;const seen=new Set(),messages=[];
-        for(const row of value.messages){
-          if(!row||typeof row.id!=='string'||!row.id||row.id.length>200||seen.has(row.id)||!['user','assistant'].includes(row.role)||typeof row.text!=='string'||typeof row.final!=='boolean')return finish(null);
-          chars+=row.text.length;if(chars>512000||row.text.length>256000)return finish(null);
-          seen.add(row.id);messages.push({id:row.id,role:row.role,text:row.text,final:row.final});
-        }
-        // MAIN-world public activity is treated as untrusted input. The native
-        // message identity must already appear in this same transcript.
-        const source=value.activity;let activity=null;
-        if(source && typeof source==='object' && !Array.isArray(source) &&
-           messages.some(m=>m.role==='user'&&m.id===source.userMessageId) &&
-           ['working','thinking','tool','search','exec','image','approval','finalizing','completed'].includes(source.phase) &&
-           ['complete','in_progress',null].includes(source.nativeStatus) &&
-           Array.isArray(source.steps)&&source.steps.length<=12) {
-          const steps=[];let valid=true;
-          for(const item of source.steps) {
-            if(!item || !['tool','search','exec','image'].includes(item.kind) ||
-               typeof item.label!=='string'||item.label.length>160 ||
-               !/^[\p{L}\p{N}_.: ·-]{1,160}$/u.test(item.label) ||
-               typeof item.done!=='boolean') { valid=false; break; }
-            steps.push({kind:item.kind,label:item.label,done:item.done});
-          }
-          if(valid)activity={userMessageId:source.userMessageId,phase:source.phase,
-            nativeStatus:source.nativeStatus,steps};
-        }
-        // Native thinking recaps and tool-call lifecycle. The native reader
-        // already excludes hidden/private groups; validate every field AGAIN
-        // before crossing into the isolated extension world.
-        let timeline=null;
-        const sourceTimeline=value.timeline;
-        if(sourceTimeline && messages.some(m=>m.role==='user'&&m.id===sourceTimeline.userMessageId) &&
-           Array.isArray(sourceTimeline.reasoning)&&sourceTimeline.reasoning.length<=8 &&
-           Array.isArray(sourceTimeline.calls)&&sourceTimeline.calls.length<=32){
-          const seenCalls=new Set(),seenReason=new Set(),reasoning=[],calls=[];
-          let valid=true;
-          for(const r of sourceTimeline.reasoning){
-            if(!r||!nativeId(r.id)||seenReason.has(r.id)||typeof r.text!=='string'||
-               !r.text.trim()||r.text.length>4096){valid=false;break;}
-            seenReason.add(r.id);reasoning.push({id:r.id,text:r.text});
-          }
-          if(valid)for(const c of sourceTimeline.calls){
-            if(!c||!nativeId(c.callId)||seenCalls.has(c.callId)||
-               !['tool','search','exec','image'].includes(c.kind)||
-               !['running','completed','failed'].includes(c.status)||
-               typeof c.name!=='string'||c.name.length>160||
-               !/^[\p{L}\p{N}_.: ·-]{1,160}$/u.test(c.name)){valid=false;break;}
-            seenCalls.add(c.callId);
-            let details=null;
-             if(c.details && typeof c.details==='object' && !Array.isArray(c.details) &&
-                Object.keys(c.details).every(k=>['input','output'].includes(k)) &&
-                ['input','output'].every(k=>c.details[k]===undefined||
-                   typeof c.details[k]==='string'&&c.details[k].length<=2048)){
-               details={...('input' in c.details?{input:c.details.input}:{}),
-                 ...('output' in c.details?{output:c.details.output}:{})};
-             }
-             calls.push({callId:c.callId,name:c.name,kind:c.kind,status:c.status,
-               ...(details?{details}:{})});
-          }
-          if(valid)timeline={userMessageId:sourceTimeline.userMessageId,reasoning,calls};
-        }
-        // Bounded operational counters only; no content, prompts or IDs in logs.
-        const rawCoverage=value.coverage??{};
-        const coverage={};
-        for(const field of ['sourceSections','sourceMatches','sourceUsers'])
-          if(Number.isInteger(rawCoverage[field])&&rawCoverage[field]>=0&&rawCoverage[field]<=128)
-            coverage[field]=rawCoverage[field];
-        try { finish({path,available:value.available,messages,activity,timeline,coverage,...globalThis.CIP_MEDIA?.project(value)}); }
-        catch { finish({path,error:'TRANSCRIPT_UNCONFIRMED',available:false,messages:[]}); }
-      };
-      const timer=setTimeout(()=>finish(null),1500);window.addEventListener('message',receive);
-      window.postMessage({source:'cip-cos-transcript-ask',nonce},location.origin);
-    }).finally(()=>{transcriptRequest=null;});
-    return transcriptRequest;
+  // Receipt-only state. Never start the former assistant/activity transcript.
+  // Continuous collection belongs to CIP_PAGE_CONTENT / CIP_PAGE_CONTROLS.
+  let pendingReceiptProbe = null;
+  const pageControls = () => {
+    const controls = globalThis.CIP_PAGE_CONTROLS;
+    if (typeof controls?.read !== 'function') fail('PAGE_CONTROLS_UNAVAILABLE');
+    return controls;
+  };
+  function stopVisible() {
+    const view = pageControls().read();
+    if (typeof view?.controls?.stop?.visible !== 'boolean') fail('PAGE_CONTROLS_UNAVAILABLE');
+    return view.controls.stop.visible;
   }
+  // Compatibility name: user-only receipt snapshot, no IPC, cache or observer.
+  async function refreshTranscript() { return messages(); }
   const S = {
     composer: '#prompt-textarea',
-    send: 'button[data-testid="send-button"], form button[aria-label^="Send" i], form[data-chatgpt-composer] button[type="submit"]',
-    stop: 'button[data-testid="stop-button"], button[data-testid="composer-stop-button"], button[aria-label="Stop streaming"], button[aria-label="Stop generating"], button[aria-label="Stop answering"]',
     chip: '[data-prompt-link-href^="app://"], [app-mention-path]',
     model: 'button[data-testid="model-switcher-dropdown-button"], button[data-testid="composer-model-selector"], button[data-testid="composer-intelligence-picker-trigger"]',
     modelMenu: '[data-testid="composer-intelligence-picker-content"], [data-model-picker-view], [role="menu"], [role="listbox"]',
     thinking: 'button[data-testid="thinking-effort-dropdown-button"], button[data-testid="thinking-time-button"], button[data-testid="composer-thinking-effort"]',
     option: '[role="option"], [role="menuitem"], [role="menuitemradio"]',
-    approval: '[data-codex-approval-surface="true"]',
-    messages: '[data-message-author-role], [data-chatgpt-search-unit-key]',
-    copy: 'button[data-testid="copy-turn-action-button"]'
+    messages: '[data-message-author-role], [data-chatgpt-search-unit-key], [data-content-search-unit-key]'
   };
   const fail = code => { throw Object.assign(new Error(code), { code }); };
   const visible = e => !!e && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
@@ -158,7 +72,7 @@
   async function atStage(stage, work) {
     try { return await work(); } catch (error) { throw errorStage(error, stage); }
   }
-  // Same deterministic body serialization for editor validation, receipts and answers.
+  // Same deterministic body serialization for editor validation and user receipts.
   // textContent drops block boundaries; innerText on a detached clone also does so.
   function authored(node) {
     const skip = `${S.chip},button,[role="button"],[role="toolbar"],script,style,svg,[aria-hidden="true"]`;
@@ -203,7 +117,7 @@
         hasPaseoContextHeader: draft.startsWith('[Paseo context — user-level instructions]'),
         editableChars: 0, nonEditableChars: 0, hiddenChars: 0, placeholderChars: 0,
         textNodes: 0, appCount: Math.min(128, box.querySelectorAll(S.chip).length),
-        snapshotTruncated: false, pageGenerating: C.generating(),
+        snapshotTruncated: false, pageGenerating: stopVisible(),
         sameEditorSinceInjection: injectedComposer.editor === box,
         msSinceInjection: elapsed(injectedComposer.at)
       });
@@ -383,9 +297,9 @@
     let ready;
     try {
       ready = composerSample(await atStage('composer', () => waitForComposer(guard))); guard();
-      if (C.generating()) {
+      if (stopVisible()) {
         // Chrome has reopened the bound page while an earlier ChatGPT turn
-        // is still generating. Wait for confirmed native idle; do not click
+        // still has a visible Stop. Wait for its disappearance; do not click
         // Stop, clear its draft or dispatch a competing Send. Reserve time
         // for the one-shot Send receipt and respect the command deadline.
         const budget = Number.isFinite(deadline)
@@ -394,12 +308,12 @@
         if (budget < 600) fail('NATIVE_BUSY');
         let idleSince = 0;
         await atStage('native-idle', () => until(() => {
-          if (C.generating()) { idleSince = 0; return false; }
+          if (stopVisible()) { idleSince = 0; return false; }
           idleSince ||= Date.now();
           return Date.now() - idleSince >= 500;
         }, budget, 'NATIVE_BUSY', guard));
         guard();
-        if (C.generating()) fail('NATIVE_BUSY');
+        if (stopVisible()) fail('NATIVE_BUSY');
       }
       if (authored(composer())) throw draftError('configure-start', composer(), ready);
     } catch (e) { e.notApplied = true; throw e; }
@@ -422,7 +336,7 @@
     const ready = composerSample(await atStage('composer', () => waitForComposer(guard)));
     if (nativeShape()) {
       nativeMode = true;
-      if (authored(composer()) || chips().length || C.generating())
+      if (authored(composer()) || chips().length || stopVisible())
         throw draftError('catalog-start', composer(), ready, 'CATALOG_TAB_NOT_EMPTY');
       const stillCurrent = () => { try { guard(); return true; } catch { return false; } };
       if (!await atStage('chat-surface', () => C.prepareChatModelSurface(stillCurrent))) throw errorStage(Object.assign(new Error('CHAT_SURFACE_UNCONFIRMED'), {code:'CHAT_SURFACE_UNCONFIRMED'}), 'chat-surface');
@@ -438,7 +352,7 @@
       const apps = (await atStage('apps', () => appChoices(guard))).map(({ id, label }) => ({ id, label }));
       guard(); return { models, apps, defaultModel: current.model };
     }
-    if (authored(composer()) || chips().length || C.generating())
+    if (authored(composer()) || chips().length || stopVisible())
       throw draftError('catalog-start', composer(), ready, 'CATALOG_TAB_NOT_EMPTY');
     const current = selected('model'), currentThinking = selected('thinking'); const models = [];
     try {
@@ -454,82 +368,51 @@
       guard(); return { models, apps, defaultModel: current };
     } finally {
       // Only our still-empty catalog page may be restored. Never overwrite a user's draft.
-      try { guard(); if (C.composer() && !authored(composer()) && !chips().length && !C.generating()) { await select('model', current); guard(); await select('thinking', currentThinking); } } catch { /* Never restore another document. */ }
+      try { guard(); if (C.composer() && !authored(composer()) && !chips().length && !stopVisible()) { await select('model', current); guard(); await select('thinking', currentThinking); } } catch { /* Never restore another document. */ }
     }
   }
-  function roleOf(n) { return n.getAttribute('data-message-author-role') || /:(user|assistant)$/.exec(n.getAttribute('data-chatgpt-search-unit-key') || '')?.[1]; }
+  function roleOf(n) { return n.getAttribute('data-message-author-role') || /:(user|assistant)$/.exec(n.getAttribute('data-chatgpt-search-unit-key') || n.getAttribute('data-content-search-unit-key') || '')?.[1]; }
   // Search/layout keys identify a rendered slot, not a ChatGPT message.
   const nativeId = id => typeof id === 'string' && /^[a-zA-Z0-9:._-]{1,200}$/.test(id) &&
     !/^fallback-turn-/i.test(id) && !/:(?:user|assistant)$/.test(id);
+  // Rendered native USER identities only. Layout keys are never native IDs.
+  // Armed HTTP proof remains available before a public user bubble mounts.
   function messages() {
-    if(transcript?.path===location.pathname && transcript.error)return [];
-    if(transcript?.path===location.pathname && transcript.available)
-      return transcript.messages.filter(row=>nativeId(row.id)).map(row=>({...row,node:row}));
-    const result = [], seen = new Set();
-    for (const n of document.querySelectorAll(S.messages)) {
-      const role = roleOf(n); if (!['user', 'assistant'].includes(role) || C.onKeptPage(n) || !C.composerCssVisible(n) || n.closest('.clf-stream,.clf-stage,.clf-boot')) continue;
-      const id = n.getAttribute('data-message-id');
-      if (!nativeId(id) || seen.has(id)) continue; seen.add(id);
-      const section = n.closest('section[data-testid^="conversation-turn"], [data-turn-key]') || n;
-      // Only a dedicated TURN action, not a generic code-block Copy button.
-      const assistantNodes = [...section.querySelectorAll(S.messages)].filter(x => roleOf(x) === 'assistant');
-      const exactLast = !assistantNodes.length || assistantNodes.at(-1) === n;
-      const copy = [...section.querySelectorAll(S.copy)].some(x => visible(x) && !x.closest('pre,code,[data-code-block]'));
-      const interrupted = n.closest('[data-interrupted="true"],[data-is-streaming="true"]');
-      const final = !interrupted && (n.getAttribute('data-is-final') === 'true' || (copy && exactLast));
-      result.push({ id, role, text: authored(n), final, node: n });
+    const result = new Map(), conflicts = new Set(), conversationId = C.conversationId();
+    for (const node of document.querySelectorAll(S.messages)) {
+      if (roleOf(node) !== 'user' || !node.closest('main,[role="main"],[data-app-shell-main-surface]') ||
+          C.onKeptPage(node) || !C.composerCssVisible(node) ||
+          node.closest('.clf-stream,.clf-stage,.clf-boot,[data-cip-owned],aside,nav,form,[hidden],[aria-hidden="true"],[inert]')) continue;
+      let foreign = false;
+      for (let at = node; at; at = at.parentElement) {
+        const owner = at.getAttribute('data-conversation-id');
+        if (owner && owner !== conversationId) foreign = true;
+      }
+      if (foreign) continue;
+      const raw = node.getAttribute('data-chatgpt-search-message-ids');
+      let ids = raw?.trim().split(/\s+/) ?? [];
+      if (raw?.trim().startsWith('[')) {
+        try { ids = JSON.parse(raw); } catch { continue; }
+        if (!Array.isArray(ids)) continue;
+      }
+      const direct = node.getAttribute('data-message-id');
+      if (direct) ids.unshift(direct);
+      ids = [...new Set(ids)];
+      if (ids.length !== 1 || !nativeId(ids[0])) continue;
+      const id = ids[0], text = authored(node);
+      if (result.has(id) && result.get(id).text !== text) conflicts.add(id);
+      else if (!result.has(id)) result.set(id, { id, role: 'user', text, node });
     }
-    return result;
+    return [...result.values()].filter(row => !conflicts.has(row.id));
   }
   function receiptTextMatch(row, expected) {
     if (row?.role !== 'user' || !nativeId(row.id)) return 'mismatch';
-    // Decode only our current, exact-ID native source, never a visible DOM label.
-    const native = transcript?.path === location.pathname && transcript.available === true &&
-      transcript.messages.some(source => source.role === 'user' && source.id === row.id && source.text === row.text);
-    return receiptText.classify(row.text, expected, native === true);
-  }
-  function priorFinal(anchorId) {
-    // A new user message can arrive before the prior native turn's final
-    // snapshot reaches Paseo. Only a terminal assistant item between the two
-    // verified user IDs may settle that older turn.
-    if(transcript?.path===location.pathname && transcript.error)return null;
-    const rows=messages(),start=rows.findIndex(row=>row.role==='user'&&row.id===anchorId);
-    if(start<0)return null;
-    const next=rows.findIndex((row,i)=>i>start&&row.role==='user');
-    if(next<0)return null;
-    const assistant=rows.slice(start+1,next).filter(row=>row.role==='assistant').at(-1);
-    return assistant?.final===true?{messageId:assistant.id,text:assistant.text}:null;
-  }
-  function state(anchorId) {
-    if(transcript?.path===location.pathname && transcript.error)fail(transcript.error);
-    const all = messages(); const user = all.filter(x => x.role === 'user').at(-1);
-    if (!user) fail('TRANSCRIPT_PENDING');
-    if (user.id !== anchorId) fail('TURN_CHANGED');
-    const at = all.findIndex(x => x.id === anchorId); const after = all.slice(at + 1).filter(x => x.role === 'assistant');
-    const answer = after.at(-1) ?? null;
-    // A quoted error phrase is normal assistant prose, not a transport failure.
-    // Nor may a stale banner in another turn fail this exact native user turn.
-    const ownerIds=new Set([anchorId,answer?.id].filter(Boolean));
-    const alerts=[...document.querySelectorAll('[data-testid="conversation-error"],[data-testid="error-message"]')]
-      .filter(n=>visible(n)&&!C.onKeptPage(n) && (() => {
-        const owner=n.closest('[data-message-id]');
-        if(owner&&ownerIds.has(owner.getAttribute('data-message-id')))return true;
-        const section=n.closest('[data-turn-key],section[data-testid^="conversation-turn"]');
-        return !!section&&[...section.querySelectorAll('[data-message-id]')]
-          .some(row=>ownerIds.has(row.getAttribute('data-message-id')));
-      })());
-    const images = (transcript?.path===location.pathname ? transcript.images : [])?.filter(x=>x.userMessageId===anchorId) ?? [];
-    const imageFinalId = images.some(x=>x.messageId===transcript?.imageFinalId) ? transcript.imageFinalId : null;
-    const activity=transcript?.activity?.userMessageId===anchorId ? transcript.activity : null;
-    const timeline=transcript?.timeline?.userMessageId===anchorId ? transcript.timeline : null;
-    // A native in-progress turn remains active when the Stop control flickers
-    // or vanishes during tools. Only this same user's mounted native turn counts.
-    return { busy: C.generating() || activity?.nativeStatus==='in_progress',
-      waiting: C.approvalWaiting(), answer, images, imageFinalId, activity, timeline,
-      error: transcript?.mediaError || (alerts.length ? 'NATIVE_ERROR' : null) };
+    // Rendered DOM is not raw native Markdown; don't unescape a wrong body.
+    return receiptText.classify(row.text, expected, false);
   }
   const N = globalThis.CIP_createCoSNative({ composer, messages, conversationId: C.conversationId,
-    generating: C.generating, stopButton: C.stopButton, sendButton: C.sendButton, sendButtonEnabled: C.sendButtonEnabled });
+    generating: stopVisible, stopButton: () => pageControls().button?.('stop') ?? null,
+    sendButton: C.sendButton, sendButtonEnabled: C.sendButtonEnabled });
   async function send(command, authorize, guard = () => {}, readFile = null) {
     const files=command.payload.files??[];
     let upload=null;
@@ -615,7 +498,8 @@
         acceptanceTimeoutMs: 25000, receiptTimeoutMs: receiptWindow, clearAcceptedDraft: false,
         stillCurrent: alive,
         observeEvidence: check => {
-          if(!nativeMode)return ()=>{};
+          // This polling exists only inside this one-shot Send receipt window.
+          // It reads users, not a second assistant/tool/status transcript.
           let stopped=false,pending=false;
           const tick=async()=>{if(stopped||pending)return;pending=true;try{await refreshTranscript();if(!stopped)check();}finally{pending=false}};
           const timer=setInterval(tick,300);void tick();return()=>{stopped=true;clearInterval(timer)};
@@ -666,7 +550,7 @@
             if(!upload?.proof())fail('ATTACHMENT_REMOVED');
           }else if (box.closest('form')?.querySelector('[data-composer-attachments]:not(:empty),[data-inline-file-uploading]'))
             fail('ATTACHMENT_UNSUPPORTED');
-          if (messages().some(x=>!before.has(x.id)) || C.generating()) fail('TURN_CHANGED');
+          if (messages().some(x=>!before.has(x.id)) || stopVisible()) fail('TURN_CHANGED');
           return true;
         },
         onDispatch: () => { guard(true); clicked = true; }, attachmentOnly: files.length>0 && !command.payload.text.trim(), explain: reason => { refusal = reason; }
@@ -688,11 +572,11 @@
         // Public operational evidence only. Never log the authored message or app IDs.
         let users=[]; try { users=messages().filter(row=>row.role==='user'); } catch {}
         e.diagnostic={stage:'receipt',nativeClicked:true,guardCode,
-          pathChanged:location.href!==startUrl,routeKnown:!!C.conversationId(),transcriptAvailable:transcript?.path===location.pathname&&transcript.available===true,
+          pathChanged:location.href!==startUrl,routeKnown:!!C.conversationId(),transcriptAvailable:users.length>0,
           rowCount:Math.min(128,users.length),matchingUserCount:Math.min(128,users.filter(row=>receiptTextMatch(row,command.payload.text)!=='mismatch').length),
           exactUserCount:Math.min(128,users.filter(row=>receiptTextMatch(row,command.payload.text)==='raw').length),
           escapedUserCount:Math.min(128,users.filter(row=>receiptTextMatch(row,command.payload.text)==='markdown').length),
-          ...((transcript?.path===location.pathname&&transcript.coverage)||{}),
+          // User-only receipt diagnostics; no assistant collection coverage.
           networkStage:networkProof?.status?.().stage??'unavailable',
           networkRouteMoved:networkProof?.status?.().routeMoved??false,
           refusal:refusal==='chat-changed'?'chat-changed':refusal==='not-accepted'?'not-accepted':'other'};
@@ -722,11 +606,11 @@
           // Our own uploaded files go first; the text fence below refuses to
           // clear while ANY attachment remains in the composer.
           if (upload && !userTouched && location.pathname === startPath &&
-              !C.generating() && !messages().some(row => !before.has(row.id)))
+              !stopVisible() && !messages().some(row => !before.has(row.id)))
             await upload.remove();
           if (owned && !userTouched && editorTouchEpoch === owned.editEpoch &&
               location.pathname === startPath && owned.box.isConnected && composer() === owned.box &&
-              authored(owned.box) === norm(command.payload.text) && !C.generating() &&
+              authored(owned.box) === norm(command.payload.text) && !stopVisible() &&
               !owned.box.closest('form')?.querySelector('[data-composer-attachments]:not(:empty),[data-inline-file-uploading]') &&
               sameConfig(effectiveConfig(), owned.config) &&
               !messages().some(row => !before.has(row.id))) {
@@ -752,7 +636,10 @@
     const p=pendingReceiptProbe;
     if(!p||p.turnId!==turnId)return {available:false,active:false};
     if(!p.conversationId||C.conversationId()!==p.conversationId)return {conflict:true};
+    const startUrl = location.href;
     await refreshTranscript();
+    if (pendingReceiptProbe !== p || location.href !== startUrl || C.conversationId() !== p.conversationId)
+      return {conflict:true};
     const users=messages().filter(row=>row.role==='user'&&!p.before.has(row.id));
     if(users.length>1)return {conflict:true};
     if(users.length===1){
@@ -763,15 +650,72 @@
       if(p.mismatchKey!==mismatchKey){p.mismatchKey=mismatchKey;p.mismatchSince=Date.now();}
       if(Date.now()-p.mismatchSince>=10000)return {conflict:true};
     }
-    return {available:true,active:Boolean(C.generating()||C.approvalWaiting())};
+    return {available:true,active:stopVisible()};
   }
-  async function stop(nativeMessageId) {
-    const current = state(nativeMessageId);
-    if (!current.busy) fail('STOP_UNCONFIRMED');
-    if (!C.stopGeneration(() => { try { return state(nativeMessageId).busy; } catch { return false; } })) fail('STOP_UNCONFIRMED');
-    await until(() => !C.generating());
-    await delay(1000); if (C.generating()) fail('STOP_UNCONFIRMED');
-    state(nativeMessageId); return { stopped: true, nativeMessageId };
+  function actionGuard(options, requireLease = false) {
+    if (!options || typeof options.guard !== 'function') fail('CONTROL_GUARD_REQUIRED');
+    if (typeof options.conversationId !== 'string' || !options.conversationId) fail('WRONG_CONVERSATION');
+    const url = location.href, root = document.documentElement;
+    const documentKey = globalThis.__CIP_CONTENT__?.documentKey;
+    if (requireLease && (typeof options.observationLease !== 'string' || !options.observationLease))
+      fail('OBSERVATION_LEASE_MISMATCH');
+    if (requireLease && (typeof options.documentKey !== 'string' || !options.documentKey ||
+        options.documentKey !== documentKey)) fail('DOCUMENT_CHANGED');
+    return () => {
+      if (options.guard() === false) fail('GUARD_FAILED');
+      if (document.documentElement !== root || globalThis.__CIP_CONTENT__?.documentKey !== documentKey)
+        fail('DOCUMENT_CHANGED');
+      if (location.href !== url) fail('NAVIGATION_CHANGED');
+      if (C.conversationId() !== options.conversationId) fail('WRONG_CONVERSATION');
+    };
   }
-  globalThis.CIP_DOM = { upstream: Object.freeze({ engine: 'CoS native send/picker/controls', commit: 'ccd23b66cecf2f684fa3e12ca190297be02842cf' }), conversationId: C.conversationId, refreshTranscript, probePendingReceipt, effectiveConfig, catalog, configure, send, stop, state, priorFinal, messages, composer, authored, norm };
+  function actionable(button) {
+    return button?.tagName === 'BUTTON' && button.isConnected && !button.disabled &&
+      !button.matches(':disabled') && button.getAttribute('aria-disabled') !== 'true' &&
+      pageControls().visible(button);
+  }
+  async function stop(options) {
+    const guard = actionGuard(options, true); guard();
+    const controls = pageControls(), view = controls.read();
+    const button = controls.button?.('stop');
+    if (!view.controls?.stop?.visible || !view.controls.stop.enabled || !actionable(button))
+      fail('STOP_UNCONFIRMED');
+    guard();
+    if (controls.button?.('stop') !== button || !stopVisible() || !actionable(button))
+      fail('STOP_UNCONFIRMED');
+    button.click(); // Exactly one native Stop. Never Deny.
+    await until(() => {
+      const current = controls.read();
+      return current.state === 'standby' && current.controls.stop.visible === false &&
+        (current.controls.send.visible || current.controls.voice.visible);
+    }, 5000, 'STOP_UNCONFIRMED', guard);
+    guard();
+    return { stopped: true }; // Only the unified monitor reports page state.
+  }
+  async function answerApproval(options) {
+    const guard = actionGuard(options); guard();
+    const { key, choice } = options;
+    if (typeof key !== 'string' || !key || !['allow-once', 'deny'].includes(choice))
+      fail('APPROVAL_UNSUPPORTED');
+    const content = globalThis.CIP_PAGE_CONTENT;
+    if (typeof content?.resolveApproval !== 'function') fail('APPROVAL_UNAVAILABLE');
+    const button = content.resolveApproval(key, choice);
+    const card = button?.closest('[data-codex-approval-surface="true"]');
+    if (!card || !actionable(button)) fail('APPROVAL_GONE');
+    guard();
+    if (content.resolveApproval(key, choice) !== button || !actionable(button)) fail('APPROVAL_GONE');
+    const displayedRequest = card.innerText;
+    button.click(); // Never called by read(), receipt reconciliation or Stop.
+    await until(() => {
+      if (!card.isConnected) return true;
+      if (card.innerText !== displayedRequest) fail('APPROVAL_UNCONFIRMED');
+      if (button.disabled || button.matches(':disabled') ||
+          button.getAttribute('aria-disabled') === 'true') return true;
+      if (content.resolveApproval(key, choice) !== button) fail('APPROVAL_UNCONFIRMED');
+      return false;
+    }, 5000, 'APPROVAL_UNCONFIRMED', guard);
+    guard();
+    return { answered: true, key, choice };
+  }
+  globalThis.CIP_DOM = { upstream: Object.freeze({ engine: 'CoS native send/picker/controls', commit: 'ccd23b66cecf2f684fa3e12ca190297be02842cf' }), conversationId: C.conversationId, refreshTranscript, probePendingReceipt, effectiveConfig, catalog, configure, send, stop, answerApproval, messages, composer, authored, norm };
 })();

@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { webcrypto } from 'node:crypto';
+import { PROTOCOL } from '../server/protocol.mjs';
 
 const background=await readFile(new URL('../extension/background.js',import.meta.url),'utf8');
 const engine=/'X-CIP-Engine': '([^']+)'/.exec(background)[1];
-async function fixture({oldUrl=null,latestNative='newer-from-web',redirect=false}={}) {
+async function fixture({oldUrl=null,latestNative='newer-from-web',redirect=false,getError=false,queryError=false,pendingUrl}={}) {
   const calls=[],tabs=new Map(),local={config:{endpoint:'http://127.0.0.1:17843',token:'test-only'},tabs:{}},session={};
-  let created=0;
-  if(oldUrl)tabs.set(71,{id:71,url:oldUrl});
+  let created=0;const pageMessages=[];
+  if(oldUrl!==null)tabs.set(71,{id:71,url:oldUrl,...(pendingUrl?{pendingUrl}:{})});
   const command={id:'ensure-1',kind:'ensure',sessionId:'s1',payload:{
     tabId:71,conversationId:'bound-conversation',previousNativeMessageId:null,
     config:{model:'model-test',thinkingOption:null,appIds:[]}}};
@@ -33,23 +34,24 @@ async function fixture({oldUrl=null,latestNative='newer-from-web',redirect=false
       },
       alarms:{create:()=>{},onAlarm:{addListener:()=>{}}},
       tabs:{
-        get:async id=>{if(!tabs.has(id))throw new Error('missing tab');return tabs.get(id);},
+        get:async id=>{if(id===71&&getError)throw new Error('tab lookup unavailable');if(!tabs.has(id))throw new Error('missing tab');return tabs.get(id);},
         create:async({url,active})=>{created++;const t={id:71+created,url:redirect?'https://chatgpt.com/c/foreign-chat':url,active};tabs.set(t.id,t);return t;},
         sendMessage:async(id,msg)=>{
-          if(msg.type==='identity')return {ok:true,value:{engine,documentKey:'doc-'+id,
+          pageMessages.push({id,type:msg.type});
+          if(msg.type==='identity')return {ok:true,value:{engine,protocol:PROTOCOL,documentKey:'doc-'+id,
             url:tabs.get(id).url,nativeMessageId:latestNative}};
           if(msg.type==='command')return {ok:true,value:{
             config:command.payload.config,url:tabs.get(id).url,tabId:id,nativeMessageId:latestNative}};
           return {ok:true};
         },
-        query:async()=>[],onRemoved:{addListener:()=>{}},remove:async()=>{}
+        query:async()=>{if(queryError)throw new Error('tab enumeration unavailable');return [...tabs.values()];},onRemoved:{addListener:()=>{}},remove:async()=>{}
       }
     }
   });
   vm.runInContext(background.replace(/\nvoid pump\(\);\s*$/,'')+
     '\nglobalThis.__test={load,execute,ledger,tabs,wakePaseoIfOffline};',context);
   await context.__test.load();
-  return {command,run:()=>context.__test.execute(command),wake:error=>context.__test.wakePaseoIfOffline(error),calls,get created(){return created;},tabs};
+  return {command,run:()=>context.__test.execute(command),wake:error=>context.__test.wakePaseoIfOffline(error),calls,get created(){return created;},tabs,pageMessages};
 }
 
 test('REOPEN-V1 closed tab + bound Conversation reopens without any old native message ID',async()=>{
@@ -64,12 +66,24 @@ test('REOPEN-V1 closed tab + bound Conversation reopens without any old native m
   assert.equal(f.created,1);
   assert.equal(f.calls.filter(x=>x.route==='/claim').length,1);
 });
-test('REOPEN-V2 reused old tab on a foreign URL is never navigated or stolen',async()=>{
+test('REOPEN-V2 navigation away is refused, not silently replaced with a sending tab',async()=>{
   const f=await fixture({oldUrl:'https://chatgpt.com/c/someone-else'});
-  await f.run();
+  await f.run();await f.run();
   assert.equal(f.tabs.get(71).url,'https://chatgpt.com/c/someone-else');
-  assert.equal(f.tabs.get(72).url,'https://chatgpt.com/c/bound-conversation');
-  assert.equal(f.calls.find(x=>x.route==='/claim').body.reopened,true);
+  assert.equal(f.created,0);assert.equal(f.pageMessages.length,0);
+  assert.equal(f.calls.filter(x=>['/claim','/authorize','/result'].includes(x.route)).length,0);
+  assert.deepEqual(f.calls.filter(x=>x.route==='/fail-unclaimed').map(x=>x.body.error),['WRONG_CONVERSATION']);
+});
+for(const [name,options,code] of [
+ ['lookup failure with the old tab still present',{oldUrl:'https://chatgpt.com/c/bound-conversation',getError:true},'CONTENT_UNAVAILABLE'],
+ ['neither lookup nor enumeration is available',{getError:true,queryError:true},'CONTENT_UNAVAILABLE'],
+ ['an existing tab has no readable URL',{oldUrl:''},'CONTENT_UNAVAILABLE'],
+ ['a pending navigation leads away from the bound chat',{oldUrl:'https://chatgpt.com/c/bound-conversation',pendingUrl:'https://chatgpt.com/c/foreign'},'WRONG_CONVERSATION']
+])test('REOPEN safety: '+name,async()=>{
+ const f=await fixture(options);await f.run();
+ assert.equal(f.created,0);assert.equal(f.pageMessages.length,0);
+ assert.equal(f.calls.filter(x=>['/claim','/authorize','/result'].includes(x.route)).length,0);
+ assert.equal(f.calls.find(x=>x.route==='/fail-unclaimed')?.body.error,code);
 });
 test('REOPEN-V3 same bound tab with newer native user ID does not force a new chat',async()=>{
   const f=await fixture({oldUrl:'https://chatgpt.com/c/bound-conversation',latestNative:'newer-from-web'});

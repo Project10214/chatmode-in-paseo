@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createProvider, CAPABILITIES } from '../server/provider.mjs';
-import { fixture, selection, until } from './helpers.mjs';
+import { fixture, selection, until, sourceItem } from './helpers.mjs';
 const config = { cwd: '/example/project', env: {}, settings: {}, mcpServers: {}, persist: true, model: 'm1', thinkingOption: 'standard', providerOptions: { appIds: ['asdk_app_a'] } };
 async function context(t) {
   const f = await fixture(t); const runtime = { ...f, status: () => ({ connected: true }) };
@@ -71,14 +71,25 @@ test('Paseo MCP configs are refused rather than silently exposed or ignored', as
   const error = await until(() => f.events.find(e => e.type === 'request.failed')); assert.equal(error.error.code, 'MCP_CONFIG_UNSUPPORTED'); assert.equal(f.broker.queued().length, 0);
 });
 test('duplicate prompts emit one disposition and one started turn', async t => {
-  const f = await context(t); await f.open();
+  const f = await context(t); const sid=await f.open();
   const input = { type: 'session.prompt', sessionId: 'host-one', prompt: { clientMessageId: 'same', delivery: 'auto', input: { type: 'message', content: [{ type: 'text', text: 'hello' }] } } };
   await f.connection.send(input); await f.connection.send(input);
   await f.answerCommand('ensure'); // Existing browser is now verified before a new turn.
+  await until(()=>f.broker.queued().some(c=>c.kind==='send'));
+  const {command,claim,event}=await f.dispatchSend(sid);
+  await f.broker.result(command.id,claim.lease,{receipt:true,config:command.payload.config,
+    url:event.url,nativeMessageId:'native-same'});
   await until(() => f.events.find(e => e.type === 'session.turn')); await new Promise(r => setTimeout(r, 30));
   assert.equal(f.events.filter(e => e.type === 'session.prompt_result').length, 1); assert.equal(f.events.filter(e => e.type === 'session.turn' && e.state === 'started').length, 1);
   await f.connection.send({ type: 'session.interrupt', sessionId: 'host-one', requestId: 'stop' });
-  await until(() => f.events.find(e => e.type === 'session.turn' && e.state === 'canceled'));
+  const stop=await until(()=>f.broker.queued().find(c=>c.kind==='stop'));
+  const stopped=await f.broker.claim(stop.id,claim.tabId,claim.documentKey);
+  await f.broker.result(stop.id,stopped.lease,{stopped:true});
+  await f.view(sid,{state:'standby'});
+  await until(()=>f.events.some(e=>e.type==='request.completed'&&e.requestId==='stop'));
+  assert.equal(f.events.filter(e=>e.type==='session.turn'&&e.state==='completed').length,1,
+    'confirmed standby closes the interval; a Stop request alone never does');
+  assert.equal(Object.values(f.store.read().commands).filter(c=>c.kind==='send').length,1);
 });
 test('Chrome recovery queues only a NEW prompt until previous native turn completes',async t=>{
   const f=await context(t), sid=await f.open();
@@ -92,8 +103,7 @@ test('Chrome recovery queues only a NEW prompt until previous native turn comple
   assert.equal(f.broker.queued().filter(c=>c.kind==='ensure'||c.kind==='send').length,0,
     'new prompt waits without reserving or sending while old turn is running');
   assert.equal(f.broker.snapshot(sid).turn.clientMessageId,'old-client-message');
-  await f.broker.observe({...prior.event,kind:'snapshot',messageId:'old-answer',text:'old result'});
-  await f.broker.observe({...prior.event,kind:'completed',finalConfirmed:true,messageId:'old-answer'});
+  await f.view(sid,{state:'standby',items:[sourceItem('old-answer','old result',{nativeMessageId:'native-old-answer'})]});
   const ensure=await until(()=>f.broker.queued().find(c=>c.kind==='ensure'));
   const before=f.broker.snapshot(sid),url='https://chatgpt.com/c/'+before.conversationId;
   const claimed=await f.broker.claim(ensure.id,before.tabId,before.documentKey,{url});
@@ -107,6 +117,7 @@ test('Chrome recovery queues only a NEW prompt until previous native turn comple
 test('stopping a waiting new prompt never sends it or replays the previous native turn',async t=>{
   const f=await context(t),sid=await f.open();
   const prior=await f.sending(f.broker.snapshot(sid),'old-before-stop','ORIGINAL_MESSAGE',true);
+  await f.view(sid,{state:'running'});
   await f.connection.send({type:'session.prompt',sessionId:'host-one',prompt:{
     clientMessageId:'waiting-then-stop',delivery:'auto',
     input:{type:'message',content:[{type:'text',text:'NEVER_SEND_AFTER_STOP'}]}
@@ -212,12 +223,12 @@ test('closing after configuration was claimed fences uncertain browser effects',
   assert.equal(f.broker.snapshot(sid).error, 'CONTROL_UNCONFIRMED');
 });
 
-test('persisted failed-turn ChatGPT link survives Paseo restore and a new prompt uses the same URL',async t=>{
+test('a temporarily unreadable binding preserves its link on restore; only standby releases a new prompt',async t=>{
   const f=await fixture(t);
   const s=await f.ready();
   const {event}=await f.sending(s,'old-message','OLD_DO_NOT_RESEND');
-  await f.broker.observe({...event,kind:'binding_lost',diagnostic:{stage:'binding',reason:'message_unavailable'}});
-  assert.equal(f.broker.snapshot(s.id).status,'idle');
+  await f.broker.observeGap({...event,observationLease:f.broker.snapshot(s.id).observation.lease,reason:'message_unavailable'});
+  assert.equal(f.broker.snapshot(s.id).turn.outcome,null,'a read gap is not completion or failure');
   const provider=createProvider({...f,status:()=>({connected:true})});
   const c=await provider.connect({versions:[1],capabilities:CAPABILITIES});
   t.after(()=>c.close());
@@ -232,9 +243,12 @@ test('persisted failed-turn ChatGPT link survives Paseo restore and a new prompt
   assert.equal(f.broker.queued().length,0,'reopen alone cannot enqueue Send');
   await c.send({type:'session.prompt',sessionId:'restored',prompt:{clientMessageId:'brand-new',
     delivery:'auto',input:{type:'message',content:[{type:'text',text:'a genuinely new request'}]}}});
+  await until(()=>events.some(e=>e.type==='session.notice'&&e.notice.id==='native-prior-turn'&&!e.notice.dismissed));
+  assert.equal(f.broker.queued().length,0);
+  await f.view(s,{state:'standby'});
   const pending=await until(()=>f.broker.queued().find(c=>c.kind==='ensure'));
   assert.equal(pending.payload.conversationId,'chat-'+s.tabId);
-  assert.equal(pending.payload.previousNativeMessageId,null);
+  assert.equal(pending.payload.previousNativeMessageId,event.nativeMessageId);
   const claim=await f.broker.claim(pending.id,s.tabId,s.documentKey,
     {url:'https://chatgpt.com/c/chat-'+s.tabId});
   await f.broker.result(pending.id,claim.lease,{config:s.config,tabId:s.tabId,
@@ -321,4 +335,45 @@ test('Paseo warns if exact network POST omitted selected @ app without resending
   assert.equal(warning.notice.severity,'warning');
   assert.match(warning.notice.title,/@ 应用/);
   assert.equal(f.broker.queued().filter(c=>c.kind==='send').length,0);
+});
+test('content arriving while a prompt is prepared is delivered once after that prompt fails, never inside it', async t => {
+  const f = await context(t), sid = await f.open();
+  await f.sending(f.broker.snapshot(sid),'prior','old request');await f.view(sid,{state:'standby'});
+  let reached, release; const atWake = new Promise(r => { reached = r; }), gate = new Promise(r => { release = r; });
+  f.runtime.chromeWake = async () => { reached(); await gate; throw new Error('synthetic pre-Send failure'); };
+  await f.connection.send({ type: 'session.prompt', sessionId: 'host-one', prompt: {
+    clientMessageId: 'fails-before-send', delivery: 'auto', input: { type: 'message', content: [{ type: 'text', text: 'next' }] } } });
+  await atWake;
+  // A late prior-turn body (Paseo would stage it into the pending run, then drop it).
+  await f.view(sid,{state:'standby',items:[sourceItem('late-prior','LATE_PRIOR_BODY',{nativeMessageId:'native-late-prior'})]});
+  const late = () => f.events.filter(e => e.type === 'timeline.item' && e.item.text === 'LATE_PRIOR_BODY');
+  assert.equal(late().length, 0, 'held while the prompt is pending on the host');
+  let atResult = null;
+  f.connection.onEvent(e => { if (e.type === 'session.prompt_result') atResult = late().length; });
+  release();
+  await until(() => late().length);
+  assert.equal(atResult, 0, 'not delivered in the same tick as the failed result');
+  const result = f.events.findIndex(e => e.type === 'session.prompt_result');
+  assert.equal(f.events[result].result.type, 'failed');
+  assert(f.events.indexOf(late()[0]) > result);
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal(late().length, 1, 'exactly once');
+  assert.equal(f.broker.queued().filter(c => c.kind === 'send').length, 0, 'no Send');
+});
+test('a prompt sent while the composer model is still being applied waits for it instead of failing CONFIGURATION_BUSY', async t => {
+  const f = await context(t), sid = await f.open();
+  f.runtime.chromeWake = async () => {};
+  // The real configure queues its browser command and holds the session lock.
+  await f.connection.send({ type: 'session.configure', requestId: 'cfg', sessionId: 'host-one', changes: { model: 'm1', thinkingOption: 'extended' } });
+  await until(() => f.broker.queued().find(c => c.kind === 'configure'));
+  await f.connection.send({ type: 'session.prompt', sessionId: 'host-one', prompt: {
+    clientMessageId: 'after-config', delivery: 'auto', input: { type: 'message', content: [{ type: 'text', text: 'next' }] } } });
+  await new Promise(r => setTimeout(r, 100));
+  assert.equal(f.events.some(e => e.type === 'session.prompt_result'), false, 'the prompt waits while configuration runs');
+  await f.answerCommand('configure');
+  await until(() => f.events.some(e => e.type === 'request.completed' && e.requestId === 'cfg'));
+  // The prompt continues to its own page check instead of failing busy.
+  await until(() => f.broker.queued().find(c => c.kind === 'ensure'));
+  assert.equal(f.events.some(e => e.type === 'session.prompt_result' && e.result.type === 'failed'), false);
+  await f.broker.interrupt(sid).catch(() => {});
 });

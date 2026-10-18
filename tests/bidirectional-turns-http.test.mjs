@@ -1,62 +1,35 @@
+/** HTTP browser-origin wake: one wake per newly accepted page frame, no Send.
+ * Temporary runtime only; a user message typed in the webpage is an observed
+ * source/page run, never an imported Paseo Send turn.
+ */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,readFile} from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import {createRuntime} from '../server/runtime.mjs';
-import {validateCatalog} from '../server/protocol.mjs';
-import {rawCatalog,selection,until} from './helpers.mjs';
+import { pageView, sourceItem } from './helpers.mjs';
+import { httpHarness } from './fixtures/runtime-http.mjs';
 
-test('TURN-HTTP: authenticated idle observation imports once, wakes once and never enqueues Send',async t=>{
-  const directory=await mkdtemp(path.join(os.tmpdir(),'turn-http-')),wake=[];
-  const runtime=await createRuntime({directory,port:0,onExternalTurn:id=>{wake.push(id)}});
-  t.after(async()=>{await runtime.close();await rm(directory,{recursive:true,force:true})});
-  const pairing=JSON.parse(await readFile(path.join(directory,'pairing.json'),'utf8'));
-  const extensionId='a'.repeat(32);
-  const request=(route,value,headers={})=>fetch(runtime.address+route,{
-    method:value===undefined?'GET':'POST',
-    headers:{...(value===undefined?{}:{'Content-Type':'application/json'}),...headers},
-    body:value===undefined?undefined:JSON.stringify(value)
-  });
-  const paired=await request('/pair',{code:pairing.code,extensionId});
-  assert.equal(paired.status,200);
-  const credential=await paired.json(),auth={Authorization:'Bearer '+credential.token,'X-CIP-Extension':extensionId};
-  await runtime.store.transaction(d=>{d.catalog=validateCatalog(rawCatalog)});
-  const broker=runtime.broker,s=await broker.create(selection);
-  const opening=broker.configure(s.id,selection);opening.catch(()=>{});
-  const oc=await until(()=>broker.queued().find(c=>c.kind==='open'));
-  const oclaim=await broker.claim(oc.id,77,'document-77');
-  await broker.result(oc.id,oclaim.lease,{config:selection,tabId:77,url:'https://chatgpt.com/'});
-  await opening;
-  const sent=await broker.prompt(s.id,'first','hello');
-  const sc=broker.queued().find(c=>c.kind==='send');
-  const claim=await broker.claim(sc.id,77,'document-77');
-  await broker.authorize(sc.id,claim.lease);
-  await broker.result(sc.id,claim.lease,{receipt:true,nativeMessageId:'native-first',
-    config:selection,url:'https://chatgpt.com/c/chat-77'});
-  const old={sessionId:s.id,turnId:sent.turnId,lease:claim.lease,
-    tabId:77,documentKey:'document-77',nativeMessageId:'native-first',
-    url:'https://chatgpt.com/c/chat-77'};
-  await broker.observe({...old,kind:'snapshot',messageId:'prior-answer',text:'done'});
-  await broker.observe({...old,kind:'completed',messageId:'prior-answer',finalConfirmed:true});
-  assert.equal((await request('/bindings')).status,403);
-  const list=await request('/bindings',undefined,auth);assert.equal(list.status,200);
-  const bindings=(await list.json()).sessions;
-  assert.equal(bindings.length,1);
-  assert.equal(bindings[0].previousNativeMessageId,'native-first');
-  const before=Object.values(runtime.store.read().commands).filter(c=>c.kind==='send').length;
-  const proof={...bindings[0],nativeMessageId:'native-new',text:'Manual user prompt',
-    url:'https://chatgpt.com/c/chat-77'};
-  assert.equal((await request('/external-turn',proof)).status,403);
-  const accepted=await request('/external-turn',proof,auth);assert.equal(accepted.status,200);
-  const imported=await accepted.json();
-  assert.equal(imported.imported,true);
-  await until(()=>wake.includes(s.id));
-  assert.equal((await request('/bindings',undefined,auth)).status,200);
-  const again=await request('/external-turn',proof,auth);assert.equal((await again.json()).duplicate,true);
-  assert.equal(wake.length,1);
-  assert.equal(Object.values(runtime.store.read().commands).filter(c=>c.kind==='send').length,before);
-  assert.equal(runtime.broker.snapshot(s.id).turn.origin,'browser');
-  const live=(await (await request('/active',undefined,auth)).json()).sessions;
-  assert.equal(live[0].nativeMessageId,'native-new');
+test('TURN-HTTP: authenticated page observation wakes once per new frame and never enqueues a Send', async t => {
+  const h = await httpHarness(t);
+  const { session, snapshot } = await h.bound();
+  const frame = pageView(snapshot, { state: 'running', items: [
+    sourceItem('web-user', 'typed in the webpage', { role: 'user', kind: 'message', nativeMessageId: 'native-web-user' }),
+    sourceItem('web-answer', 'browser reply', { nativeMessageId: 'native-web-answer', order: [2] })
+  ] });
+  assert.equal((await h.request('/page-view', frame)).status, 403, 'unauthenticated observation cannot wake');
+  assert.equal(h.wake.length, 0);
+  const before = Object.values(h.runtime.store.read().commands).filter(c => c.kind === 'send').length;
+  const accepted = await h.signed('/page-view', frame);
+  assert.equal(accepted.status, 200);
+  const stored = h.runtime.broker.snapshot(session.id);
+  assert.ok(stored.sources.find(source => source.id === 'web-user'));
+  assert.equal(stored.turn.origin ?? 'paseo', 'paseo', 'browser content is not imported as a Paseo Send turn');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(h.wake, [session.id], 'a new frame wakes the bound Agent once');
+  const duplicate = await (await h.signed('/page-view', frame)).json();
+  assert.equal(duplicate.duplicate, true);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(h.wake.length, 1, 'a duplicate frame is not a second wake');
+  // The removed external-turn inventory/import endpoints are not available.
+  assert.equal((await h.request('/bindings', undefined, h.auth)).status, 404);
+  assert.equal((await h.request('/external-turn', {}, h.auth)).status, 404);
+  assert.equal(Object.values(h.runtime.store.read().commands).filter(c => c.kind === 'send').length, before);
 });

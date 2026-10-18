@@ -50,6 +50,40 @@ export function catalogAttempt(state) {
     diagnostic: safeDiagnostic(command.diagnostic) };
 }
 import { catalogService } from './catalog.mjs';
+/** The same live binding membership as Broker.observationBindings, not runs.
+ * archiveIntent still observes until safe closure; archival removes sessions.
+ * Missing/unreadable control evidence is unknown, never confirmed standby.
+ * Counts contain no prompts, approval text or source identities.
+ */
+export function observationHealth(state, _broker) {
+  const result = { bound: 0, running: 0, standby: 0, abnormal: 0, sourceIssues: 0, lastObservedAt: null };
+  // Same partition as shared/page-state.ts; tested together without requiring
+  // a TS runtime loader in this directly executable server module.
+  const controlIssues = new Set(['CONTROLS_READ_FAILED', 'CONTROLS_METADATA_TOO_LARGE',
+    'PAGE_STATUS_INVALID', 'OBSERVATION_UNAVAILABLE', 'PAGE_OBSERVER_UNAVAILABLE']);
+  const timestamp = value => Number.isSafeInteger(value) && value > 0 && value <= 8640000000000000;
+  for (const [id, session] of Object.entries(state.sessions ?? {})) {
+    if (!session?.conversationId || !Number.isInteger(session.tabId) || !session.documentKey ||
+        session.status === 'abandoned' || !session.observation) continue;
+    result.bound++;
+    const observation = session.observation, page = observation?.page;
+    const readable = page?.readable === true && ['stop', 'send', 'voice'].every(key =>
+      typeof page.controls?.[key]?.visible === 'boolean' && typeof page.controls[key].enabled === 'boolean');
+    const status = page?.controls?.stop?.visible === true ? 'running' : !readable ? 'abnormal' :
+      page.controls.send.visible || page.controls.voice.visible ? 'standby' : 'abnormal';
+    result[status]++;
+    // The current page-state history row persists the capture/projection
+    // issues; observation.page itself contains only button facts today.
+    const card = (session.history ?? []).find(row => row.type === 'plugin' && row.kind === 'page-state' &&
+      row.version === 1 && row.id === 'page-state:' + (session.id ?? id));
+    const issues = page && card?.data?.observedAt === page.observedAt && Array.isArray(card?.data?.issues) ? card.data.issues :
+      Array.isArray(page?.issues) ? page.issues : [];
+    result.sourceIssues += issues.filter(issue => typeof issue?.code === 'string' && issue.code && !controlIssues.has(issue.code)).length;
+    for (const at of [page?.observedAt, observation?.lastObservedAt])
+      if (timestamp(at)) result.lastObservedAt = Math.max(result.lastObservedAt ?? 0, at);
+  }
+  return result;
+}
 /** Status reads never acquire a browser tab. Normal startup is automatic; refresh is a fallback. */
 export async function settingsSnapshot(runtime, refresh = false) {
   let refreshError = null;
@@ -61,7 +95,7 @@ export async function settingsSnapshot(runtime, refresh = false) {
   const state = runtime.store.read(), lastCatalogAttempt = catalogAttempt(state);
   const { refreshing, refreshStartedAt, error } = service.snapshot();
   if (!refreshError && !refreshing) refreshError = error || (lastCatalogAttempt?.phase === 'failed' ? lastCatalogAttempt.error : null);
-  return { checkedAt: Date.now(), status: runtime.status(), catalog: state.catalog, defaults: state.defaults,
+  return { checkedAt: Date.now(), status: runtime.status(), observation: observationHealth(state, runtime.broker), catalog: state.catalog, defaults: state.defaults,
     capacity: runtime.broker.slots?.snapshot() ?? { limit: 2, active: 0, waiting: 0 },
     refreshing, refreshStartedAt, refreshError, lastCatalogAttempt,
     blocked: Object.values(state.sessions).filter(s => s.status === 'blocked').map(s => ({ id: s.id, error: safeError(s.error ?? 'RESULT_UNCONFIRMED') })) };

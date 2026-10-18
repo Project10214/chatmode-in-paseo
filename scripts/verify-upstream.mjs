@@ -11,8 +11,16 @@ assert.match(await readFile(path.join(root,'vendor/cos/LICENSE'),'utf8'),/Copyri
 for(const f of p.files){
  const text=await readFile(path.join(root,f.localPath),'utf8');
  assert.equal(createHash('sha256').update(text).digest('hex'),f.localSha256,`Unrecorded upstream adaptation: ${f.localPath}`);
- const manifestPath=f.localPath.replace(/^extension\//,'');
- assert(m.content_scripts.some(e=>(e.world??'ISOLATED')===f.world&&e.js.includes(manifestPath)&&(!f.runAt||e.run_at===f.runAt)),`Not loaded in expected world/start timing: ${f.localPath}`);
+ if(f.world==='SERVER'){
+  assert.equal(f.localPath,'shared/public-prose.mjs');
+  assert.equal(f.importedBy,'server/message-delivery.mjs');
+  const consumer=await readFile(path.join(root,f.importedBy),'utf8');
+  assert(consumer.includes("from '../shared/public-prose.mjs'")&&consumer.includes('decoded = decodePublicProse('),'Receiver decoder must be imported AND used');
+ }else{
+  assert(['MAIN','ISOLATED'].includes(f.world),'Unknown runtime');
+  const manifestPath=f.localPath.replace(/^extension\//,'');
+  assert(m.content_scripts.some(e=>(e.world??'ISOLATED')===f.world&&e.js.includes(manifestPath)&&(!f.runAt||e.run_at===f.runAt)),`Not loaded in expected world/start timing: ${f.localPath}`);
+ }
  for(const name of f.sourceFunctions)assert.match(text,new RegExp(`function ${name}\\(`),`Missing transplanted function ${name}`);
  // Some pinned CoS helpers are const arrow functions; record that source shape
  // explicitly rather than forcing a declaration rewrite or skipping name checks.

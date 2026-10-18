@@ -24,24 +24,24 @@ export function GeneratedImage({ item, theme, layout }: PluginTimelineItemProps<
           if(value.nextOffset!==offset)throw new Error('IMAGE_OFFSET_INVALID');
         }
         throw new Error('IMAGE_TOO_LARGE');
-      }catch{if(alive)setError('预览暂时无法读取。重试只读取已保存的图片，不会重新生成。');}
+      }catch{if(alive)setError('预览读取失败。重试不会重新生成。');}
     })();
     return()=>{alive=false};
   },[image.digest,image.sessionId,image.turnId,image.status,retry]);
   const aspect=(image.previewWidth??image.width??1)/(image.previewHeight??image.height??1);
   const button=(title:string,fn:()=>void,icon:string)=><Pressable accessibilityRole="button" onPress={fn} style={({pressed})=>({minHeight:44,paddingHorizontal:14,paddingVertical:10,borderRadius:10,backgroundColor:c.surface2,opacity:pressed ? 0.7 : 1,flexDirection:'row',alignItems:'center',gap:8})}><Icon name={icon} size={16} color={c.foreground}/><Text style={{color:c.foreground,fontSize:13,fontWeight:'600'}}>{title}</Text></Pressable>;
-  const original=()=>{void openExternalUrl('https://chatgpt.com/c/'+image.conversationId).catch(()=>setError('网页未能打开，请在浏览器中查看原对话。'));};
+  const original=()=>{void openExternalUrl('https://chatgpt.com/c/'+image.conversationId).catch(()=>setError('无法打开原对话。'));};
   return <View style={{width:'100%',maxWidth:600,borderWidth:1,borderColor:c.border,borderRadius:16,backgroundColor:c.surface1,overflow:'hidden',marginVertical:8}}>
     <View style={{padding:16,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12}}>
       <View style={{flexDirection:'row',alignItems:'center',gap:10}}><Icon name="Image" size={18} color={c.foreground}/><Text style={{color:c.foreground,fontSize:15,fontWeight:'600'}}>图片已生成</Text></View>
       <Text style={{color:c.foregroundMuted,fontSize:12}}>{image.width&&image.height?`${image.width} × ${image.height}`:'ChatGPT'}</Text>
     </View>
-    {uri?<Pressable accessibilityRole="button" accessibilityLabel="放大图片预览" onPress={()=>setExpanded(true)}><Image accessibilityLabel="ChatGPT 生成的图片预览" source={{uri}} resizeMode="contain" style={{width:'100%',aspectRatio:Math.max(.35,Math.min(3,aspect)),maxHeight:layout.compact?380:500,backgroundColor:c.surface0}} onError={()=>setError('预览格式无法显示，请到网页查看原图。')}/></Pressable>:<View style={{minHeight:160,alignItems:'center',justifyContent:'center',gap:10,padding:24,backgroundColor:c.surface0}}><Icon name={error||image.status==='unavailable'?'ImageOff':'Image'} size={28} color={c.foregroundMuted}/><Text style={{color:c.foregroundMuted,textAlign:'center'}}>{image.status==='unavailable'?'图片已在网页生成，预览未能读取。':error?'预览加载失败':'正在读取已保存的预览…'}</Text></View>}
+    {uri?<Pressable accessibilityRole="button" accessibilityLabel="放大图片预览" onPress={()=>setExpanded(true)}><Image accessibilityLabel="ChatGPT 生成的图片预览" source={{uri}} resizeMode="contain" style={{width:'100%',aspectRatio:Math.max(.35,Math.min(3,aspect)),maxHeight:layout.compact?380:500,backgroundColor:c.surface0}} onError={()=>setError('无法显示预览。')}/></Pressable>:<View style={{minHeight:160,alignItems:'center',justifyContent:'center',gap:10,padding:24,backgroundColor:c.surface0}}><Icon name={error||image.status==='unavailable'?'ImageOff':'Image'} size={28} color={c.foregroundMuted}/><Text style={{color:c.foregroundMuted,textAlign:'center'}}>{image.status==='unavailable'?'图片已生成，预览不可用。':error?'预览加载失败':'正在加载预览…'}</Text></View>}
     <View style={{padding:16,gap:12}}>
-      <Text style={{color:c.foregroundMuted,fontSize:12,lineHeight:18}}>此处为压缩预览，最长边 1600 像素；原图在 ChatGPT 网页保留。</Text>
+      <Text style={{color:c.foregroundMuted,fontSize:12,lineHeight:18}}>压缩预览，非原文件。最长边 1600 像素。</Text>
       {!!error&&<Text accessibilityRole="alert" style={{color:c.statusWarning,fontSize:13,lineHeight:19}}>{error}</Text>}
-      <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{uri&&button('放大预览',()=>setExpanded(true),'Maximize2')}{!!error&&image.status==='available'&&button('重试读取',()=>setRetry(n=>n+1),'RefreshCw')}{button('网页查看原图',original,'ExternalLink')}</View>
+      <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{uri&&button('放大预览',()=>setExpanded(true),'Maximize2')}{!!error&&image.status==='available'&&button('重试读取',()=>setRetry(n=>n+1),'RefreshCw')}{button('打开原对话',original,'ExternalLink')}</View>
     </View>
-    <Modal title="图片预览" open={expanded} onOpenChange={setExpanded}><Modal.Content>{uri&&<Image source={{uri}} resizeMode="contain" style={{width:'100%',aspectRatio:aspect,minHeight:200,maxHeight:720}}/>}<Text style={{color:c.foregroundMuted}}>压缩预览 · 原图请在网页查看</Text>{button('网页查看原图',original,'ExternalLink')}</Modal.Content></Modal>
+    <Modal title="图片预览" open={expanded} onOpenChange={setExpanded}><Modal.Content>{uri&&<Image source={{uri}} resizeMode="contain" style={{width:'100%',aspectRatio:aspect,minHeight:200,maxHeight:720}}/>}<Text style={{color:c.foregroundMuted}}>压缩预览 · 非原文件</Text>{button('打开原对话',original,'ExternalLink')}</Modal.Content></Modal>
   </View>;
 }

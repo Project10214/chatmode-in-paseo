@@ -2,7 +2,7 @@
   'use strict';
   if (globalThis.__CIP_CONTENT__) return;
   const documentKey = crypto.randomUUID(), commands = new Map();
-  let monitor = null, disposed = false, navigationEpoch = 0, passiveEnabled = false;
+  let monitor = null, disposed = false, navigationEpoch = 0;
   // A freshly restored Chrome page may fire benign navigate/currententrychange
   // while React mounts the editor without departing the same Conversation.
   // Track real route departures separately: A -> B -> A must still revoke
@@ -16,7 +16,7 @@
   // Proof obtained after the background RPC caller timed out stays inside
   // this exact document. It is never another Send authorization.
   const lateSendReceipts = new Map();
-  let pendingReceiptTurn = null, pendingReceiptPathEpoch = null;
+  let pendingReceiptTurn = null, pendingReceiptPathEpoch = null, sendAttempt = null;
   const cancelled = new Set();
   const moved = () => {
     navigationEpoch++;
@@ -25,15 +25,19 @@
     const currentPathname = location.pathname;
     if (currentPathname !== lastPathname) { pathEpoch++; lastPathname = currentPathname; }
     // A -> B -> A must revoke observation even if it happens between polls.
-    if (monitor && conversation() !== monitor.conversationId) monitor.routeRevoked = true;
+    if (monitor && conversation() !== monitor.conversationId) revokeObservation(monitor);
   };
   globalThis.navigation?.addEventListener('navigate', moved);
   globalThis.navigation?.addEventListener('currententrychange', moved);
   addEventListener('popstate', moved); addEventListener('hashchange', moved);
   globalThis.__CIP_CONTENT__ = { documentKey };
   const D = globalThis.CIP_DOM;
-  const conversation = () => D.conversationId();
-  const pageIdentity = () => ({ engine: 'cos-native-alpha4.3', documentKey, url: location.href, nativeMessageId: D.messages().filter(x => x.role === 'user').at(-1)?.id ?? null, observationActive: Boolean(monitor), observationError: monitor?.lastError ?? null });
+  const conversation = conversationRoute;
+  const pageIdentity = () => {
+    if (monitor && conversation() !== monitor.conversationId) revokeObservation(monitor);
+    return { engine: 'cos-native-alpha4.3', protocol: 8, documentKey, url: location.href,
+      observationRevoked: monitor?.routeRevoked === true };
+  };
   const fail = code => { throw Object.assign(new Error(code), { code }); };
   function check(expected) {
     if (disposed || location.hostname !== 'chatgpt.com') fail('PAGE_GONE');
@@ -42,7 +46,19 @@
     if (expected.kind === 'catalog' && conversation() !== null) fail('WRONG_CONVERSATION');
   }
   const rpc = value => chrome.runtime.sendMessage(value).then(r => { if (!r?.ok) fail(r?.error ?? 'BRIDGE_UNAVAILABLE'); return r.value; });
+  function revokeObservation(m) {
+    m.routeRevoked = true;
+    void m.artifacts?.dispose();
+    if (m.pending) m.pending.length = 0;
+  }
+  function checkObservation(m) {
+    if (!m || monitor !== m || disposed || location.hostname !== 'chatgpt.com' || m.documentKey !== documentKey)
+      fail('PAGE_IDENTITY_CHANGED');
+    if (conversation() !== m.conversationId) revokeObservation(m);
+    if (m.routeRevoked) fail('PAGE_IDENTITY_CHANGED');
+  }
   async function run(c) {
+    const controlCommand = ['stop', 'approval'].includes(c.kind), controlMonitor = controlCommand ? monitor : null;
     const epoch = navigationEpoch, initialRouteEpoch = routeEpoch,
       initialPathEpoch = pathEpoch;
     // CoS submittedSendLifetime: a fresh Send acquires its first concrete route;
@@ -71,6 +87,7 @@
       if (afterDispatch && c.kind === 'send') {
         if (disposed || location.hostname !== 'chatgpt.com' || c.documentKey !== documentKey) fail('PAGE_GONE');
         dispatched = true; committedRoute();
+        sendAttempt={commandId:c.id,turnId:c.payload.turnId,lease:c.lease,documentKey};
         if (revoked) fail('SEND_LIFETIME_REVOKED');
       } else {
         check(c);
@@ -81,7 +98,12 @@
         // elected-Conversation lifetime fence above. Stop remains strict.
         const preparing = ['open','configure','catalog','ensure'].includes(c.kind)
           || (c.kind === 'send' && !dispatched);
-        if (preparing
+        if (controlCommand) {
+          checkObservation(controlMonitor);
+          if (c.payload?.documentKey !== documentKey) fail('DOCUMENT_CHANGED');
+          if (typeof c.payload?.observationLease !== 'string' ||
+              c.payload.observationLease !== controlMonitor.observationLease) fail('OBSERVATION_LEASE_MISMATCH');
+        } else if (preparing
           ? (routeEpoch !== initialRouteEpoch || pathEpoch !== initialPathEpoch)
           : navigationEpoch !== epoch) fail('NAVIGATION_CHANGED');
       }
@@ -123,7 +145,19 @@
             throw e;
           }
         }
-        case 'stop': { const result = await D.stop(c.payload.nativeMessageId); if (monitor?.nativeMessageId === c.payload.nativeMessageId) monitor = null; return result; }
+        case 'stop': {
+          const result = await D.stop({ ...c.payload, guard });
+          guard();
+          await observe();
+          return result;
+        }
+        case 'approval': {
+          const result = await D.answerApproval({ key: c.payload.key, choice: c.payload.choice,
+            conversationId: c.payload.conversationId, guard });
+          guard();
+          await observe();
+          return result;
+        }
         default: fail('UNKNOWN_COMMAND');
       }
     } finally {
@@ -131,152 +165,185 @@
       removeEventListener('popstate', committedRoute); removeEventListener('hashchange', committedRoute);
     }
   }
-  async function observe() {
-    const m = monitor; if (!m || m.busy) return; m.busy = true;
-    const event = extra => ({ ...extra, sessionId: m.sessionId, turnId: m.turnId, lease: m.lease, nativeMessageId: m.nativeMessageId,
-      tabId: m.tabId, documentKey, url: location.href });
+  const MAX_FRAME_BYTES = 384 * 1024, REFRESH_MS = 15000;
+  const encode = value => new TextEncoder().encode(value).length;
+  const fingerprint = view => JSON.stringify(view, (key, value) => key === 'observedAt' ? undefined : value);
+  const emptyControls = () => ({ observedAt: Date.now(), state: 'abnormal', readable: false,
+    controls: { stop: { visible: false, enabled: false }, send: { visible: false, enabled: false }, voice: { visible: false, enabled: false } } });
+  function readControls() {
+    let page, error = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        page = globalThis.CIP_PAGE_CONTROLS.read();
+        if (!page || !['running', 'standby', 'abnormal'].includes(page.state) || !page.controls)
+          throw new Error('invalid controls');
+        error = false;
+        if (page.state !== 'abnormal') break;
+      } catch { page = emptyControls(); error = true; }
+    }
+    return { page, issues: error ? [{ code: 'CONTROLS_READ_FAILED' }] : [] };
+  }
+  function readSource(m) {
     try {
-      if (m.routeRevoked || m.documentKey !== documentKey || conversation() !== m.conversationId) fail('PAGE_IDENTITY_CHANGED');
-      await D.refreshTranscript();
-      if (monitor !== m) return;
-      const value = D.state(m.nativeMessageId);
-      m.unavailableSince = null;
-      if (value.error) fail(value.error);
-      // Separate native Paseo reasoning/tool-call timeline from generic activity.
-      // Only the same verified native user anchor may own these events.
-      if(value.timeline){
-        m.publicTimeline??=new Map();
-        const items=[
-          ...value.timeline.reasoning.map(x=>({type:'reasoning',id:x.id,text:x.text})),
-          ...value.timeline.calls.map(x=>({type:'tool_call',...x}))
-        ];
-        for(const item of items){
-          const key=item.type+':'+(item.callId??item.id);
-          const fingerprint=JSON.stringify(item);
-          if(m.publicTimeline.get(key)===fingerprint)continue;
-          const ack=await rpc({type:'observation',event:event({kind:'native_timeline',item})});
-          if(ack.active===false){if(monitor===m)monitor=null;return;}
-          m.publicTimeline.set(key,fingerprint);
-        }
+      const source = globalThis.CIP_PAGE_CONTENT.read();
+      if (!source || typeof source !== 'object' || Array.isArray(source))
+        throw new Error('invalid source');
+      // Never forward another conversation's body under the bound identity.
+      if (source.conversationId !== m.conversationId)
+        return { conversationId: m.conversationId, items: [], approvals: [], closedApprovals: [],
+          issues: [{ code: 'CONTENT_CONVERSATION_UNCONFIRMED' }] };
+      const view = { ...source }, issues = [];
+      for (const key of ['items', 'approvals', 'closedApprovals', 'issues']) {
+        if (source[key] === undefined && key === 'closedApprovals') view[key] = [];
+        else if (Array.isArray(source[key])) view[key] = [...source[key]];
+        else { view[key] = []; issues.push({ code: 'CONTENT_COLLECTION_INVALID', collection: key }); }
       }
-      // CoS public native turn state. A page with an exact user receipt may
-      // legitimately be thinking, searching, calling tools or waiting for human
-      // approval while it has NO final assistant text yet.
-      const activity=value.waiting
-        ? {phase:'approval',nativeStatus:'in_progress',steps:value.activity?.steps??[]}
-        : value.activity;
-      if(activity && Array.isArray(activity.steps)) {
-        const view={phase:activity.phase,nativeStatus:activity.nativeStatus,steps:activity.steps};
-        const fingerprint=JSON.stringify(view);
-        if(m.activityFingerprint!==fingerprint) {
-          const receipt=await rpc({type:'observation',event:event({kind:'activity',activity:view})});
-          if(receipt.active===false){if(monitor===m)monitor=null;return;}
-          m.activityFingerprint=fingerprint;m.lastError=null;
-        }
+      view.issues.push(...issues);
+      return view;
+    } catch {
+      return { conversationId: m.conversationId, items: [], approvals: [], closedApprovals: [],
+        issues: [{ code: 'CONTENT_READ_FAILED' }] };
+    }
+  }
+  const formal = item => item?.role === 'assistant' && item.lane === 'output' && item.kind === 'message';
+  function supplement(m, source, refresh) {
+    const items = source.items.filter(formal);
+    const selected = item => ({...item,prose:m.prose.get(item.id) ??
+      {status:globalThis.CIP_PUBLIC_MESSAGES ? 'pending' : 'unavailable',
+        ...(!globalThis.CIP_PUBLIC_MESSAGES ? {code:'PUBLIC_MESSAGE_SUPPLEMENT_UNAVAILABLE'} : {})}});
+    // A successful asynchronous read is still captured if its DOM node was
+    // collapsed/virtualized meanwhile. Never overwrite a newer DOM snapshot.
+    const current = new Set(source.items.map(item=>item.id));
+    for (const item of m.proseArrivals.splice(0)) if (!current.has(item.id)) source.items.push(item);
+    source.items = source.items.map(item=>formal(item) ? selected(item) : item);
+    if (!refresh || m.proseFlight || !items.length || !globalThis.CIP_PUBLIC_MESSAGES) return;
+    const work = (async()=>{
+      let result;
+      try {
+        result=await globalThis.CIP_PUBLIC_MESSAGES.read(items,()=>checkObservation(m));
+        if(!Array.isArray(result?.messages)||!Array.isArray(result?.issues))throw Error('RAW_RESULT_INVALID');
       }
-      if (value.waiting) {
-        m.quietSince = null;
-        if (!m.waiting) { await rpc({ type: 'observation', event: event({ kind: 'waiting' }) }); m.waiting = true; m.lastError = null; }
-        return;
+      catch { result={messages:[],issues:[{code:'PUBLIC_MESSAGE_SUPPLEMENT_UNAVAILABLE'}]}; }
+      try { checkObservation(m); } catch { return; }
+      const messages = new Map((result.messages??[]).map(value=>[value.nativeMessageId,value]));
+      const issues = Array.isArray(result.issues) ? result.issues : [];
+      for (const item of items) {
+        const value=messages.get(item.nativeMessageId);
+        const code=issues.find(issue=>issue.nativeMessageId===item.nativeMessageId || issue.id===item.id ||
+          !issue.nativeMessageId&&!issue.id)?.code ?? 'PUBLIC_MESSAGE_RAW_UNAVAILABLE';
+        const prose=value ? {status:'available',...value} : {status:'unavailable',code};
+        m.prose.set(item.id,prose);
+        m.proseArrivals.push({...item,prose});
       }
-      m.waiting = false;
-      if (value.answer && (m.lastId !== value.answer.id || m.lastText !== value.answer.text)) {
-        if (value.answer.text.length > 256000) fail('ANSWER_TOO_LARGE');
-        const receipt = await rpc({ type: 'observation', event: event({ kind: 'snapshot', messageId: value.answer.id, text: value.answer.text }) });
-        m.lastError = null;
-        if (receipt.active === false) { if (monitor === m) monitor = null; return; }
-        m.lastId = value.answer.id; m.lastText = value.answer.text; m.quietSince = null;
-      }
-      const imageKey = image => `${image.messageId}:${image.assetId}`;
-      m.images ??= new Set(); m.imageWaits ??= new Map();
-      if ((value.images?.length ?? 0) > 8) fail('IMAGE_COUNT_LIMIT');
-      for (const image of value.images ?? []) {
-        const key = imageKey(image);
-        if (!image.completed || m.images.has(key)) continue;
-        m.imageWaits.set(key, m.imageWaits.get(key) ?? Date.now());
-        const guard = () => { if(monitor!==m || m.documentKey!==documentKey || conversation()!==m.conversationId)fail('PAGE_IDENTITY_CHANGED'); };
-        const preview = await globalThis.CIP_MEDIA.capture(image, guard); guard();
-        if(preview.previewStatus==='unavailable' && ['not_rendered','not_loaded'].includes(preview.previewError) && Date.now()-m.imageWaits.get(key)<15000)return;
-        const receipt = await rpc({type:'observation',event:event({kind:'image',...image,...preview})});
-        if(receipt.active===false){if(monitor===m)monitor=null;return;}
-        m.images.add(key);m.quietSince=null;
-      }
-      const imageFinal = !!value.imageFinalId && value.images.length>0 && value.images.every(x=>x.completed&&m.images.has(imageKey(x)));
-      const mediaPending = (value.images??[]).some(x=>!x.completed||!m.images.has(imageKey(x)));
-      // A verified native terminal outranks a stale Stop button. The final
-      // remains tied to this exact user ID and completed native turn.
-      const nativeTerminal=value.activity?.nativeStatus==='complete' && (value.answer?.final||imageFinal);
-      if ((value.busy && !nativeTerminal) || mediaPending || !(value.answer?.final || imageFinal)) {
-        m.quietSince = null;
-        if (!value.busy && value.answer && !m.unconfirmedNotice) {
-          await rpc({ type: 'observation', event: event({ kind: 'waiting', reason: 'final-unconfirmed' }) }); m.unconfirmedNotice = true;
-        }
-        return;
-      }
-      m.quietSince ??= performance.now();
-      if (performance.now() - m.quietSince >= (nativeTerminal ? 1000 : 4000)) {
-        await rpc({ type: 'observation', event: event({ kind: 'completed', finalConfirmed: true,
-          messageId: imageFinal ? value.imageFinalId : value.answer.id,
-          ...(imageFinal ? {finalKind:'image',imageKeys:value.images.map(imageKey)} : {}) }) });
-        if (monitor === m) monitor = null;
-      }
-    } catch (e) {
-      m.lastError = typeof e.code === 'string' && /^[A-Z_]{1,80}$/.test(e.code) ? e.code : 'OBSERVATION_UNAVAILABLE';
-      if (['TURN_INACTIVE', 'SESSION_UNKNOWN'].includes(e.code)) { if (monitor === m) monitor = null; return; }
-      if(e.code==='TURN_CHANGED' && monitor===m && !m.routeRevoked){
-        // User sent another message directly in the same ChatGPT page.
-        // Settle the old turn only if its own visible native final is proven.
-        try{
-          const prior=D.priorFinal(m.nativeMessageId);
-          if(prior){
-            await rpc({type:'observation',event:event({kind:'snapshot',messageId:prior.messageId,text:prior.text})});
-            await rpc({type:'observation',event:event({kind:'completed',finalConfirmed:true,messageId:prior.messageId})});
-            if(monitor===m)monitor=null;
-            return;
+      // Re-capture controls and other sources, without recursively starting a
+      // second raw request. Normal ticks refresh the supplement independently.
+      void observe(true);
+    })();
+    m.proseFlight=work;
+    void work.finally(()=>{if(m.proseFlight===work)m.proseFlight=null;});
+  }
+  function envelope(m, view, sequence) {
+    return { type: 'page-view', event: { sessionId: m.sessionId, observationLease: m.observationLease,
+      documentKey, tabId: m.tabId, url: location.href, sequence, view } };
+  }
+  function framesOf(m, view) {
+    const collections = ['items', 'approvals', 'closedApprovals', 'issues'];
+    let base = { ...view, items: [], approvals: [], closedApprovals: [], issues: [] };
+    // Reserve the maximum sequence width so crossing 9 -> 10 cannot overflow.
+    const sizeOfBase = value => encode(JSON.stringify(envelope(m, value, Number.MAX_SAFE_INTEGER)));
+    if (sizeOfBase(base) > MAX_FRAME_BYTES) {
+      base = { conversationId: m.conversationId, page: view.page, items: [], approvals: [], closedApprovals: [],
+        issues: [{ code: 'PAGE_VIEW_METADATA_TOO_LARGE' }] };
+    }
+    if (sizeOfBase(base) > MAX_FRAME_BYTES) {
+      base.page = emptyControls();
+      base.issues.push({ code: 'CONTROLS_METADATA_TOO_LARGE' });
+    }
+    const empty = () => ({ ...base, items: [], approvals: [], closedApprovals: [], issues: [...base.issues] });
+    let current = empty(), bytes = sizeOfBase(current), count = 0;
+    const frames = [];
+    const flush = () => {
+      // Snapshot every payload. A later source read or changed epoch must never
+      // mutate the body attached to an already allocated sequence.
+      const message = JSON.parse(JSON.stringify(envelope(m, current, ++m.sequence)));
+      frames.push(message); current = empty(); bytes = sizeOfBase(current); count = 0;
+    };
+    const append = (collection, value, index, replacement = false) => {
+      let json;
+      try { json = JSON.stringify(value); } catch {}
+      const length = json === undefined ? null : encode(json);
+      const fresh = empty();
+      if (length === null || sizeOfBase(fresh) + length + (fresh[collection].length ? 1 : 0) > MAX_FRAME_BYTES) {
+        if (replacement) return;
+        if (collection === 'items' && formal(value) && value.prose?.status === 'available' && length !== null) {
+          const dom = {...value,prose:{status:'unavailable',code:'PUBLIC_MESSAGE_RAW_TOO_LARGE'}};
+          if (sizeOfBase(fresh) + encode(JSON.stringify(dom)) <= MAX_FRAME_BYTES) {
+            append(collection,dom,index,true);
+            append('issues',{code:'PAGE_ENTRY_TOO_LARGE',collection:'items.prose',index,
+              id:typeof value.id==='string'&&encode(value.id)<=1024?value.id:null,bytes:length},index,true);
+            return; // Explicit raw refusal, not truncation or a stuck pending DOM source.
           }
-        }catch{}
-      }
-      if (['TRANSCRIPT_PENDING','TRANSCRIPT_UNCONFIRMED'].includes(e.code)) {
-        // React can temporarily unmount the user row during a long MCP tool
-        // call. Retain the linked conversation and its confirmed turn.
-        // Report waiting, never fabricate a final answer or repeat Send.
-        m.quietSince=null;m.unavailableSince??=Date.now();
-        if(!m.unavailableNotice){
-          try{
-            await rpc({type:'observation',event:event({kind:'waiting',reason:'transcript-unavailable'})});
-            m.unavailableNotice=true;
-          }catch{}
         }
+        const id = value?.id ?? value?.key;
+        append('issues', { code: length === null ? 'PAGE_ENTRY_UNSERIALIZABLE' : 'PAGE_ENTRY_TOO_LARGE',
+          collection, index, id: typeof id === 'string' && encode(id) <= 1024 ? id : null, bytes: length }, index, true);
         return;
       }
-      if (['TURN_CHANGED', 'PAGE_IDENTITY_CHANGED', 'ANSWER_TOO_LARGE', 'NATIVE_ERROR', 'TURN_OUTPUT_LIMIT', 'TRANSCRIPT_UNCONFIRMED', 'TRANSCRIPT_PENDING', 'IMAGE_COUNT_LIMIT', 'IMAGE_IDENTITY_UNPROVEN', 'IMAGE_CAPTURE_FAILED', 'IMAGE_DATA_INVALID', 'IMAGE_DIMENSIONS_INVALID', 'MEDIA_STORAGE_FULL', 'MEDIA_INTEGRITY_FAILED', 'IMAGE_STORAGE_FAILED', 'IMAGE_NOT_COMPLETE', 'IMAGE_STATUS_INVALID', 'MEDIA_PATH_UNSAFE'].includes(e.code)) {
-        try { await rpc({ type: 'observation', event: event({ kind: 'failed', error: e.code }) }); if (monitor === m) monitor = null; } catch {}
+      const addition = length + (current[collection].length ? 1 : 0);
+      if (bytes + addition > MAX_FRAME_BYTES) flush();
+      current[collection].push(JSON.parse(json));
+      bytes += length + (current[collection].length > 1 ? 1 : 0); count++;
+    };
+    for (const collection of collections)
+      for (const [index, value] of view[collection].entries()) append(collection, value, index);
+    if (count || !frames.length) flush();
+    return frames;
+  }
+  function drain(m) {
+    if (m.deliveryFlight) return m.deliveryFlight;
+    const work = (async () => {
+      try {
+        while (m.pending.length) {
+          checkObservation(m);
+          const message = m.pending[0], stored = await rpc(message);
+          checkObservation(m);
+          // accepted is local persistence only, not a Paseo display/host ACK.
+          if (stored?.accepted !== true) fail('PAGE_VIEW_PERSISTENCE_UNCONFIRMED');
+          m.pending.shift(); m.lastError = null;
+        }
+      } catch (error) {
+        m.lastError = error?.code ?? 'PAGE_VIEW_DELIVERY_FAILED';
+        // Preserve the exact first pending frame and its sequence for retry.
+        // No server/native turn outcome ends this conversation observer.
       }
-      // Transport errors retry observation only, never the user message or native Send.
-    } finally { m.busy = false; }
-  }
-  // A user can start the next native ChatGPT turn while Paseo is idle.
-  // Send only a content-free wake hint; the worker performs all bound-session
-  // checks before importing anything. Keep idle probes throttled per page.
-  let idleNativeUser=null,idleProbeBusy=false,idleProbeAt=0;
-  async function probeIdle(){
-    if(disposed||monitor||!passiveEnabled||idleProbeBusy||!conversation())return;
-    idleProbeBusy=true;
-    try{
-      await D.refreshTranscript();
-      if(disposed||monitor)return;
-      const last=D.messages().filter(m=>m.role==='user').at(-1)?.id??null;
-      if(last&&idleNativeUser&&last!==idleNativeUser)
-        void chrome.runtime.sendMessage({type:'idle-notice'}).catch(()=>{});
-      if(last)idleNativeUser=last;
-    }catch{}finally{idleProbeBusy=false;}
-  }
-  const timer = setInterval(()=>{
-    const work=observe();
-    if(!monitor && passiveEnabled && Date.now()-idleProbeAt>=5000){idleProbeAt=Date.now();void probeIdle();}
+    })();
+    m.deliveryFlight = work;
+    void work.finally(() => { if (m.deliveryFlight === work) m.deliveryFlight = null; });
     return work;
-  },750);
-  addEventListener('pagehide', () => { disposed = true; monitor = null; clearInterval(timer); }, { once: true });
+  }
+  async function observe(rawReady = false) {
+    const m = monitor;
+    if (!m) return;
+    try { checkObservation(m); } catch { return; }
+    // Both APIs are read on every tick in every button state, even while an
+    // earlier page-view RPC is pending or retrying. Neither lane gates the other.
+    const source = readSource(m), controls = readControls();
+    supplement(m,source,!rawReady);
+    const view = { ...source, page: controls.page, issues: [...source.issues, ...controls.issues],
+      ...(sendAttempt?{sendAttempt:{...sendAttempt}}:{}) };
+    m.artifacts?.observe(source.items);
+    try {
+      checkObservation(m);
+      const semantic = fingerprint(view), now = Date.now();
+      if (semantic !== m.lastQueuedFingerprint || !m.pending.length && now - m.lastQueuedAt >= REFRESH_MS) {
+        m.pending.push(...framesOf(m, view));
+        m.lastQueuedFingerprint = semantic; m.lastQueuedAt = now;
+      }
+      void drain(m);
+    } catch (error) { m.lastError = error?.code ?? 'PAGE_VIEW_CAPTURE_FAILED'; }
+  }
+  const timer = setInterval(() => { return observe(); }, 750);
+  addEventListener('pagehide', () => { disposed = true; if (monitor) revokeObservation(monitor); monitor = null; clearInterval(timer); }, { once: true });
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id) return;
     if (message.type === 'cancel-command') { cancelled.add(message.id); respond({ ok: true }); return; }
@@ -287,23 +354,19 @@
       try {
         const controls = globalThis.CIP_COS_CONTROLS, box = controls?.composer?.();
         idle = !disposed && !!box && D.authored(box) === '' &&
-          controls.generating() === false && controls.approvalWaiting() === false &&
-          monitor === null;
+          controls.generating() === false && controls.approvalWaiting() === false && D.approvalPending?.() !== true &&
+          (!monitor || !monitor.routeRevoked) && readControls().page.state === 'standby';
       } catch { /* Unknown native page state is not proof of idleness. */ }
       respond({ ok: true, value: { idle, documentKey, url: location.href } });
       return;
     }
+    if (message.type === 'page-ready') { respond({ ok: true, value: { composer: !!globalThis.CIP_COS_CONTROLS.composer(), documentKey } }); return; }
     if (message.type === 'catalog-idle') { const box = globalThis.CIP_COS_CONTROLS.composer(); respond({ ok: true, value: { idle: !!box && D.authored(box) === '' && D.messages().length === 0, documentKey } }); return; }
     if (message.type === 'identity' && disposed) { respond({ ok: false, error: 'PAGE_GONE' }); return; }
     if (message.type === 'identity') {
-      // Reloaded documents need current native message IDs before the background
-      // worker decides whether it can resume observation of this exact turn.
-      const path=location.pathname, epoch=pathEpoch;
-      D.refreshTranscript().then(() => {
-        if(disposed || location.pathname!==path || pathEpoch!==epoch) return respond({ok:false,error:'PAGE_IDENTITY_CHANGED'});
-        respond({ok:true,value:pageIdentity()});
-      }, () => respond({ok:false,error:'TRANSCRIPT_UNCONFIRMED'}));
-      return true;
+      // URL/document identity is always available independently of transcript,
+      // body, approval or button-read failures.
+      respond({ ok: true, value: pageIdentity() }); return;
     }
     if (message.type === 'pending-receipt') {
       const s=message.session;
@@ -322,63 +385,38 @@
       if(pendingReceiptTurn!==s.turnId || pendingReceiptPathEpoch!==pathEpoch){
         respond({ok:false,error:'TRANSCRIPT_UNCONFIRMED'});return true;
       }
-      D.probePendingReceipt(s.turnId).then(value=>respond({ok:true,value}),
-        e=>respond({ok:false,error:e.code??'TRANSCRIPT_UNCONFIRMED'}));
-      return true;
-    }
-    if (message.type === 'external-candidate') {
-      passiveEnabled = true;
-      // Passive observation only. This handler does not touch the composer,
-      // authorize Send, or claim that an existing historical message is new.
-      const s=message.session,path=location.pathname,epoch=pathEpoch;
-      if(disposed||!s||s.conversationId!==conversation()){
-        respond({ok:false,error:'PAGE_IDENTITY_CHANGED'});return;
-      }
-      D.refreshTranscript().then(()=>{
-        if(disposed||path!==location.pathname||epoch!==pathEpoch ||
-           s.conversationId!==conversation()){
-          respond({ok:false,error:'PAGE_IDENTITY_CHANGED'});return;
-        }
-        const users=D.messages().filter(x=>x.role==='user');
-        const at=users.findIndex(x=>x.id===s.previousNativeMessageId);
-        if(at<0){respond({ok:true,value:{available:false,reason:'anchor_unavailable'}});return;}
-        const newer=users.slice(at+1);
-        if(newer.length!==1){
-          respond({ok:true,value:{available:false,documentKey,
-            previousNativeMessageId:s.previousNativeMessageId,
-            reason:newer.length?'multiple_unobserved_turns':'no_new_user'}});return;
-        }
-        const row=newer[0];
-        if(!row?.id || typeof row.text!=='string'||!row.text.trim()||row.text.length>64000){
-          respond({ok:false,error:'EXTERNAL_MESSAGE_UNREADABLE'});return;
-        }
-        respond({ok:true,value:{available:true,documentKey,url:location.href,
-          previousNativeMessageId:s.previousNativeMessageId,nativeMessageId:row.id,text:row.text}});
-      },()=>respond({ok:false,error:'TRANSCRIPT_UNCONFIRMED'}));
+      const receiptEpoch = pathEpoch;
+      D.probePendingReceipt(s.turnId).then(value => {
+        if (disposed || receiptEpoch !== pathEpoch || s.conversationId !== conversation())
+          return respond({ ok: false, error: 'PAGE_IDENTITY_CHANGED' });
+        respond({ ok: true, value });
+      }, e=>respond({ok:false,error:e.code??'TRANSCRIPT_UNCONFIRMED'}));
       return true;
     }
     if (message.type === 'monitor') {
-      passiveEnabled = true;
-      const m = message.session;
-      if (m.documentKey !== documentKey || m.conversationId !== conversation()) { respond({ ok: false, error: 'PAGE_IDENTITY_CHANGED' }); return; }
-      if (monitor?.turnId !== m.turnId) monitor = { ...m, busy: false, quietSince: null, routeRevoked: false };
-      if (monitor?.routeRevoked) { respond({ ok: false, error: 'PAGE_IDENTITY_CHANGED' }); return; }
-      // A responsive tab alone is NOT proof that ChatGPT is still working.
-      // Only a native activity observation tied to the original user ID can
-      // renew Runtime liveness. Unreadable status remains retryable, not live.
-      let active=false,nativeReadable=false;
-      try{
-        const v=D.state(m.nativeMessageId);
-        nativeReadable=!v.error;
-        active=nativeReadable && (v.busy===true||v.waiting===true);
-      }catch{}
-      // Backgrounded Chrome tabs can throttle the 750ms content timer for
-      // many seconds. Wake the SAME observation path only when native state
-      // was actually readable. Missing anchors retain the timer's retry
-      // behavior, including the A -> B -> A navigation revocation fence.
-      // This does not assert success or send a message. m.busy serializes runs.
-      if(nativeReadable)void observe();
-      respond({ ok: true, value:{ active } }); return;
+      const s = message.session;
+      if (disposed || !s || s.documentKey !== documentKey || s.conversationId !== conversation() ||
+          typeof s.observationLease !== 'string' || !s.observationLease ||
+          typeof s.sessionId !== 'string' || !s.sessionId || !Number.isInteger(s.tabId) || s.tabId < 0) {
+        respond({ ok: false, error: 'PAGE_IDENTITY_CHANGED' }); return;
+      }
+      if (monitor?.observationLease === s.observationLease) {
+        if (monitor.routeRevoked || monitor.sessionId !== s.sessionId || monitor.tabId !== s.tabId ||
+            monitor.conversationId !== s.conversationId) {
+          respond({ ok: false, error: 'PAGE_IDENTITY_CHANGED' }); return;
+        }
+      } else {
+        if (monitor) revokeObservation(monitor);
+        monitor = { ...s, routeRevoked: false, sequence: 0, pending: [], deliveryFlight: null,
+          lastQueuedFingerprint: null, lastQueuedAt: 0, prose:new Map(), proseArrivals:[], proseFlight:null };
+        const owner=monitor;
+        if(globalThis.CIP_ARTIFACT_TRANSFER)owner.artifacts=globalThis.CIP_ARTIFACT_TRANSFER.create({
+          rpc,guard:()=>checkObservation(owner),binding:()=>({sessionId:owner.sessionId,
+            observationLease:owner.observationLease,tabId:owner.tabId,documentKey,url:location.href,
+            conversationId:owner.conversationId})});
+      }
+      void observe();
+      respond({ ok: true, value: { observing: true } }); return;
     }
     if (message.type === 'command') {
       run(message.command).then(value => respond({ ok: true, value }), e => respond({
@@ -387,5 +425,6 @@
         ...(e.bindingUrl?{bindingUrl:e.bindingUrl}:{})
       }));return true;
     }
+    respond({ ok: false, error: 'UNKNOWN_MESSAGE' });
   });
 })();

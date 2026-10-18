@@ -18,11 +18,12 @@
 
 ```sh
 npm run check             # 语法、JSON、清单与协议版本一致性
-npm test                  # Node 单元与集成测试（无需安装依赖）
+npm test                  # Node 单元与集成测试（安装上述固定开发依赖）
 npm run verify:upstream   # 改动 CoS 移植层时：来源与哈希校验
 npm install --ignore-scripts --no-audit --no-fund   # 安装固定版本的开发依赖
 npm run typecheck         # TypeScript、界面或 Provider 有改动时
 npm run test:sdk          # Provider 事件有改动时：用真实 SDK 校验
+CIP_PASEO_SERVER_PACKAGE=/path/to/server-0.11.4/package npm run test:host-recovery
 ```
 
 离线浏览器测试需要 Python、Playwright 和 Chromium（安装方法见 [README](../README.md) 第 3 节）。它们加载内存页面，不登录账号、不发真实消息：
@@ -56,6 +57,12 @@ mkdir -p "$d" && curl -L -o "$d/content.js" \
 ```
 
 `vendor/cos/reference/` 已被 git 忽略；也可以用环境变量 `CIP_UPSTREAM_CONTENT_JS` 指向该文件。
+
+### 宿主能力限制诊断（不是修复验收）
+
+`npm run test:host-limitations` 单独执行 `tests/*.diagnostic.mjs` 中的研究实验。它直接向 Broker/宿主注入任意正文改写，或尝试插件卡片等本次未采用的协议；在 Paseo 0.11.4 上仍会失败，不能当作已解决，也不能称为 main 原有失败。这些实验和断言仍可运行，没有删掉或设为 skip。
+
+默认 `npm test` 执行实际生产路径回归，包括原始消息完成、接收端一次适配、Broker/Provider、历史重开及异常处理；旧流式研究标HISTORICAL，不充当新生产覆盖。原始文本真的改写、宿主最终回报仅取工具后的尾段，仍属于明确记录的限制；默认测试通过不代表这些限制消失。部署前还需要真实账号验收。
 
 ## 2. 真实账号验收
 
@@ -131,3 +138,59 @@ PASS / FAIL / BLOCKED / NOT RUN：
 4. **小范围实机验证后放行：** 用新测试消息验证收发、恢复及受影响的工具/UI。失败即停止扩大使用，按备份和兼容方案回滚；**不重发结果不明的旧消息**。
 
 不预设“完成状态必须在 10 秒内”一类未经基线证实的硬指标。先记录真实网页结束到 Paseo `completed` 的耗时与复现条件，确认体验目标后再决定阈值；**不能通过弱化终态验证制造更快的数字**。
+
+
+## 未发布完整消息模式（2026-10-17）
+
+正文逐字要求已由用户改为每条原生消息完结后提交。主覆盖：`complete-prose`、`completed-message-{source,observer,receiver,http}`、`message-receipt-integrity`；既有 append-only/public-prose/monitor 覆盖保留并迁移了相应交互。历史研究模型明确标为 HISTORICAL。
+
+`completed-message-browser.py` 串起生产 MAIN/ISOLATED/content、真实 Store/Broker/Provider 和原版宿主 mapper/renderer；它是合成隔离页面，不是已安装 MV3/真实账号验收。原生工具/图片 MV3 仍单独跑。
+
+本轮修正的夹具问题并非生产修复：native-activity 派生场景本来就新增两次工具调用，应精确核对三个原生 ID（保留隐私/详情/终态断言）；images 派生脚本更新了已失效的源码替换定位，保留源身份、可解码像素、重载不重发等断言。concurrency区分异步接受与实际preflight终态；导航走必须WRONG_CONVERSATION且不Send，不能当关闭后静默重开。生产已修，相关单测/MV3通过；确证关闭仍可正常重开。
+
+最新候选alpha.4.20/扩展0.2.26/桥7/正文IPC v2，SDK为0.12.0-beta.1：默认504项503过1红OBS-P1、0skip；新旧原版完整宿主类各13项10过3红、0skip；新版选定21个浏览器/MV3全部通过；宿主能力诊断23项16过7红、0skip。日志为 `paseo-012-full-final.log`、`paseo-012-real-{0.11.4,0.12.0-beta.1}.log`、`paseo-012-{browser,mv3}.tsv`、`paseo-012-diagnostics-final.log`（接手工作区logs）。新版拒绝加载的manifest修复和来源核查见 `PASEO_012_COMPATIBILITY.md`；准入4/4不等于交付门禁通过。
+
+宿主类套件不在默认通配符内，必须单独运行；支持固定0.11.4和0.12.0-beta.1，按包实际版本选择来源并使用它自己的SDK。缺包、未知版本、版本/哈希不符是失败，不skip。REAL-9覆盖Provider收到新prompt前后两个pending窗口（契约：旧/新正文各可见一次，按到达顺序，归轮为已知限制），REAL-12覆盖新prompt失败后旧正文仍可见一次（插件侧暂存后交付）。见 `HOST_CONCURRENT_DELIVERY_GATE.md`。没有部署或两个原Agent已恢复的结论。
+
+完整来源核对需设置CIP_UPSTREAM_CONTENT_JS、CIP_PASEO_PROVIDER_SOURCE、CIP_PASEO_AGENT_MANAGER_SOURCE、CIP_PASEO_RENDERER_BUNDLE；CIP_SDK_MODULE若自定义，使用本地file:/// URL而非HTTP。不得沿用缺来源时的skip结果冒充0skip验收。
+
+## alpha.4.21：工具授权、工具卡片、引用
+
+- `tests/approval.test.mjs`：ChatGPT 工具授权框 → Paseo 原生授权请求（只有“允许一次 / 拒绝”，按 SDK schema 校验）；Broker 只接受本轮当前授权框的、经网页确认的点击；网页上直接处理会如实提示。
+- `tests/approval-card-browser.py`：真实 Chrome 加载 2026-10-17 从已登录 ChatGPT 页面抓取的授权框 HTML（`tests/fixtures/chatgpt-approval-card.html`），验证读取应用/工具/命令、详情弹层复原、只点 Allow once 或 Deny、绝不点 Always allow。
+- `tests/native-timeline.test.mjs` TIMELINE-APP：同一次应用调用（授权前 `asdk_app_… · tool` 与运行时 `codex_apps · app.tool`）合并为一张可读卡片；`approval_wait` 不单独成卡。
+- `tests/citations.test.mjs`：行内引用标记按页面顺序配对来源标签（数量完全一致才配对），渲染为 Markdown 链接；未配对的标记丢弃，绝不原样显示或猜测链接。
+
+## alpha.4.27：Paseo 展示文案
+
+- `tests/ui-copy.test.mjs`：统一状态词；运行、送达、同步、跟踪分开表达；授权按钮保留网页原名，不将 Chrome 的 Allow 称为“允许一次”；工具结果未知不表述为成功；网页提示和公开思考摘要不改写。
+- 直接执行生产 TSX（原生组件与 hooks 使用隔离桩），覆盖新旧状态卡、宽屏/紧凑设置页、保存结果不确定时的提示；Provider 事件使用原版 SDK 校验。不是实机 UI 或真实账号验收。
+- 文案规范与关键示例见 [UI_COPY.md](UI_COPY.md)。仅修改插件展示，不改 Chrome 扩展、发送/授权/停止逻辑。扩展版本仍为 0.2.32。
+
+## 持续同步（2026-10-18）测试面
+
+**自动门禁（可重复运行）**
+
+| 命令 | 结果 | 说明 |
+|---|---|---|
+| `npm test` | **745 / 745** | Store/Broker/Provider/HTTP/合成宿主投影 |
+| `npm run test:sdk` | **2 / 2** | 安装的 SDK schema 校验真实 Provider 事件 |
+| `npm run test:host-gate` | **4 / 4** | 固定 `@getpaseo/server@0.12.0-beta.2` 原版宿主类：屏障、替换连接、宿主 cancel 尾部、会话层 pending prompt |
+| 26 个隔离 Chromium / MV3 套件 | **26 / 26** | 见下 |
+
+当前契约 MV3 端到端（`npm run test:mv3-current`，6 项）：真实 unpacked 扩展 + service worker + MAIN/ISOLATED + Chrome tabs + 真实 Node Runtime/Provider。验证：一个 Paseo Send → 一条用户回声 + 一条助手正文、无重复用户来源；页面重载后继续观察且不重发；第二轮复用同一对话且只多一个 Send；在 ChatGPT 里手动输入的消息被当作网页来源，不产生 Paseo Send。页面与网络仍是离线夹具，不是实账号验收。
+
+当前契约 Chromium（核心）：`page-content`（Work/正文分型/审批读取）、`continuous-actions`（观察器与 Stop/审批动作适配器）、`button-state`（只按可见按钮判状态）、`artifact`（原字节/分块/下载/拒绝源）、`public-message`（MAIN/ISOLATED 39 项）、`prose-source-flow`（真实来源→Provider→原版 reducer）、`media-source-flow`（来源→传输→存储）。
+
+兼容保留（仍通过）：`attachment-order`、`failed-send-disposal`、`failed-send-persistence`、`composer-diagnostics`、`receipt-interaction`、`catalog-browser-regression`、`discovery-browser`、`app-receipt`、`outbound-upload`、`pending-receipt`、`popup-uiux`、`response-delay-app`、`send-evidence`、`send-evidence-edge`、`upload-paste`、`eight-tabs-mv3`、`manual-reload-mv3-flow`、`upload-isolated-world-mv3`。
+
+**已归档**：`tests/legacy/` 保留旧 `CIP_DOM.state`/`/event`/`native-activity`/外部导入/逐消息回执套件与两份宿主诊断。逐文件退役原因与当前覆盖映射见 `tests/legacy/README.md`。这些脚本不属于验收，不再放进任何绿灯统计。
+
+**部署前仍缺的验收**
+
+1. **真实 MV3 端到端**：已由 `tests/binding-mv3-current.py` 覆盖到离线夹具层（真实扩展/worker/worlds/Runtime）。仍未覆盖的是**真实 ChatGPT 页面标记**与真实账号；部署前需在真实页面复跑同一断言。
+2. **真实账号与 UI**：未登录真实 ChatGPT、未操作真实 Paseo 客户端/授权/Stop/附件下载。
+3. **AgentManager 自身 pendingRun 暂存路径**：宿主门禁覆盖会话层 pending prompt，不是 manager 的排队暂存路径。
+4. 宿主限制仍未解决也未声称解决：finalized foreground turn 原位恢复（OBS-P1）、跨运行片段工具卡合并、无原生跨平台下载 API（ART13）。见 `IN_PLACE_RECOVERY_PLAN.md`、`CONTINUOUS_SYNC_HOST_GATE.md`、`PROSE_2B_PROGRESS.md`。
+
+离线与隔离 Chromium 绿灯不能替代以上四项。

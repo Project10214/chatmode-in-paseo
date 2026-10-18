@@ -49,56 +49,23 @@ test('LINK3 wrong lease, tab, document and route cannot bind a foreign conversat
   await f.broker.bindConversation(claim.id,claim.lease,good);
   await assert.rejects(f.broker.bindConversation(claim.id,claim.lease,{...good,url:'https://chatgpt.com/c/other'}),/WRONG_CONVERSATION/);
 });
-test('LINK4 confirmed send followed by binding loss ends one turn but retains its usable link',async t=>{
-  const f=await fixture(t),s=await f.ready(),{event}=await f.sending(s);
-  await f.broker.observe({...event,kind:'binding_lost',diagnostic:{stage:'binding',reason:'message_unavailable'}});
-  const state=f.broker.snapshot(s.id);
-  assert.equal(state.status,'idle');
-  assert.equal(state.error,'BROWSER_BINDING_LOST');
-  assert.equal(state.turn.outcome,'failed');
-  assert.equal(state.conversationId,'chat-'+s.tabId);
-  assert.equal(f.broker.queued().length,0);
-});
-
-test('LINK5 authenticated browser heartbeat keeps a linked running turn beyond its nominal timeout',async t=>{
-  const f=await fixture(t),s=await f.ready(),{event}=await f.sending(s);
-  const old=Date.now()-4*60*60*1000;
-  await f.store.transaction(d=>{d.sessions[s.id].turn.createdAt=old;});
-  await f.broker.observe({...event,kind:'heartbeat'});
-  await f.broker.tick(Date.now());
-  assert.equal(f.broker.snapshot(s.id).status,'running');
-  assert.ok(f.broker.snapshot(s.id).turn.lastObservedAt>old);
-  assert.equal(f.broker.queued().length,0);
-});
-test('LINK6 a foreign tab cannot renew a turn by pretending to be alive',async t=>{
-  const f=await fixture(t),s=await f.ready(),{event}=await f.sending(s);
-  for(const patch of [{tabId:900},{documentKey:'wrong'},{lease:'wrong'},{url:'https://chatgpt.com/c/other'}])
-    await assert.rejects(f.broker.observe({...event,...patch,kind:'heartbeat'}));
-  assert.equal(f.broker.snapshot(s.id).turn.lastObservedAt,undefined);
-});
-test('LINK7 after an uncertain second prompt, Ensure must not demand the stale first native user ID',async t=>{
-  const f=await fixture(t),s=await f.ready(),first=await f.sending(s,'first','hello');
-  await f.broker.observe({...first.event,kind:'snapshot',messageId:'first-answer',text:'hello'});
-  await f.broker.observe({...first.event,kind:'completed',finalConfirmed:true,messageId:'first-answer'});
-  const later=await f.sending(f.broker.snapshot(s.id),'second','new',false);
-  await f.broker.result(later.claim.id,later.claim.lease,{error:'RECEIPT_UNCONFIRMED',
-    bindingUrl:'https://chatgpt.com/c/chat-'+s.tabId});
-  const waiting=f.broker.ensurePage(s.id);waiting.catch(()=>{});
-  let ensure;
-  for(let i=0;i<100;i++){
-    ensure=f.broker.queued().find(c=>c.kind==='ensure');
-    if(ensure)break;
-    await new Promise(r=>setTimeout(r,5));
-  }
-  assert.ok(ensure);
-  assert.equal(ensure.payload.previousNativeMessageId,null);
-  const claim=await f.broker.claim(ensure.id,s.tabId,s.documentKey,{
-    url:'https://chatgpt.com/c/chat-'+s.tabId});
-  await f.broker.result(ensure.id,claim.lease,{config:s.config,tabId:s.tabId,
-    url:'https://chatgpt.com/c/chat-'+s.tabId,nativeMessageId:null});
+test('LINK7 after an uncertain second prompt, Ensure must not demand the stale first native user ID',async t => {
+  const f = await fixture(t), s = await f.ready();
+  // First turn completes normally through the continuous page-view chain.
+  await f.sending(s, 'first', 'hello');
+  await f.view(f.broker.snapshot(s.id), {state: 'standby'});
+  // The second Send was dispatched but its receipt stayed uncertain.
+  const later = await f.sending(f.broker.snapshot(s.id), 'second', 'new', false);
+  const url = 'https://chatgpt.com/c/chat-' + s.tabId;
+  await f.broker.result(later.claim.id, later.claim.lease, {error: 'RECEIPT_UNCONFIRMED', bindingUrl: url});
+  const waiting = f.broker.ensurePage(s.id); waiting.catch(() => {});
+  const ensure = await until(() => f.broker.queued().find(c => c.kind === 'ensure' && c.sessionId === s.id));
+  assert.equal(ensure.payload.previousNativeMessageId, null,
+    'a possibly newer native turn must not be reconciled against the stale first user ID');
+  const claim = await f.broker.claim(ensure.id, s.tabId, s.documentKey, {url});
+  await f.broker.result(ensure.id, claim.lease, {config: s.config, tabId: s.tabId, url, nativeMessageId: null});
   await waiting;
 });
-
 test('LINK8 a previous-version blocked session with a saved URL remains recoverable by explicit new user intent',async t=>{
   const f=await fixture(t),s=await f.ready(),{event}=await f.sending(s,'old','old content');
   await f.store.transaction(d=>{
@@ -140,34 +107,19 @@ test('LINK9 a failed Stop retains its verified native user ID for safe closed-ta
   assert.equal(Object.values(f.store.read().commands).filter(c=>c.kind==='send').length,1);
 });
 
-test('LINK10 generic observation loss still clears its potentially stale reopen anchor',async t=>{
-  const f=await fixture(t),s=await f.ready(),{event}=await f.sending(s,'observed','message');
-  await f.broker.observe({...event,kind:'binding_lost',diagnostic:{stage:'binding',reason:'page_closed'}});
-  const resuming=f.broker.ensurePage(s.id);void resuming.catch(()=>{});
-  const ensure=await until(()=>f.broker.queued().find(c=>c.kind==='ensure'&&c.sessionId===s.id));
-  assert.equal(ensure.payload.previousNativeMessageId,null);
-  await f.broker.failUnclaimed(ensure.id,'PAGE_CLOSED');
-  await assert.rejects(resuming,/PAGE_CLOSED/);
-  assert.equal(Object.values(f.store.read().commands).filter(c=>c.kind==='send').length,1);
-});
-
-test('LINK11 a browser-origin Stop failure preserves its own proven user ID on reopen',async t=>{
-  const f=await fixture(t),s=await f.ready(),{event}=await f.sending(s,'seed','seed');
-  await f.broker.observe({...event,kind:'snapshot',messageId:'answer-seed',text:'completed'});
-  await f.broker.observe({...event,kind:'completed',messageId:'answer-seed',finalConfirmed:true});
-  const settled=f.broker.snapshot(s.id),url='https://chatgpt.com/c/'+settled.conversationId;
-  const imported=await f.broker.importExternalTurn({
-    sessionId:s.id,conversationId:settled.conversationId,tabId:settled.tabId,
-    documentKey:settled.documentKey,previousNativeMessageId:'native-seed',
-    nativeMessageId:'web-new-native-user',text:'from webpage',url
-  });
-  assert.equal(imported.imported,true);
-  assert.equal(f.broker.snapshot(s.id).turn.origin,'browser');
-  await f.broker.failTurn(s.id,'STOP_UNCONFIRMED',true,imported.turnId);
-  const resuming=f.broker.ensurePage(s.id);void resuming.catch(()=>{});
-  const ensure=await until(()=>f.broker.queued().find(c=>c.kind==='ensure'&&c.sessionId===s.id));
-  assert.equal(ensure.payload.previousNativeMessageId,'web-new-native-user');
-  await f.broker.failUnclaimed(ensure.id,'PAGE_CLOSED');
-  await assert.rejects(resuming,/PAGE_CLOSED/);
-  assert.equal(Object.values(f.store.read().commands).filter(c=>c.kind==='send').length,1);
-});
+/* Retired lane: browser heartbeat and binding_lost turn failure.
+ * LINK4 a binding loss is now an observation gap / unknown page state, never a
+ *       failed Paseo turn; the conversation link stays durable. See CONTOBS-10
+ *       and CM-R9 (a lost observer is not a content or completion gate).
+ * LINK5/LINK6 heartbeat was the old liveness proof. Liveness is now the
+ *       observation lease + sequence on the bound document; a foreign tab or
+ *       stale lease is rejected by CONTOBS-01/02 and MON-11/MON-17. No
+ *       heartbeat can renew or expire a native turn (CM-R9).
+ * LINK10 a generic observation loss used to fail the turn and clear the reopen
+ *       anchor. Loss is no longer terminal, so there is no stale anchor to
+ *       clear; the anchor rule itself is covered by LINK9 (passing) and CM-R9.
+ * LINK11 a browser-origin turn is an observed page run, not a Paseo Send turn,
+ *       so a browser-origin Stop failure has no Paseo turn anchor. A new Stop
+ *       interval starts a new page run without a Send: CPROV-05/CONTOBS-11,
+ *       Stop command rules in MON-16..MON-19.
+ */

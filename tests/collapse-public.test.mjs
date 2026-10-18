@@ -26,7 +26,7 @@ test('real collapsed public group carries two provider-directed calls and its co
  const value=project(turn);
  assert.deepEqual(value.calls.map(x=>x.callId),['mcp-1','mcp-2']);
  assert.equal(value.calls[0].status,'completed');
- assert.deepEqual(value.reasoning,[{id:'public-recap-1',text:'已核对公开过程'}]);
+ assert.deepEqual(value.reasoning,[{id:'public-recap-1',text:'已核对公开过程',position:[1,1]}]);
  assert.deepEqual(trace(turn).steps.map(x=>x.label),['mymac · read','tasks · list_items']);
  assert.equal(JSON.stringify(value).includes('PRIVATE_COT'),false);
  assert.equal(JSON.stringify(value).includes('NEVER_EXPORT'),false);

@@ -72,3 +72,25 @@ DOM 回退删除、Runtime ID 校验、15 秒观察恢复、Chrome 当前标签�
 **只有附件的用户消息。**上游 `publicTranscript` 只收录有文字的消息，只发文件的用户消息因此被跳过；网络请求证据遇到附件也按设计放弃。真实账号实发时，只带图片的消息已送达却无法确认回执。`cos-picker-main.js` 现在保留这类用户消息：正文只取其中的字符串部分（只有文件时为空），文件指针、文件名和元数据都不带出，使其能按原生用户消息 ID 确认回执。当前网页走 `cos-shell-public.js` 的类型化投影，它在此之前已丢掉文件数据，所以对这条路径上的原生用户项，正文为空即保留（ChatGPT 不会发送既无文字也无文件的用户消息）。
 
 本地无需安装 CoS 桌面程序，不主张两套 runtime/文件协议字节等价；**真实账号的端到端附件发送仍待专项验收**。
+
+
+## 2026-10-17 · append-only fallbackMarkdown 源头修复（alpha.4.16 / Chrome 0.2.23）
+
+保留固定 CoS 2.1.35 / e4056264 的公开源码、MIT 来源与最终 `unescapeFallbackMarkdown` 行为。未复制 CoS 的 session store，也未改 Paseo 宿主。新增 `extension/public-prose-main.js` 是 **CIP 自有代码**，MAIN world 在 `cos-shell-public.js` 前加载。仅对同原生 assistant message ID 的公开 fallbackMarkdown 增量进行按行、围栏、显示公式语法边界的安全提交；普通文字尽早显示，语法歧义暂存到明确。native final 到达时只做一次有界原 CoS decoder 全文核验并释放精确尾部。Provider 继续发送**同 ID 规范全文快照**，由 Paseo 计算增量。
+
+**与 CoS 移植的差异**：`cos-shell-public.js` 的 `shellItemText` DIL fallback 分支现调用 CIP 自有按消息状态器并传入 view/shell 来源与原生完成证据；无匹配 fallback 时不把不透明 `::chatgpt-content-reference` 当用户正文。`cos-picker-main.js` 仅转发固定安全错误码以识别已证实源分歧。`dom-adapter.js` 对已见过的 native assistant ID 不在临时 Fiber 缺失时换成旧 DOM 文字序列化；`content.js` 收到确定的 canonicalizer 错误后走既有 failed 结束流程，不重发用户输入。
+
+缓存按页面 Conversation 路径隔离，最多 32 条消息状态，每正文上限 256000 UTF-16 单元；优先淘汰已完成历史，路由变化或 pagehide 清除。已完成的中间发言可释放自己的待定尾部并退出活跃缓存，但不触发整轮完成；最终回答仍要求原生 turn complete。无正文的媒体引用不触发正文读取失败。语法扫描游标只向前，普通长行不再每个字从行首重扫；完整行只解码一次，保留行首上下文，避免把句中的反引号误认成代码围栏。完整正文在消息确认完成时核验，明确错误保持失败直到路由/生命周期重置。
+
+Paseo 0.11.4 的机器侧 `getLastAssistantMessage` 在工具卡片穿插时可能只读最后一个连续 assistant segment，**本补丁未解决且没有隐瞒**。真实 ChatGPT 页面采用何种 native/view/shell/DOM 分支仍需后续验证，合成绿例不等于所有线上事故已经消失。
+
+更新后的 CoS 派生文件 SHA-256 记录于 `vendor/cos/provenance.json`；新模块属于 CIP 自有实现，不假冒 CoS 来源。
+
+
+## 2026-10-17 · 未发布整条消息候选（alpha.4.18 / Chrome 0.2.25 / 协议 7）
+
+上述 alpha.4.16 的浏览器增量实现已经被新授权取代，不是当前候选设计。生产 `public-prose-main.js` 及 manifest 接线已删除；旧实现仅存于 HISTORICAL 测试夹具。
+
+`cos-shell-public.js` 原样读取公开 text/DIL，保留原生消息完成、可读性和源位置；不再调用浏览器解码器。`unescapeFallbackMarkdown` 移至接收侧 `shared/public-prose.mjs`，由 `server/message-delivery.mjs` 使用。普通 text 不解码，DIL 完结后一次适配；原 MIT 来源与最终转换语义保留。
+
+provenance 新增 SERVER 运行位置；校验器分别核查浏览器 manifest 与接收端导入/调用，不跳过迁移后的来源完整性检查。候选未部署；完整同步和旧 Agent 恢复未验收。

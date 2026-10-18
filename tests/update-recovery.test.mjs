@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { webcrypto } from 'node:crypto';
+import { PROTOCOL } from '../server/protocol.mjs';
 
 const script=await readFile(new URL('../extension/background.js',import.meta.url),'utf8');
 const workerSource=script.replace(/\nvoid pump\(\);\s*$/,'')+
@@ -12,7 +13,7 @@ const bound={sessionId:'session-1',conversationId:'bound-chat',tabId:71};
 
 async function worker({
   targets=[bound], local=null, oldEngine=false, reloadCompletes=true,
-  route=LINK, extraUnrelated=true,commands=[],legacyRuntime=false
+  route=LINK, extraUnrelated=true,commands=[],missingRecoveryRoutes=false,oldProtocol=false,contentProtocol=PROTOCOL
 }={}){
   const events={},requests=[],reloads=[],stored=local??{
     config:{endpoint:'http://127.0.0.1:17843',token:'demo-only'},
@@ -23,7 +24,7 @@ async function worker({
     stored.tabs[99]={sessionId:'session-2',documentKey:'doc-99'};
   const tabs=new Map([[71,{id:71,url:route}]]);
   if(extraUnrelated)tabs.set(99,{id:99,url:'https://chatgpt.com/c/other-private-chat'});
-  let fresh=!oldEngine,upgraded=!legacyRuntime;
+  let fresh=!oldEngine,upgraded=!missingRecoveryRoutes,compatible=!oldProtocol;
   const respond=value=>({ok:true,text:async()=>JSON.stringify(value)});
   const context=vm.createContext({
     URL,AbortSignal,structuredClone,crypto:webcrypto,console,Date,
@@ -32,7 +33,7 @@ async function worker({
     fetch:async (input,opts)=>{
       const name=new URL(input).pathname,body=opts?.body?JSON.parse(opts.body):null;
       requests.push({name,body});
-      if(name==='/hello')return respond({protocol:5,product:'chatmode-in-paseo'});
+      if(name==='/hello')return respond({protocol:compatible?PROTOCOL:PROTOCOL-1,product:'chatmode-in-paseo'});
       if(name==='/recovery-targets'){
         if(!upgraded)return {ok:false,text:async()=>JSON.stringify({error:'ROUTE_NOT_FOUND'})};
         return respond({sessions:targets});
@@ -47,7 +48,7 @@ async function worker({
         return respond({...command,tabId:body.tabId,
           documentKey:body.documentKey,lease:'mock-lease',deadline:Date.now()+30000});
       }
-      if(name==='/active'||name==='/bindings')
+      if(name==='/observations')
         return respond({sessions:upgraded?[]:targets});
       return respond({accepted:true});
     },
@@ -73,7 +74,7 @@ async function worker({
         reload:async id=>{reloads.push(id);if(reloadCompletes)fresh=true;},
         sendMessage:async (id,msg)=>{
           if(msg.type==='identity')return {ok:true,value:{
-            engine:id===99||fresh?ENGINE:'cos-native-alpha4.1',url:tabs.get(id).url,
+            protocol:contentProtocol,engine:id===99||fresh?ENGINE:'cos-native-alpha4.1',url:tabs.get(id).url,
             documentKey:fresh?'fresh-document':'old-document',
             nativeMessageId:'still-the-native-user'
           }};
@@ -92,7 +93,8 @@ async function worker({
     pump:()=>context.testWorker.pump(),
     update:()=>context.testWorker.upgrade(),
     setFresh:flag=>{fresh=flag;},
-    upgradeServer:()=>{upgraded=true;},
+    upgradeServer:()=>{upgraded=true;compatible=true;},
+    setContentProtocol:value=>{contentProtocol=value;},
     setPendingAge:ms=>{
       for(const target of stored.upgradeRecovery?.targets??[])
         if(target.phase==='reload_requested')target.requestedAt=Date.now()-ms;
@@ -182,13 +184,15 @@ test('UPDATE7 one stale tab cannot block an unrelated Agent command pipeline',as
   assert.equal(f.requests.some(x=>x.name==='/claim'&&x.body.id==='other-safe'),true);
 });
 
-test('UPDATE8 Chrome-first rolling upgrade refreshes the tab now, activates after Paseo Runtime upgrade',async()=>{
-  const f=await worker({legacyRuntime:true});
+test('UPDATE8 same-protocol missing recovery APIs use observation inventory and retain activation until available',async()=>{
+  const f=await worker({missingRecoveryRoutes:true});
   await f.start('update');
   assert.deepEqual(f.reloads,[71]);
   assert.equal(f.local.upgradeRecovery.targets[0].phase,'ready');
   assert.equal(f.requests.filter(x=>x.name==='/resume-agent').length,1);
-  // The old Runtime has no /resume-agent; keep the durable plan, do not replay Send.
+  assert.ok(f.requests.some(x=>x.name==='/observations'));
+  assert.equal(f.requests.some(x=>x.name==='/active'||x.name==='/bindings'),false);
+  // This compatible Runtime lacks /resume-agent; keep the plan, do not replay Send.
   await f.pump();
   assert.deepEqual(f.reloads,[71],'no second reload during staged upgrade');
   f.upgradeServer();
@@ -282,5 +286,27 @@ test('UPDATE15 late onInstalled(update) after version-change fallback never doub
   assert.equal(f.requests.filter(x=>x.name==='/resume-agent').length,1);
   await f.start('update'); // same Chrome update event delivered afterward
   assert.deepEqual(f.reloads,[71],'delayed event must not reload twice');
+  assert.equal(f.requests.filter(x=>x.name==='/resume-agent').length,1);
+});
+
+test('UPDATE16 protocol-7 runtime cannot authorize a protocol-8 refresh, wake or Send',async()=>{
+  const f=await worker({oldProtocol:true});
+  await f.start('update');await f.pump();
+  assert.deepEqual(f.reloads,[]);
+  assert.ok(f.requests.every(x=>x.name==='/hello'));
+  assert.equal(f.local.upgradeRecovery.phase,'discover');
+  f.upgradeServer();await f.pump();
+  assert.deepEqual(f.reloads,[71]);
+  assert.equal(f.requests.filter(x=>x.name==='/resume-agent').length,1);
+  assert.equal(f.requests.some(x=>['/claim','/authorize','/result'].includes(x.name)),false);
+});
+test('UPDATE17 same engine name does not make an old content protocol ready',async()=>{
+  const f=await worker({contentProtocol:PROTOCOL-1});
+  await f.start('update');
+  assert.deepEqual(f.reloads,[71]);
+  assert.equal(f.requests.some(x=>x.name==='/resume-agent'),false);
+  assert.equal(f.local.upgradeRecovery.targets[0].phase,'reload_requested');
+  f.setContentProtocol(PROTOCOL);await f.pump();
+  assert.deepEqual(f.reloads,[71]);
   assert.equal(f.requests.filter(x=>x.name==='/resume-agent').length,1);
 });

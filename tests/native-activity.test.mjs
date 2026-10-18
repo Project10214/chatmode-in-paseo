@@ -1,11 +1,20 @@
+/** Public tool/process sources under the continuous page-view contract.
+ *
+ * The old `kind:'activity'` snapshot lane and its `native-activity` card are no
+ * longer produced by the observation path; tools arrive as individually
+ * identified public sources and project to native tool_call items. The legacy
+ * `nativeActivity` validator is kept below because the card renderer still
+ * accepts already-persisted v1/v2 rows.
+ */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture, until } from './helpers.mjs';
-import { nativeActivity, phaseLabel } from '../server/activity.mjs';
-import { createProvider, CAPABILITIES } from '../server/provider.mjs';
+import {fixture,sourceItem} from './helpers.mjs';
+import {nativeActivity,phaseLabel} from '../server/activity.mjs';
 
 const step=(kind='search',done=false)=>({kind,label:'web.run',done});
 const activity=(phase='search',steps=[step()])=>({phase,nativeStatus:'in_progress',steps});
+const tool=(id,status,text,extra={})=>sourceItem(id,text,{role:'page',lane:'process',kind:'tool_call',
+ callId:'call-'+id,name:'read · web.run',status,order:[1],...extra});
 
 test('NATIVE1 public native activity is bounded to status/tool names only',()=>{
   assert.deepEqual(nativeActivity(activity()),activity());
@@ -18,92 +27,35 @@ test('NATIVE1 public native activity is bounded to status/tool names only',()=>{
     {...activity(),nativeStatus:'error'},
     {...activity(),steps:[{kind:'search',label:'query',done:'true'}]}
   ])assert.throws(()=>nativeActivity(bad),/ACTIVITY_INVALID/);
-  assert.equal(phaseLabel('approval'),'正在等待网页授权');
+  assert.equal(phaseLabel('approval'),'等待授权');
 });
 
-test('NATIVE2 observed native tool state goes into one replayable timeline card',async t=>{
-  const f=await fixture(t),s=await f.ready(),{event}=await f.sending(s);
-  const first={...event,kind:'activity',activity:activity()};
-  const seen=[];f.broker.subscribe(s.id,e=>seen.push(e));
-  const result=await f.broker.observe(first);
-  assert.equal(result.active,true);
-  await f.broker.observe(first);
-  assert.equal(seen.filter(e=>e.state==='activity').length,1);
-  let rows=f.broker.snapshot(s.id).history.filter(x=>x.kind==='native-activity');
-  assert.equal(rows.length,1);
-  assert.equal(rows[0].data.turnId,event.turnId);
-  assert.equal(rows[0].data.steps[0].done,false);
-  assert.equal(f.broker.snapshot(s.id).status,'running','activity alone is not completion proof');
-  await f.broker.observe({...first,activity:activity('search',[step('search',true)])});
-  rows=f.broker.snapshot(s.id).history.filter(x=>x.kind==='native-activity');
-  assert.equal(rows.length,1);assert.equal(rows[0].data.steps[0].done,true);
+test('NATIVE2/4 one public tool source is one tool_call item, updated in place, never an answer',async t=>{
+  const f=await fixture(t),s=await f.ready();await f.sending(s);
+  await f.view(s,{items:[tool('tool-1','running','running read')]});
+  let state=f.broker.snapshot(s.id),rows=state.history.filter(row=>row.type==='tool_call');
+  assert.equal(rows.length,1);assert.equal(rows[0].callId,'call-tool-1');
+  assert.equal(rows[0].status,'running');
+  assert.equal(rows[0].detail.text,'running read');
+  assert.equal(state.history.filter(row=>row.type==='assistant_message').length,0,
+    'a tool row never fabricates assistant prose');
+  assert.equal(state.status,'running');
+  const id=rows[0].id;
+  await f.view(s,{items:[tool('tool-1','completed','completed read')]});
+  state=f.broker.snapshot(s.id);rows=state.history.filter(row=>row.type==='tool_call');
+  assert.equal(rows.length,1,'the same tool call updates its own row');
+  assert.equal(rows[0].id,id);assert.equal(rows[0].status,'completed');
+  assert.equal(rows[0].detail.text,'completed read');
+  assert.equal(state.turn.outcome,null,'a tool status is never Paseo turn completion');
+  assert.equal(state.observation.page.state,'running');
 });
 
-test('NATIVE3 status ownership cannot cross tabs, leases or native turns',async t=>{
-  const f=await fixture(t),a=await f.ready(),b=await f.ready();
-  const x=await f.sending(a,'a'),y=await f.sending(b,'b');
-  const before=JSON.stringify(f.broker.snapshot(b.id).history);
-  for(const change of [
-    {sessionId:b.id},{tabId:y.event.tabId},{lease:y.event.lease},
-    {nativeMessageId:y.event.nativeMessageId},
-    {url:y.event.url}
-  ])await assert.rejects(f.broker.observe({...x.event,...change,kind:'activity',activity:activity()}));
-  assert.equal(JSON.stringify(f.broker.snapshot(b.id).history),before);
-});
-
-test('NATIVE4 completed terminal updates the same card and does not fabricate prose',async t=>{
-  const f=await fixture(t),s=await f.ready(),{event}=await f.sending(s);
-  const signals=[];f.broker.subscribe(s.id,e=>signals.push(e));
-  await f.broker.observe({...event,kind:'activity',activity:activity('thinking',[])});
-  await f.broker.observe({...event,kind:'snapshot',messageId:'native-final',text:'Done'});
-  await f.broker.observe({...event,kind:'completed',finalConfirmed:true,messageId:'native-final'});
-  const items=f.broker.snapshot(s.id).history.filter(x=>x.kind==='native-activity');
-  assert.equal(items.length,1);assert.equal(items[0].data.phase,'completed');
-  assert.equal(items[0].data.nativeStatus,'complete');
-  assert.equal(signals.filter(x=>x.state==='completed').length,1);
-  assert.equal(signals.filter(x=>x.state==='activity').length,1);
-  assert.equal(signals.find(x=>x.state==='completed').activityItem.data.phase,'completed');
-});
-
-test('NATIVE5 failed turn marks activity card failed; no fake completion',async t=>{
-  const f=await fixture(t),s=await f.ready(),{event}=await f.sending(s);
-  await f.broker.observe({...event,kind:'activity',activity:activity('tool',[step('tool')])});
-  await f.broker.observe({...event,kind:'failed',error:'NATIVE_ERROR'});
-  const state=f.broker.snapshot(s.id);
-  assert.equal(state.status,'idle');
-  assert.equal(state.conversationId,'chat-'+s.tabId);
-  assert.equal(state.turn.outcome,'failed');
-  assert.equal(state.history.find(x=>x.kind==='native-activity').data.phase,'failed');
-});
-
-test('NATIVE6 Paseo Provider emits upserted timeline plugin item and final update',async t=>{
-  const f=await fixture(t),events=[];
-  const provider=await createProvider({...f,status:()=>({connected:true})}).connect({versions:[1],capabilities:CAPABILITIES});
-  t.after(()=>provider.close());provider.onEvent(e=>events.push(e));
-  await provider.send({type:'session.open',requestId:'open',sessionId:'host',history:'skip',
-    config:{cwd:'/fixture',env:{},settings:{},mcpServers:{},persist:true,model:'m1',thinkingOption:'standard',providerOptions:{appIds:['asdk_app_a']}}});
-  for(let i=0;i<120&&!events.some(e=>e.type==='session.ready');i++)await new Promise(r=>setTimeout(r,5));
-  const opened=events.find(e=>e.type==='session.opened');
-  assert.ok(opened);
-  const sid=opened.persistence.data.id;
-  await provider.send({type:'session.prompt',sessionId:'host',prompt:{clientMessageId:'one',delivery:'auto',input:{type:'message',content:[{type:'text',text:'Hello'}]}}});
-  const open=await until(()=>f.broker.queued().find(c=>c.sessionId===sid&&c.kind==='open'));
-  const c=await f.broker.claim(open.id,150,'document-150');
-  await f.broker.result(open.id,c.lease,{config:open.payload.config,tabId:150,url:'https://chatgpt.com/'});
-  const sending=await until(()=>f.broker.queued().find(c=>c.sessionId===sid&&c.kind==='send'));
-  const claim=await f.broker.claim(sending.id,150,'document-150');
-  await f.broker.authorize(sending.id,claim.lease);
-  await f.broker.result(sending.id,claim.lease,{receipt:true,config:sending.payload.config,tabId:150,
-    url:'https://chatgpt.com/c/chat-150',nativeMessageId:'native-user-1'});
-  await until(()=>events.some(e=>e.type==='session.turn'&&e.state==='started'));
-  const ev={sessionId:sid,turnId:sending.payload.turnId,lease:claim.lease,nativeMessageId:'native-user-1',
-    tabId:150,documentKey:'document-150',url:'https://chatgpt.com/c/chat-150'};
-  await f.broker.observe({...ev,kind:'activity',activity:activity('search',[step('search')])});
-  await until(()=>events.some(e=>e.type==='timeline.item'&&e.item.kind==='native-activity'));
-  assert.equal(events.filter(e=>e.type==='timeline.item'&&e.item.kind==='native-activity').length,1);
-  await f.broker.observe({...ev,kind:'snapshot',messageId:'native-answer',text:'Result'});
-  await f.broker.observe({...ev,kind:'completed',finalConfirmed:true,messageId:'native-answer'});
-  assert.equal(events.filter(e=>e.type==='timeline.item'&&e.item.kind==='native-activity').length,2);
-  assert.equal(events.filter(e=>e.type==='session.turn'&&e.state==='completed').length,1);
-  assert.equal(events.some(e=>e.type==='session.runtime_failed'),false);
-});
+/* Retired assertions (mechanism removed):
+ * NATIVE3 activity-status ownership across tabs/leases/turns -> the observation
+ *   lease + document/URL fence is CONTOBS-01 and MON-11/17.
+ * NATIVE5 failed-turn activity card -> an abnormal/unreadable page is a page
+ *   state and issue, not a fabricated failed turn (CONTOBS-10, CPROV-07).
+ * NATIVE6 Provider upsert of the native-activity plugin card -> the page-state
+ *   card is the only status card now; provider upsert/replay is covered by
+ *   CPROV-02/CPROV-08 and the page-observation migration test.
+ */

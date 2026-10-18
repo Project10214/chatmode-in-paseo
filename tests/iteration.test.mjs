@@ -22,9 +22,18 @@ test('I02 duplicate first Send creates exactly one open and one native Send inte
  const f=await ctx(t),sid=await f.open();await f.c.send(prompt('a'));await f.c.send(prompt('a'));
  const cmd=await until(()=>f.broker.queued().find(c=>c.kind==='open'));assert.equal(f.broker.queued().length,1);
  const lease=await f.broker.claim(cmd.id,901,'doc901');await f.broker.result(cmd.id,lease.lease,{tabId:901,url:'https://chatgpt.com/',config:selection});
- await until(()=>f.broker.queued().some(c=>c.kind==='send'));
- assert.equal(f.broker.queued().filter(c=>c.kind==='send').length,1);assert.equal(f.events.filter(e=>e.type==='session.prompt_result').length,1);
+ const send=await until(()=>f.broker.queued().find(c=>c.kind==='send'));
+ assert.equal(f.broker.queued().filter(c=>c.kind==='send').length,1);
  assert.equal(f.broker.snapshot(sid).tabId,901);
+ // Acceptance is reported once the dispatched Send is observed/settled; a
+ // queued intent alone is not acceptance.
+ const claim=await f.broker.claim(send.id,901,'doc901');
+ await f.broker.authorize(send.id,claim.lease);
+ await f.broker.result(send.id,claim.lease,{receipt:true,config:selection,tabId:901,
+  url:'https://chatgpt.com/c/chat-901',nativeMessageId:'native-first'});
+ await until(()=>f.events.filter(e=>e.type==='session.prompt_result').length===1);
+ assert.equal(f.events.filter(e=>e.type==='session.prompt_result').length,1);
+ assert.equal(f.broker.queued().length,0);
 });
 test('I03 Stop during first-tab preparation cancels the queued open, never authorizes Send',async t=>{
  const f=await ctx(t);await f.open();await f.c.send(prompt('a'));

@@ -1,85 +1,41 @@
+/** Monitor continuity under the continuous page-view contract.
+ *
+ * The old monitor needed a native user anchor plus heartbeat evidence to keep
+ * running, and emitted `observation` gaps when a tool hid that anchor. Neither
+ * exists now: every tick reads the visible sources and the three buttons.
+ * A↔B route changes are still fenced by the observation lease (MON-11/MON-12).
+ */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import vm from 'node:vm';
-import { readFile } from 'node:fs/promises';
-import { webcrypto } from 'node:crypto';
+import {item,page} from './fixtures/content-page.mjs';
 
-const source=await readFile(new URL('../extension/content.js',import.meta.url),'utf8');
-function harness() {
-  const clock={now:10000}, sent=[],listeners={};
-  const location={hostname:'chatgpt.com',pathname:'/c/chat-a',href:'https://chatgpt.com/c/chat-a'};
-  let identity='missing', tick, handler;
-  const extensionId='a'.repeat(32);
-  const D={
-    conversationId:()=>location.pathname.split('/')[2]??null,
-    refreshTranscript:async()=>{},
-    messages:()=>[],
-    state:()=>{
-      if(identity==='missing')throw Object.assign(new Error('TRANSCRIPT_PENDING'),{code:'TRANSCRIPT_PENDING'});
-      if(identity==='working')return {busy:true,waiting:false,answer:null,images:[],imageFinalId:null,
-        activity:{nativeStatus:'in_progress',steps:[]},error:null};
-      return {busy:false,waiting:false,answer:{id:'native-answer-a',text:'answer',final:true},
-        images:[],imageFinalId:null,activity:{nativeStatus:'complete',steps:[]},error:null};
-    }
-  };
-  const ctx=vm.createContext({
-    console,crypto:webcrypto,location,
-    Date:class extends Date {static now(){return clock.now;}},
-    performance:{now:()=>clock.now},setInterval:fn=>{tick=fn;return 1;},
-    clearInterval:()=>{},addEventListener:(name,fn)=>{listeners[name]=fn;},
-    document:{addEventListener:()=>{},removeEventListener:()=>{}},
-    navigation:{addEventListener:(name,fn)=>{listeners[name]=fn;}},
-    chrome:{runtime:{id:extensionId,onMessage:{addListener:fn=>handler=fn},
-      sendMessage:async message=>{
-        sent.push(message);return {ok:true,value:{accepted:true,active:true}};
-      }}},
-    CIP_DOM:D
-  });
-  vm.runInContext(source,ctx);
-  const s={sessionId:'session-a',turnId:'turn-a',lease:'one-time-lease',tabId:71,
-    documentKey:ctx.__CIP_CONTENT__.documentKey,conversationId:'chat-a',nativeMessageId:'native-user-a'};
-  const send=(message)=>new Promise(resolve=>handler(message,{id:extensionId},resolve));
-  return {clock,sent,listeners,location,s,send,tick:()=>tick(),changeState:value=>{identity=value;}};
-}
-test('NATIVE-GAP1 same document keeps monitoring when a tool hides the native user for >15 seconds',async()=>{
-  const f=harness();
-  assert.equal((await f.send({type:'monitor',session:f.s})).ok,true);
-  await f.tick();f.clock.now+=19000;await f.tick();
-  assert.ok(f.sent.every(e=>e.type==='observation'&&e.event.kind==='waiting'),
-    'missing user ID may only produce waiting, never a fake final or failed turn');
-  assert.equal(f.sent.length,1,'a repeated gap must not spam waiting notices');
-  const identity=await f.send({type:'identity'});
-  assert.equal(identity.value.nativeMessageId,null);
-  assert.equal(identity.value.observationActive,true);
-  f.changeState('finished');await f.tick();
-  assert.equal(f.sent.filter(e=>e.type==='observation'&&e.event.kind==='snapshot').length,1);
-  f.clock.now+=2000;await f.tick();
-  assert.equal(f.sent.filter(e=>e.type==='observation'&&e.event.kind==='completed').length,1);
-  assert.equal(f.sent.filter(e=>e.type==='command').length,0);
-});
-test('NATIVE-GAP2 A→B→A browser navigation invalidates a previously established monitor',async()=>{
-  const f=harness();
-  assert.equal((await f.send({type:'monitor',session:f.s})).ok,true);
-  f.location.pathname='/c/chat-b';f.location.href='https://chatgpt.com/c/chat-b';
-  f.listeners.currententrychange();
-  f.location.pathname='/c/chat-a';f.location.href='https://chatgpt.com/c/chat-a';
-  f.listeners.currententrychange();
-  assert.equal((await f.send({type:'monitor',session:f.s})).error,'PAGE_IDENTITY_CHANGED');
-  await f.tick();
-  assert.equal(f.sent.filter(e=>e.type==='observation'&&e.event.kind==='failed').length,1);
+const tool={id:'tool',userMessageId:null,role:'page',lane:'process',kind:'tool_call',
+ text:'read running',format:'text',order:[1],callId:'call-1',name:'read',status:'running'};
+
+test('the monitor never needs a native user anchor: a visible tool cannot hide later content or stop the timer',async t=>{
+ const f=page(t);
+ f.state.source.items=[tool];
+ await f.monitor();
+ assert.equal(f.accepted.length,1);
+ assert.equal(f.intervals.size,1);
+ // More than the old 15s gap budget: the same document still reports sources
+ // and buttons. No anchor, heartbeat or quiet-time evidence is consulted.
+ f.state.now+=19000;
+ f.state.source.items=[tool,item('answer','later answer',{order:[3]})];
+ await f.tick(19000);
+ assert.equal(f.state.sourceReads,2);assert.equal(f.state.controlReads,2);
+ const view=f.accepted.at(-1).event.view;
+ assert.deepEqual(view.items.map(value=>value.id),['tool','answer']);
+ assert.equal(view.page.state,'running');
+ assert.equal(f.intervals.size,1);
+ assert.ok(f.requests.every(request=>request.type==='page-view'));
 });
 
-test('NATIVE-GAP3 monitor heartbeat requires native in-progress evidence, not simply a live tab',async()=>{
-  const f=harness();
-  const unreadable=await f.send({type:'monitor',session:f.s});
-  assert.equal(unreadable.ok,true);
-  assert.equal(unreadable.value.active,false);
-  f.changeState('working');
-  const running=await f.send({type:'monitor',session:f.s});
-  assert.equal(running.ok,true);
-  assert.equal(running.value.active,true);
-  f.changeState('finished');
-  const finished=await f.send({type:'monitor',session:f.s});
-  assert.equal(finished.ok,true);
-  assert.equal(finished.value.active,false);
-});
+/* Retired assertions (mechanism removed):
+ * NATIVE-GAP2 A→B→A navigation invalidation -> MON-11 (revoked lease until a
+ *   fresh observation arrives) and MON-12 (late old-epoch response cannot
+ *   consume the new queue).
+ * NATIVE-GAP3 heartbeat needs native in-progress evidence -> there is no
+ *   heartbeat lane; liveness is the bound document/lease and each tick's
+ *   button read (MON-02/MON-07). A foreign tab/lease is rejected in MON-17.
+ */

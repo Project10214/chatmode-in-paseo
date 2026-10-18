@@ -31,9 +31,21 @@ test('installed SDK validates catalog, configuration, opening, messages and term
   await p.send(ProviderInputSchema.parse({ type: 'session.prompt', sessionId: 'host', prompt: { clientMessageId: 'text', delivery: 'auto', input: { type: 'message', content: [{ type: 'text', text: 'hello' }] } } }));
   const c = await until(() => f.broker.queued().find(c=>c.kind==='open')); const claim = await f.broker.claim(c.id,123,'document');
   await f.broker.result(c.id,claim.lease,{config:c.payload.config,tabId:123,url:'https://chatgpt.com/'});
+  const send = await until(() => f.broker.queued().find(c=>c.kind==='send'));
+  const sendClaim = await f.broker.claim(send.id,123,'document');
+  await f.broker.authorize(send.id,sendClaim.lease);
+  await f.broker.result(send.id,sendClaim.lease,{receipt:true,config:send.payload.config,tabId:123,
+    url:'https://chatgpt.com/c/chat-123',nativeMessageId:'native-user'});
   await until(() => events.some(e => e.type === 'session.turn'));
+  // Stop is only authorized while the page actually shows Stop.
+  const sid=send.sessionId;
+  await f.view(f.broker.snapshot(sid),{state:'running'});
   await p.send({ type: 'session.interrupt', sessionId: 'host', requestId: 'stop' });
-  await until(() => events.some(e => e.type === 'session.turn' && e.state === 'canceled'));
+  const stop=await until(() => f.broker.queued().find(c=>c.kind==='stop'));
+  const stopClaim=await f.broker.claim(stop.id,123,'document');
+  await f.broker.result(stop.id,stopClaim.lease,{stopped:true});
+  await f.view(f.broker.snapshot(sid),{state:'standby'});
+  await until(() => events.some(e => e.type === 'session.turn' && e.state === 'completed'));
   assert.equal(events.some(e => e.type === 'session.runtime_failed'), false);
 });
 

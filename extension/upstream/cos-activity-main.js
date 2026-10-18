@@ -41,7 +41,7 @@
   const nativeId=v=>typeof v==='string'&&ID.test(v)&&!/^fallback-turn-/i.test(v)&&!/:\d+:(?:user|assistant)$/.test(v);
   const status=v=>v==='complete'||v==='in_progress'?v:null;
   // A CoS viewCallsOf-style traversal; arguments and responses are never read.
-  function viewCallsOf(items) {
+  function viewCallsOf(items,turnDone=false) {
     const out=[],seen=new Set();
     function visit(source) {
       if(!Array.isArray(source))return;
@@ -56,7 +56,7 @@
         const id=item.callId;
         if(!nativeId(id)||seen.has(id))continue;seen.add(id);
         if(item.type==='dynamic-tool-call') {
-          if(item.tool==='exec')out.push({kind:'exec',label:'代码执行',done:item.completed===true});
+          if(item.tool==='exec')out.push({kind:'exec',label:'代码执行',done:item.completed===true||turnDone});
           continue;
         }
         const server=safe(item.invocation?.server),tool=displayTool(item.invocation?.tool);
@@ -66,7 +66,7 @@
         const isImage=/image|text2im|generate_picture/i.test(tool);
         const label=(server?server+' · ':'')+tool;
         if(label.length>160)continue;
-        out.push({kind:isImage?'image':isSearch?'search':'tool',label,done:item.completed===true});
+        out.push({kind:isImage?'image':isSearch?'search':'tool',label,done:item.completed===true||turnDone});
       }
     }
     visit(items);
@@ -76,7 +76,7 @@
   // booleans but do not expose reasoning/preamble/recap text or private thoughts.
   function shellTurnTrace(turn) {
     if(!turn||!Array.isArray(turn.items)||turn.items.length>MAX_ITEMS)return null;
-    const items=turn.items, steps=viewCallsOf(items), known=new Set();
+    const items=turn.items, steps=viewCallsOf(items,turn.status==='complete'), known=new Set();
     let lastAssistant=null,activeThought=false,images=0;
     for(const item of items) {
       if(!publicItem(item))continue;
@@ -145,9 +145,10 @@
     if(!turn||!Array.isArray(turn.items)||turn.items.length>MAX_ITEMS)return null;
     const reasoning=[],calls=[],seen=new Set();
     let ordinal=0;
-    function scan(items,depth=0) {
+    function scan(items,depth=0,parentPosition=[]) {
       if(depth>4||!Array.isArray(items))return;
-      for(const item of items) {
+      for(const [index,item] of items.entries()) {
+        const position=[...parentPosition,index];
         if(!publicItem(item))continue;
         if(item.type==='chatgpt-reasoning-group'){
           const recap=item.reasoningRecap;
@@ -157,24 +158,24 @@
             if(value && value.trim() && value.length<=4096 && reasoning.length<8){
               const key=nativeId(item.messageId)?item.messageId:
                 nativeId(item.id)?item.id:`recap-${++ordinal}`;
-              reasoning.push({id:key,text:value});
+              reasoning.push({id:key,text:value,position:[...position,-1]});
             }
           }
           // CoS's published recap of a round is a completed "thought".
           // Never inspect activeReasoning, raw/private analysis or tool payloads.
           if(reasoning.length<8 && recap?.type!=='hide_all'){
-            for(const step of Array.isArray(item.items)?item.items:[]){
+            for(const [stepIndex,step] of (Array.isArray(item.items)?item.items:[]).entries()){
               if(!publicItem(step)||step.type!=='reasoning'||
                  step.presentation!=='thought'||step.completed!==true)continue;
               const text=typeof step.content==='string'?step.content.trim():null;
               if(!text||text.length>4096)continue;
               const key=nativeId(step.messageId)?step.messageId:
                 nativeId(step.id)?step.id:`recap-${++ordinal}`;
-              if(!reasoning.some(r=>r.id===key))reasoning.push({id:key,text});
+              if(!reasoning.some(r=>r.id===key))reasoning.push({id:key,text,position:[...position,stepIndex]});
               if(reasoning.length>=8)break;
             }
           }
-          scan(item.items,depth+1);
+          scan(item.items,depth+1,position);
           continue;
         }
         if(!['mcp-tool-call','dynamic-tool-call'].includes(item.type)||calls.length>=32)continue;
@@ -193,10 +194,14 @@
             /image|text2im|generate_picture/i.test(tool)?'image':'tool';
         }
         // Only fixed status categories are surfaced; no native output objects.
-        const state=item.completed===true?(item.status==='failed'?'failed':'completed'):
-          item.status==='failed'?'failed':'running';
+        // A turn ChatGPT reports complete has no running calls left: history
+        // reloaded from the server omits the per-call completed flag
+        // (live page, 2026-10-17). An explicit failure stays a failure.
+        const settled=item.status!=='failed'&&item.completed!==true&&turn.status==='complete';
+        const state=item.status==='failed'?'failed':
+          item.completed===true||settled?'completed':'running';
         const details=visibleToolEvidence(section,callId);
-        calls.push({callId,name,kind,status:state,...(details?{details}:{})});
+        calls.push({callId,name,kind,status:state,position,...(settled?{settled:true}:{}),...(details?{details}:{})});
         seen.add(callId);
       }
     }

@@ -135,19 +135,7 @@ test('LATE-8 same-page event while reading identity does not destroy live bindin
   assert.equal(reply.ok,true,JSON.stringify(reply));
   assert.equal(reply.value.url,'https://chatgpt.com/c/chat-a');
 });
-test('LATE-9 same-page event during external-user read does not abort import discovery',async()=>{
-  const f=contentFixture('late');
-  const pending=f.send({type:'external-candidate',session:{...f.pending,previousNativeMessageId:'old-native-id'}});
-  f.samePageEvent();
-  const reply=await pending;
-  assert.equal(reply.ok,true,JSON.stringify(reply));
-  assert.equal(reply.value.reason,'anchor_unavailable');
-});
-test('LATE-10 actual A-B-A route departure still rejects pending identity',async()=>{
-  const f=contentFixture('late');
-  const pending=f.send({type:'identity'});
-  f.navigate('other');f.navigate('chat-a');
-  const reply=await pending;
-  assert.equal(reply.ok,false);
-  assert.equal(reply.error,'PAGE_IDENTITY_CHANGED');
-});
+/* Retired: external-candidate discovery and its async identity wait.
+ * The external-turn RPC no longer exists (MON-23 rejects it); browser-origin
+ * runs are observed sources. A→B→A route identity is still enforced and is
+ * covered by LATE-3/LATE-4 above plus MON-11/MON-12. */

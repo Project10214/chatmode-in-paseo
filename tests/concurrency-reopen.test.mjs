@@ -1,15 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture, selection, until } from './helpers.mjs';
+import { fixture, selection, until, sourceItem } from './helpers.mjs';
 import { Broker } from '../server/broker.mjs';
 import { Store } from '../server/store.mjs';
 import { createProvider, CAPABILITIES } from '../server/provider.mjs';
 import { settingsSnapshot } from '../server/diagnostics.mjs';
 
 async function completed(f,s){
- const sent=await f.sending(s,'first','hello');
- await f.broker.observe({...sent.event,kind:'snapshot',messageId:'native-reply',text:'reply'});
- await f.broker.observe({...sent.event,kind:'completed',messageId:'native-reply',finalConfirmed:true});
+ await f.sending(s,'first','hello');
+ await f.view(s,{state:'standby',items:[sourceItem('native-reply','reply')]});
  return f.broker.snapshot(s.id);
 }
 async function reopenCommand(f,s){
@@ -49,8 +48,9 @@ test('CFG5 an executing turn holds its slot until terminal; after finish queued 
  const f=await fixture(t,{maxConcurrent:1});const a=await f.ready(),b=await f.broker.create(selection);
  const held=await f.broker.slots.acquire(a.id),sent=await f.sending(a);held.release();let acquired=false;
  const queued=f.broker.slots.acquire(b.id).then(x=>{acquired=true;return x});await new Promise(r=>setImmediate(r));assert.equal(acquired,false);
- await f.broker.observe({...sent.event,kind:'snapshot',messageId:'finish-id',text:'done'});
- await f.broker.observe({...sent.event,kind:'completed',messageId:'finish-id',finalConfirmed:true});const lease=await queued;lease.release();
+ await f.view(a,{state:'running',items:[sourceItem('finish-id','done')]});
+ assert.equal(acquired,false,'a body does not release capacity while Stop remains visible');
+ await f.view(a,{state:'standby'});const lease=await queued;lease.release();
 });
 test('CFG6 blocked uncertain delivery reports DELIVERY_UNCONFIRMED, never generic SESSION_BUSY or a retry',async t=>{
  const f=await fixture(t);
@@ -69,7 +69,9 @@ test('REOPEN1 bound Conversation reopens with newer/missing native user ID and n
  const recovered=f.broker.snapshot(s.id);
  assert.equal(recovered.conversationId,s.conversationId);assert.equal(recovered.tabId,900);
  assert.equal(recovered.lastNativeMessageId,s.lastNativeMessageId,'an unseen browser turn is not silently claimed as synced');
- assert.equal(recovered.history.length,2);
+ assert.deepEqual(recovered.history,s.history,'reopening preserves the entire source and state history');
+ assert.equal(recovered.history.filter(item=>item.type==='assistant_message').length,1);
+ assert.equal(recovered.history.find(item=>item.type==='assistant_message').text,'reply');
  assert.equal(Object.values(f.store.read().commands).filter(x=>x.kind==='send').length,1);
 });
 test('REOPEN2 pending/uncertain turn is never restored as idle or replayed',async t=>{

@@ -1,9 +1,12 @@
 import { safeDiagnostic } from './diagnostics.mjs';
-import { nativeActivity, settleActivity } from './activity.mjs';
-import { nativeTimelineItem, recordNativeTimeline, settleNativeTimeline } from './native-timeline.mjs';
+import { APPROVAL_CHOICES } from './approval.mjs';
+import { ensureObservation, observationDescriptor, assertObservation, resetObservationDocument,
+  beginPromptObservation, recordPageView, recordObservationGap } from './continuous-observation.mjs';
 import { SlotQueue, concurrencyValue } from './slots.mjs';
 import path from 'node:path';
-import { MediaStore, IMAGE_LIMITS } from './media.mjs';
+import { MediaStore } from './media.mjs';
+import { ArtifactStore } from './artifacts.mjs';
+import { createArtifactTransfer } from './artifact-transfer.mjs';
 import { InputFileStore, uploadAllowance } from './input-files.mjs';
 import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -18,8 +21,14 @@ const finishTurn = (session, outcome) => {
   session.turn.outcome = outcome;
   const id = session.turn.clientMessageId;
   if (id && session.prompts[id]) session.prompts[id].outcome = outcome;
-  session.turn.nativeTerminalItems = settleNativeTimeline(session);
 };
+function rememberUserReceipt(session,nativeId) {
+  session.lastNativeMessageId=nativeId;
+  const turn=session.turn;if(!turn)return;
+  const prompt=session.prompts?.[turn.clientMessageId];if(prompt)prompt.nativeMessageId=nativeId;
+  const echo=session.history.find(item=>item.id==='user:'+turn.id);
+  if(echo)echo.messageId=nativeId;
+}
 // Discard only a proven-unsent attempt. Keep IDs/fingerprints/outcomes as
 // tombstones so deleting content can NEVER make an old message executable again.
 function discardUnsent(session, command) {
@@ -37,11 +46,16 @@ function discardUnsent(session, command) {
 }
 // A bound conversation can outlive a Send receipt deadline. This only preserves
 // the one authorized attempt; it never confirms delivery or authorizes replay.
-function pendingReceipt(c, s, url) {
+function pendingReceipt(c, s, url, {observedRebind=false} = {}) {
   if (c?.kind !== 'send' || c.phase !== 'authorized' || !c.lease ||
-      !s?.turn || s.turn.id !== c.payload.turnId || s.turn.outcome ||
-      !s.turn.authorized || s.tabId !== c.tabId || s.documentKey !== c.documentKey)
-    return false;
+      !s?.turn || s.turn.id !== c.payload.turnId ||
+      !s.turn.authorized) return false;
+  const sameDocument=s.tabId===c.tabId && s.documentKey===c.documentKey;
+  // Only the timeout handoff may retain uncertainty across a proven observed
+  // Send and subsequent observation rebind. This does NOT accept old receipts
+  // or change the new document; recovery needs its fresh observation lease.
+  if(!sameDocument && !(observedRebind && c.observationStarted &&
+      s.turn.observedRunId===c.observationStarted.runId)) return false;
   const route = conversationId(url) ?? s.conversationId;
   if (!route || (s.conversationId && s.conversationId !== route)) return false;
   s.conversationId = route;
@@ -50,16 +64,20 @@ function pendingReceipt(c, s, url) {
   s.turn.nativeMessageId = null;
   s.turn.lease = c.lease;
   s.turn.lastObservedAt = now();
-  s.status = 'sending';
+  if(!s.turn.outcome&&!s.observation?.run?.active)
+    beginPromptObservation(s,s.turn.id,now(),{awaitCommandView:Boolean(s.observation)});
+  s.status = s.observation?.run?.active?'running':'idle';
   s.error = null;
   c.phase = 'done';
   c.result = { receiptPending: true, conversationId: route };
   return true;
 }
 export class Broker {
-  constructor(store, { maxConcurrent = 2, commandTimeout = 90000, turnTimeout = 3 * 60 * 60 * 1000 } = {}) {
-    this.store = store; this.defaultConcurrency = concurrencyValue(maxConcurrent); this.commandTimeout = commandTimeout; this.turnTimeout = turnTimeout;
+  constructor(store, { maxConcurrent = 2, commandTimeout = 90000 } = {}) {
+    this.store = store; this.defaultConcurrency = concurrencyValue(maxConcurrent); this.commandTimeout = commandTimeout;
     this.media = new MediaStore(path.join(store.directory, 'media'));
+    this.artifacts = new ArtifactStore(path.join(store.directory,'artifacts'));
+    this.artifactTransfer = createArtifactTransfer({store,artifacts:this.artifacts,emit:event=>this.emit(event.id,event)});
     this.inputFiles = new InputFileStore(path.join(store.directory, 'input-files'));
     this.locks = new Set(); this.owners = new Map(); this.events = new EventEmitter(); this.events.setMaxListeners(200); this.waiters = new Map(); this.closed = false;
     this.slots = new SlotQueue(this); concurrencyValue(this.maxConcurrent);
@@ -76,14 +94,6 @@ export class Broker {
     const last = Object.values(this.store.read().commands).filter(c=>c.sessionId===s.id&&c.kind==='send'&&c.phase==='done'&&c.result?.nativeMessageId).sort((a,b)=>b.createdAt-a.createdAt)[0];
     return last?.result.nativeMessageId ?? null;
   }
-  // Conversation identity survives a turn. Idle conversations are still
-  // observed for new messages submitted directly from the bound webpage.
-  idleBindings() {
-    return Object.values(this.store.read().sessions)
-      .filter(s => s.status === 'idle' && s.conversationId && this.lastNativeMessage(s))
-      .map(s => ({ sessionId:s.id, conversationId:s.conversationId, tabId:s.tabId,
-        documentKey:s.documentKey, previousNativeMessageId:this.lastNativeMessage(s) }));
-  }
   // Reconnect inventory for extension upgrades. Only durable, bound sessions;
   // no chat text, credentials, or user message IDs are required to reload a tab.
   // An unbound temporary catalog/new-chat tab is never an update target.
@@ -92,6 +102,14 @@ export class Broker {
       .filter(s => s.conversationId && Number.isInteger(s.tabId) && s.tabId >= 0 &&
         s.status !== 'abandoned')
       .map(s => ({ sessionId:s.id, conversationId:s.conversationId, tabId:s.tabId }));
+  }
+  // A binding, not a turn outcome, owns observation. Receipt reconciliation
+  // accompanies the view; it never selects another collection mode.
+  observationBindings() {
+    return Object.values(this.store.read().sessions)
+      .filter(s=>s.conversationId&&Number.isInteger(s.tabId)&&s.documentKey&&
+        s.status!=='abandoned'&&s.observation)
+      .map(observationDescriptor);
   }
   // Queue configuration while a browser turn is in progress. The effective
   // settings used by its Send are never changed mid-turn.
@@ -104,72 +122,6 @@ export class Broker {
       else s.pendingConfig=config;
       return {pending:Boolean(s.pendingConfig),config};
     },{control:true});
-  }
-  // If several native turns were missed, do not guess their order or
-  // silently call a stale item "current". Preserve a visible reconciliation
-  // warning; the user can inspect the original ChatGPT thread.
-  async noteExternalGap({sessionId,conversationId:route,url,reason,
-    tabId,documentKey,previousNativeMessageId}) {
-    invariant(reason==='multiple_unobserved_turns','INVALID_GAP');
-    invariant(conversationId(url)===route,'WRONG_CONVERSATION');
-    identifier(documentKey);verifyNativeId(previousNativeMessageId);
-    const result=await this.store.transaction(d=>{
-      const s=d.sessions[sessionId];invariant(s&&s.conversationId===route,'SESSION_UNKNOWN');
-      invariant(s.tabId===tabId&&this.lastNativeMessage(s)===previousNativeMessageId,'PAGE_IDENTITY_MISMATCH');
-      invariant(!Object.values(d.sessions).some(other=>other.id!==s.id&&other.tabId===tabId),'TAB_ALREADY_OWNED');
-      invariant(s.status==='idle','SESSION_BUSY');
-      if(s.externalGap===reason)return {notified:false};
-      s.externalGap=reason;
-      return {notified:true,id:s.id};
-    },{control:true});
-    if(result.notified)this.emit(result.id,{id:result.id,state:'external-gap',reason});
-    return result;
-  }
-  // Browser-initiated turns have no Paseo clientMessageId and MUST NOT enqueue
-  // a second Send. The native user ID is the durable idempotency key.
-  async importExternalTurn({sessionId,conversationId:route,tabId,documentKey,
-    previousNativeMessageId,nativeMessageId:messageId,text:body,url,reopened=false}) {
-    identifier(sessionId);identifier(documentKey);
-    invariant(Number.isInteger(tabId)&&tabId>=0,'INVALID_TAB');
-    verifyNativeId(previousNativeMessageId);verifyNativeId(messageId);
-    text(body,LIMITS.text);
-    invariant(conversationId(url)===route,'WRONG_CONVERSATION');
-    const result=await this.store.transaction(d=>{
-      const s=d.sessions[sessionId];invariant(s&&s.conversationId===route,'SESSION_UNKNOWN');
-      invariant(!Object.values(d.sessions).some(other=>other.id!==s.id&&other.conversationId===route),
-        'CONVERSATION_AMBIGUOUS');
-      invariant(!Object.values(d.sessions).some(other=>other.id!==s.id&&other.tabId===tabId),
-        'TAB_ALREADY_OWNED');
-      if((s.turn?.origin==='browser'&&s.turn.nativeMessageId===messageId)||
-        (s.status==='idle'&&s.lastNativeMessageId===messageId&&s.turn?.origin==='browser')){
-        const stored=s.history.find(row=>row.type==='user_message'&&row.messageId===messageId);
-        invariant(stored?.text===body,'EXTERNAL_MESSAGE_CONFLICT');
-        invariant(s.tabId===tabId&&s.documentKey===documentKey,'PAGE_IDENTITY_MISMATCH');
-        invariant(s.turn.previousNativeMessageId===previousNativeMessageId,'EXTERNAL_ANCHOR_MISMATCH');
-        if(!s.turn.outcome)return {duplicate:true,sessionId:s.id,turnId:s.turn.id,lease:s.turn.lease,
-          tabId:s.tabId,documentKey:s.documentKey,conversationId:route,nativeMessageId:messageId};
-        return {duplicate:true,settled:true,sessionId:s.id};
-      }
-      invariant(s.status==='idle',s.status==='blocked'?'DELIVERY_UNCONFIRMED':'SESSION_BUSY');
-      invariant(s.tabId===tabId||(reopened===true&&s.tabId!==null),'PAGE_IDENTITY_MISMATCH');
-      invariant(this.lastNativeMessage(s)===previousNativeMessageId,'EXTERNAL_ANCHOR_MISMATCH');
-      invariant(messageId!==previousNativeMessageId,'NATIVE_MESSAGE_NOT_NEW');
-      invariant(s.history.length+1+LIMITS.turnFragments<=LIMITS.history,'HISTORY_LIMIT');
-      const turnId=randomUUID(),lease=token();
-      s.tabId=tabId;s.documentKey=documentKey;s.status='running';s.error=null;
-      delete s.externalGap;
-      s.turn={id:turnId,origin:'browser',createdAt:now(),authorized:false,
-        nativeMessageId:messageId,previousNativeMessageId,lease,outcome:null,lastObservedAt:now(),
-        historyStart:s.history.length+1};
-      s.lastNativeMessageId=messageId;
-      const item={type:'user_message',id:`user:${turnId}`,text:body,messageId};
-      s.history.push(item);
-      return {sessionId:s.id,turnId,lease,tabId,documentKey,conversationId:route,
-        nativeMessageId:messageId,item,imported:true};
-    });
-    if(result.imported)this.emit(result.sessionId,{id:result.sessionId,turnId:result.turnId,
-      state:'external-started',item:result.item});
-    return result;
   }
   async ensurePage(id, { signal } = {}) {
     invariant(!this.locks.has(id), 'CONFIGURATION_BUSY'); this.locks.add(id);
@@ -206,6 +158,7 @@ export class Broker {
       const newlyBound=!s.conversationId;
       s.conversationId=current;
       s.boundAt??=now();
+      ensureObservation(s);
       return {conversationId:current,bound:true,newlyBound,sessionId:s.id,turnId:s.turn.id};
     },{control:true});
     if(bound.newlyBound)this.emit(bound.sessionId,{id:bound.sessionId,turnId:bound.turnId,
@@ -230,12 +183,12 @@ export class Broker {
     invariant(allowed.includes(error),'INVALID_PREPARE_ERROR');
     const result=await this.store.transaction(d=>{
       const c=d.commands[id];invariant(c&&c.phase==='queued'&&!c.lease,'COMMAND_NOT_CLAIMABLE');
-      invariant(['catalog','open','configure','ensure','send','stop'].includes(c.kind),'CONTROL_ONLY');
+      invariant(['catalog','open','configure','ensure','send','stop','approval'].includes(c.kind),'CONTROL_ONLY');
       c.phase='failed';c.error=error;const s=c.sessionId&&d.sessions[c.sessionId];
       discardUnsent(s,c);
       if(c.kind==='send'&&s?.turn?.id===c.payload.turnId&&!s.turn.authorized&&!s.turn.outcome){
         s.status='idle';s.error=error;finishTurn(s,'failed');s.turn.notSent=true;
-        return {id:s.id,turnId:s.turn.id,state:'failed',error,activityItem:settleActivity(s,'failed')};
+        return {id:s.id,turnId:s.turn.id,state:'failed',error};
       }
       return null;
     });
@@ -254,15 +207,16 @@ export class Broker {
       for (const c of Object.values(data.commands)) if (['open', 'configure', 'ensure'].includes(c.kind) && c.error === 'RUNTIME_RESTARTED' && c.lease) {
         const s = data.sessions[c.sessionId]; if (s && s.status === 'idle') { s.status = 'blocked'; s.error = 'CONTROL_UNCONFIRMED'; }
       }
-      for (const s of Object.values(data.sessions)) if (busy(s)) {
-        const retained = s.conversationId && s.tabId !== null && s.documentKey &&
-          s.turn?.lease && !s.turn.outcome &&
-          (s.turn.receiptPending === true || (s.turn.nativeMessageId && ['running','stopping'].includes(s.status)));
-        if (retained) continue;
-        s.status = s.turn?.notSent === true ? 'idle' : 'blocked'; s.error = 'RUNTIME_RESTARTED';
-        if (s.turn && !s.turn.outcome) s.turn.outcome = 'failed';
-        if (s.turn && s.prompts[s.turn.clientMessageId]) s.prompts[s.turn.clientMessageId].outcome = 'failed';
-        settleActivity(s,'failed');
+      for (const s of Object.values(data.sessions)) {
+        const observation=ensureObservation(s);
+        // Import an unfinished host operation, never native model metadata as
+        // a current webpage state. Every bound conversation keeps observing.
+        if(!observation.run&&s.turn&&!s.turn.outcome&&s.turn.receivedAt)
+          beginPromptObservation(s,s.turn.id,s.turn.receivedAt);
+        if(s.conversationId&&s.tabId!==null&&s.documentKey)continue;
+        if(!busy(s))continue;
+        s.status=s.turn?.notSent===true?'idle':'blocked';s.error='RUNTIME_RESTARTED';
+        if(s.turn&&!s.turn.outcome)finishTurn(s,'failed');
       }
     });
     await Promise.all(Object.values(this.store.read().commands).filter(c => c.discarded)
@@ -300,6 +254,7 @@ export class Broker {
       const config = validateSelection(selection, d.catalog);
       d.sessions[id] = { id, config, cwd: text(cwd, 8000, true), systemPrompt: text(systemPrompt, 16000, true), conversationId: null, tabId: null,
         status: 'idle', contextRevision: 1, contextPending: true, turn: null, prompts: {}, history: [], sequence: 0, createdAt: now() };
+      ensureObservation(d.sessions[id]);
     });
     return this.snapshot(id);
   }
@@ -432,6 +387,21 @@ export class Broker {
       const list = this.waiters.get(id) ?? []; list.push({ resolve, reject }); this.waiters.set(id, list);
     });
   }
+  async waitForSendObservation(id) {
+    const command=this.store.read().commands[id];invariant(command?.kind==='send','COMMAND_UNKNOWN');
+    if(command.observationStarted)return {observed:true,...command.observationStarted};
+    if(['done','failed'].includes(command.phase))return this.wait(id);
+    let unsubscribe=()=>{};
+    const observed=new Promise(resolve=>{
+      unsubscribe=this.subscribe(command.sessionId,event=>{
+        if(event.state==='send-observed'&&event.turnId===command.payload.turnId)resolve({observed:true,runId:event.runId});
+      });
+      const current=this.store.read().commands[id];
+      if(current?.observationStarted)resolve({observed:true,...current.observationStarted});
+    });
+    try {return await Promise.race([observed,this.wait(id)]);}
+    finally {unsubscribe();}
+  }
   settle(id, error, result) { const list = this.waiters.get(id) ?? []; this.waiters.delete(id); for (const w of list) error ? w.reject(new BridgeError(error)) : w.resolve(result); }
   queued() { return Object.values(this.store.read().commands).filter(c => c.phase === 'queued').sort((a, b) => Number(b.kind === 'stop') - Number(a.kind === 'stop') || a.createdAt - b.createdAt).slice(0, 8); }
   async claim(id, tabId, documentKey, proof = {}) {
@@ -476,19 +446,22 @@ export class Broker {
       // A slow browser may return its genuine native receipt after the 90s
       // command deadline became a soft handoff. Never discard that late proof.
       if(c.phase==='done' && c.result?.receiptPending && result.receipt===true &&
-         s?.turn?.receiptPending && !s.turn.outcome && s.turn.id===c.payload.turnId &&
+         s?.turn?.receiptPending && s.turn.id===c.payload.turnId &&
          s.turn.lease===lease && s.tabId===c.tabId && s.documentKey===c.documentKey){
         invariant(sameSelection(result.config,s.config),'RECEIPT_UNCONFIRMED');
         invariant(conversationId(result.url)===s.conversationId,'WRONG_CONVERSATION');
         const nativeId=verifyNativeId(result.nativeMessageId);
-        s.turn.receiptPending=false;s.turn.nativeMessageId=nativeId;s.lastNativeMessageId=nativeId;
-        s.turn.receivedAt=now();s.turn.lastObservedAt=now();s.status='running';
+        s.turn.receiptPending=false;s.turn.nativeMessageId=nativeId;rememberUserReceipt(s,nativeId);
+        s.turn.receivedAt=now();s.turn.lastObservedAt=now();
+        if(!s.turn.outcome&&!s.observation.run?.active)beginPromptObservation(s,s.turn.id,now(),{awaitCommandView:true});
+        s.status=s.observation.run?.active?'running':'idle';
         c.result={receipt:true,conversationId:s.conversationId,nativeMessageId:nativeId};
         affected={id:s.id,turnId:s.turn.id,state:'receipt'};
         return {value:c.result};
       }
       if (c.phase === 'done' || c.phase === 'failed') return { replay: true, error: c.error, value: c.result };
       invariant(c.phase !== 'queued', 'NOT_CLAIMED');
+      if(c.kind==='send')invariant(s&&s.tabId===c.tabId&&s.documentKey===c.documentKey,'PAGE_IDENTITY_MISMATCH');
       const diagnostic = safeDiagnostic(result.diagnostic);
       if (diagnostic) c.diagnostic = diagnostic;
       if (result.error) {
@@ -501,7 +474,12 @@ export class Broker {
         const recoverable = code === 'RECEIPT_UNCONFIRMED'
           ? diagnostic?.nativeClicked === true
           : ['CONTENT_TIMEOUT','CONTENT_UNAVAILABLE','COMMAND_UNCONFIRMED'].includes(code);
-        if (recoverable && wasAuthorized && !diagnostic?.guardCode &&
+        // A later receipt guard failure cannot revoke a previously accepted
+        // dispatch frame or select webpage state. Keep the exact Send receipt
+        // pending; pendingReceipt still enforces command/document ownership.
+        const observedDispatch=c.observationStarted &&
+          s?.turn?.observedRunId===c.observationStarted.runId;
+        if (recoverable && wasAuthorized && (!diagnostic?.guardCode || observedDispatch) &&
             result.notSent !== true && pendingReceipt(c, s, result.bindingUrl))
           return { value: c.result, pending: { id:s.id, turnId:s.turn.id, state:'receipt-pending' } };
         c.phase = 'failed'; c.error = code;
@@ -520,7 +498,7 @@ export class Broker {
           const uncertain=s.turn.authorized&&result.notSent!==true;
           s.status=uncertain&&!s.conversationId?'blocked':'idle';
           s.error = code; finishTurn(s, 'failed');
-          affected = { id: s.id, turnId: s.turn.id, state: 'failed', error: code, activityItem:settleActivity(s,'failed') };
+          affected = { id: s.id, turnId: s.turn.id, state: 'failed', error: code };
         }
         if (['open', 'configure', 'ensure'].includes(c.kind) && s && result.notApplied !== true && s.status === 'idle') {
           // APP_SELECTION_CHANGED is a pre-Send editor ownership refusal.
@@ -542,19 +520,22 @@ export class Broker {
           // identity of the previous user turn. Keep the last verified ID for
           // independent reconciliation rather than adopting unobserved turns.
         }
-        s.tabId = c.tabId; s.documentKey = c.documentKey; s.config = result.config;
+        if(s.tabId!==c.tabId||s.documentKey!==c.documentKey)resetObservationDocument(s,c.tabId,c.documentKey);
+        s.config = result.config;
         if (s.pendingConfig && sameSelection(s.pendingConfig,s.config)) delete s.pendingConfig;
         if (s.conversationId) invariant(conversationId(result.url) === s.conversationId, 'WRONG_CONVERSATION');
         c.result = { config: s.config, tabId: s.tabId };
       } else if (c.kind === 'send') {
-        invariant(c.phase === 'authorized' && s && s.turn.id === c.payload.turnId && !s.turn.outcome, 'SEND_NOT_AUTHORIZED');
+        invariant(c.phase === 'authorized' && s && s.turn.id === c.payload.turnId && !s.turn.notSent, 'SEND_NOT_AUTHORIZED');
         const conversation = conversationId(result.url);
         invariant(conversation && (!s.conversationId || s.conversationId === conversation), 'WRONG_CONVERSATION');
         invariant(result.receipt === true && sameSelection(result.config, s.config), 'RECEIPT_UNCONFIRMED');
         const nativeMessageId = verifyNativeId(result.nativeMessageId);
-        s.conversationId = conversation; s.tabId = c.tabId; s.documentKey = c.documentKey; s.lastNativeMessageId = nativeMessageId;
+        s.conversationId = conversation; s.tabId = c.tabId; s.documentKey = c.documentKey; rememberUserReceipt(s,nativeMessageId);
         if (c.payload.contextRevision === s.contextRevision) s.contextPending = false;
-        s.status = 'running'; s.turn.nativeMessageId = nativeMessageId; s.turn.lease = lease; s.turn.receivedAt = now();
+        s.turn.nativeMessageId = nativeMessageId; s.turn.lease = lease; s.turn.receivedAt = now();
+        if(!s.turn.outcome&&!s.observation.run?.active)beginPromptObservation(s,s.turn.id,now(),{awaitCommandView:true});
+        s.status=s.observation.run?.active?'running':'idle';
         // The page can prove its text receipt independently from whether
         // the selected @ app was serialized in the exact ChatGPT POST.
         // Never treat a DOM-only chip or unknown transport as tool access.
@@ -564,9 +545,18 @@ export class Broker {
         c.result = { receipt: true, conversationId: conversation, nativeMessageId, appNetworkEvidence };
         affected = { id: s.id, state: 'receipt', turnId: s.turn.id, appNetworkEvidence };
       } else if (c.kind === 'stop') {
-        invariant(s && s.turn?.id === c.payload.turnId && result.stopped === true && result.nativeMessageId === s.turn?.nativeMessageId, 'STOP_UNCONFIRMED');
-        if (!s.turn.outcome) { finishTurn(s, 'canceled'); s.status = 'idle'; affected = { id: s.id, turnId: s.turn.id, state: 'canceled', activityItem:settleActivity(s,'canceled') }; }
-        c.result = { stopped: true };
+        invariant(s&&s.observation?.lease===c.payload.observationLease&&
+          s.documentKey===c.documentKey&&s.tabId===c.tabId&&result.stopped===true,'STOP_UNCONFIRMED');
+        // Only ordinary page-view controls, not a click receipt, end the run.
+        c.result={stopped:true};
+      } else if (c.kind === 'approval') {
+        invariant(s&&s.observation?.lease===c.payload.observationLease&&
+          s.documentKey===c.documentKey&&s.tabId===c.tabId&&result.answered===true&&
+          result.key===c.payload.key&&result.choice===c.payload.choice,'APPROVAL_UNCONFIRMED');
+        const request=s.approvals?.[c.payload.key];invariant(request,'APPROVAL_GONE');
+        request.answered=c.payload.choice;request.state='resolved';
+        c.result={answered:true,choice:c.payload.choice};
+        affected={id:s.id,state:'approval-closed',key:request.key,answered:request.answered};
       } else if (c.kind === 'close-tab') {
         const skipReasons = ['ACTIVE_TAB','DOCUMENT_CHANGED','PAGE_BUSY','PAGE_UNAVAILABLE',
           'TAB_MISSING','TAB_NOT_OWNED','WRONG_CONVERSATION','SESSION_BUSY'];
@@ -629,7 +619,7 @@ export class Broker {
       invariant(s.status === 'idle' && s.tabId !== null, s.status === 'blocked' ? 'DELIVERY_UNCONFIRMED' : 'SESSION_BUSY');
       invariant(!s.pendingConfig,'CONFIGURATION_PENDING');
       invariant(this.slots.has(id) || this.slots.activeIds().size < this.maxConcurrent, 'CONCURRENCY_LIMIT');
-      invariant(Object.keys(s.prompts).length < 2000 && s.history.length + 1 + LIMITS.turnFragments <= LIMITS.history, 'PROMPT_HISTORY_LIMIT');
+      // Durable state bytes, not a count of captured history fragments, bound storage.
       invariant(Object.values(d.commands).filter(pending).length < LIMITS.commands, 'QUEUE_FULL');
       const context = [s.systemPrompt, s.cwd ? `Working-directory hint (not a permission grant): ${s.cwd}` : ''].filter(Boolean).join('\n');
       const prefix = (!s.conversationId || s.contextPending) && context ? `[Paseo context — user-level instructions]\n${context}\n[/Paseo context]\n\n` : '';
@@ -642,7 +632,7 @@ export class Broker {
       return { turnId, replay: false };
       } catch (e) {
         // Preserve failed admission identity too; retrying requires a NEW clientMessageId.
-        if (Object.keys(s.prompts).length < 2000) s.prompts[clientMessageId] = { fingerprint, rejected: e.code ?? 'ADMISSION_FAILED', outcome: 'failed' };
+        s.prompts[clientMessageId] = { fingerprint, rejected: e.code ?? 'ADMISSION_FAILED', outcome: 'failed' };
         return { rejected: e.code ?? 'ADMISSION_FAILED' };
       }
     });
@@ -674,196 +664,114 @@ export class Broker {
         command.phase = 'failed'; command.error ??= error;
         discardUnsent(s,command); discardedId = command.id;
       }
-      return { id, turnId: s.turn.id, state: 'failed', error, activityItem:settleActivity(s,'failed') };
+      return { id, turnId: s.turn.id, state: 'failed', error };
     }, { control: true });
     if (discardedId) await this.inputFiles.remove(discardedId);
     if (result) this.emit(id, result);
     if (result) await this.finishArchive(id);
   }
-  async observe(event) {
-    invariant(object(event), 'INVALID_EVENT');
-    let image = null;
-    const activity=event.kind==='activity'?nativeActivity(event.activity):null;
-    const nativeItem=event.kind==='native_timeline'?nativeTimelineItem(event.item,event.turnId):null;
-    if (event.kind === 'image') {
-      const s = this.snapshot(event.sessionId);
-      invariant(s.turn && !s.turn.outcome && s.turn.id===event.turnId && s.turn.lease===event.lease && s.turn.nativeMessageId===event.nativeMessageId, 'TURN_IDENTITY_MISMATCH');
-      invariant(s.tabId===event.tabId && s.documentKey===event.documentKey && conversationId(event.url)===s.conversationId, 'PAGE_IDENTITY_MISMATCH');
-      const rows=s.history.filter(x=>x.type==='plugin'&&x.kind==='generated-image'&&x.data.turnId===event.turnId);
-      invariant(rows.some(x=>x.data.messageId===event.messageId&&x.data.assetId===event.assetId)||rows.length<IMAGE_LIMITS.count,'IMAGE_COUNT_LIMIT');
-      try { image = await this.media.put(event); } catch(e) { if(e instanceof BridgeError)throw e;throw new BridgeError('IMAGE_STORAGE_FAILED'); }
-    }
-    const settledStops = [];
-    const notification = await this.store.transaction(d => {
-      const s = d.sessions[event.sessionId]; invariant(s && s.turn, 'TURN_INACTIVE');
-      if (event.kind === 'receipt_recovered') {
-        invariant(s.turn.receiptPending === true && s.status === 'sending' &&
-          !s.turn.outcome && s.turn.lease === event.lease &&
-          event.turnId === s.turn.id && s.turn.authorized, 'TURN_IDENTITY_MISMATCH');
-        invariant(event.tabId === s.tabId && event.documentKey === s.documentKey &&
-          conversationId(event.url) === s.conversationId, 'PAGE_IDENTITY_MISMATCH');
-        const nativeId = verifyNativeId(event.nativeMessageId);
-        s.turn.receiptPending = false;
-        s.turn.nativeMessageId = nativeId;
-        s.lastNativeMessageId = nativeId;
-        s.turn.receivedAt = now();
-        s.turn.lastObservedAt = now();
-        s.status = 'running';
-        if (d.commands[s.turn.commandId]?.result?.receiptPending)
-          d.commands[s.turn.commandId].result = {receipt:true,conversationId:s.conversationId,nativeMessageId:nativeId};
-        return { id:s.id, turnId:s.turn.id, state:'receipt' };
-      }
-      invariant(event.turnId === s.turn.id && event.lease === s.turn.lease && event.nativeMessageId === s.turn.nativeMessageId,
-        'TURN_IDENTITY_MISMATCH');
-      if (event.kind === 'observation_gap') {
-        // A browser-worker reporting a temporary gap cannot renew the
-        // watchdog, establish identity, or settle a native turn.
-        invariant(event.tabId === s.tabId && event.documentKey === s.documentKey &&
-          conversationId(event.url) === s.conversationId, 'PAGE_IDENTITY_MISMATCH');
-        if (s.turn.outcome) return null;
-        return {id:s.id,turnId:s.turn.id,state:'waiting',reason:'transcript-unavailable'};
-      }
-      if (event.kind === 'binding_lost') {
-        if (s.turn.outcome) return null;
-        invariant(event.documentKey === s.documentKey && event.tabId === s.tabId, 'PAGE_IDENTITY_MISMATCH');
-        s.turn.bindingDiagnostic = safeDiagnostic(event.diagnostic);
-        finishTurn(s, 'failed'); s.status = s.conversationId?'idle':'blocked'; s.error = 'BROWSER_BINDING_LOST';
-        return { id: s.id, turnId: s.turn.id, state: 'failed', error: s.error, activityItem:settleActivity(s,'failed') };
-      }
-      invariant(event.tabId === s.tabId && event.documentKey === s.documentKey && conversationId(event.url) === s.conversationId, 'PAGE_IDENTITY_MISMATCH');
-      invariant(['snapshot','image','activity','native_timeline','completed','failed','waiting','heartbeat'].includes(event.kind),'UNKNOWN_EVENT');
-      if(event.kind==='heartbeat'){
-        // A verified same-tab/document/turn browser monitor is alive.
-        // It renews the watchdog without inventing a generated answer.
-        if(!s.turn.outcome)s.turn.lastObservedAt=now();
-        return null;
-      }
-      if (s.turn.outcome) {
-        invariant(s.turn.outcome === event.kind && (event.kind !== 'completed' || event.messageId === (s.turn.finalMessageId ?? s.turn.lastMessageId)), 'TURN_INACTIVE');
-        return null;
-      }
-      if (event.kind === 'native_timeline') {
-        const existing=s.history.find(row=>row.id===nativeItem.id);
-        invariant(existing||s.history.length<LIMITS.history,'HISTORY_LIMIT');
-        const item=recordNativeTimeline(s,nativeItem);
-        if(!item)return null;
-        s.turn.lastObservedAt=now();
-        return {id:s.id,turnId:s.turn.id,state:'native-timeline',item};
-      }
-      if (event.kind === 'image') {
-        const key=`${event.messageId}:${event.assetId}`, rowId=`image:${s.turn.id}:${key}`;
-        const row={type:'plugin',id:rowId,pluginId:'chatmode-in-paseo',kind:'generated-image',version:1,data:image};
-        const old=s.history.findIndex(x=>x.id===rowId);
-        if(old>=0 && JSON.stringify(s.history[old])===JSON.stringify(row))return null;
-        s.turn.imageKeys??=[];
-        invariant(s.turn.imageKeys.includes(key)||s.turn.imageKeys.length<IMAGE_LIMITS.count,'IMAGE_COUNT_LIMIT');
-        if(!s.turn.imageKeys.includes(key))s.turn.imageKeys.push(key);
-        if(old>=0)s.history[old]=row;else s.history.push(row);
-        invariant(s.history.length<=LIMITS.history,'HISTORY_LIMIT');
-        s.turn.lastObservedAt=now(); // Newly captured, verified native image.
-        return {id:s.id,turnId:s.turn.id,state:'image',item:row};
-      }
-      if (event.kind === 'activity') {
-        const rowId=`activity:${s.turn.id}`;
-        const row={type:'plugin',id:rowId,pluginId:'chatmode-in-paseo',kind:'native-activity',version:1,
-          data:{turnId:s.turn.id,...activity}};
-        const index=s.history.findIndex(x=>x.id===rowId);
-        if(index>=0 && JSON.stringify(s.history[index])===JSON.stringify(row))return null;
-        if(index>=0)s.history[index]=row;else s.history.push(row);
-        invariant(s.history.length<=LIMITS.history,'HISTORY_LIMIT');
-        s.turn.lastObservedAt=now(); // Changed native activity is actual progress.
-        return {id:s.id,turnId:s.turn.id,state:'activity',item:row};
-      }
-      if (event.kind === 'snapshot') {
-        verifyNativeId(event.messageId); text(event.text, LIMITS.answer, true);
-        if (s.turn.lastMessageId === event.messageId && s.turn.lastText === event.text) return null;
-        const turnPrefix = `assistant:${s.turn.id}:`;
-        const parts = s.history.filter(x => x.id.startsWith(turnPrefix) && x.id !== `${turnPrefix}${event.messageId}`);
-        if (parts.length >= LIMITS.turnFragments || parts.reduce((n, x) => n + x.text.length, event.text.length) > LIMITS.answer) {
-          finishTurn(s, 'failed'); s.status = 'blocked'; s.error = 'TURN_OUTPUT_LIMIT';
-          return { id: s.id, turnId: s.turn.id, state: 'failed', error: s.error, activityItem:settleActivity(s,'failed') };
-        }
-        s.turn.lastMessageId = event.messageId; s.turn.lastText = event.text;
-        const row = { type: 'assistant_message', id: `assistant:${s.turn.id}:${event.messageId}`, text: event.text };
-        const old = s.history.findIndex(x => x.id === row.id); if (old >= 0) s.history[old] = row; else s.history.push(row);
-        invariant(s.history.length <= LIMITS.history, 'HISTORY_LIMIT');
-        s.turn.lastObservedAt=now(); // Changed assistant output, not idle UI.
-        return { id: s.id, turnId: s.turn.id, state: 'snapshot', item: row };
-      }
-      if (event.kind === 'waiting') {
-        s.turn.lastObservedAt=now();
-        return {id:s.id,turnId:s.turn.id,state:'waiting',
-          ...(['final-unconfirmed','transcript-unavailable'].includes(event.reason)?{reason:event.reason}:{})};
-      }
-      if (event.kind === 'completed') {
-        if(event.finalKind==='image') {
-          const keys=s.turn.imageKeys??[];
-          invariant(event.finalConfirmed===true && keys.length>0 && Array.isArray(event.imageKeys) && new Set(event.imageKeys).size===event.imageKeys.length &&
-            JSON.stringify([...keys].sort())===JSON.stringify([...event.imageKeys].sort()) && keys.some(k=>k.startsWith(event.messageId+':')),'FINAL_UNCONFIRMED');
-        } else invariant(event.finalConfirmed === true && event.messageId === s.turn.lastMessageId && typeof s.turn.lastText === 'string', 'FINAL_UNCONFIRMED');
-        s.turn.finalMessageId = event.messageId;
-        finishTurn(s, 'completed'); s.status = 'idle';
-        for (const c of Object.values(d.commands)) if (c.kind === 'stop' && c.sessionId === s.id && c.payload.turnId === s.turn.id && pending(c)) {
-          c.phase = 'done'; c.result = { stopped: true, reason: 'already-completed' }; settledStops.push(c.id);
-        }
-      } else {
-        finishTurn(s, 'failed'); s.status = s.conversationId?'idle':'blocked'; s.error = text(event.error, 160);
-      }
-      const activityItem=settleActivity(s,s.turn.outcome);
-      return { id: s.id, turnId: s.turn.id, state: s.turn.outcome, error: s.error, activityItem };
-    });
-    for (const id of settledStops) this.settle(id, null, { stopped: true, reason: 'already-completed' });
-    if (notification) this.emit(notification.id, notification);
-    if (notification) await this.finishArchive(event.sessionId);
-    return { accepted: true, active: !this.snapshot(event.sessionId).turn?.outcome };
+  async observeView(event) {
+    invariant(!this.closed,'RUNTIME_CLOSED');
+    invariant(object(event),'INVALID_EVENT');
+    const result=await this.store.transaction(d=>recordPageView(d.sessions[event.sessionId],event,d.commands));
+    for(const notification of result.events)this.emit(event.sessionId,notification);
+    if(result.events.some(notification=>notification.state==='page-standby'))await this.finishArchive(event.sessionId);
+    // Persistence of a local frame is not a Paseo delivery ACK.
+    const {events,...receipt}=result;
+    return receipt;
+  }
+  async observeGap(event) {
+    invariant(!this.closed,'RUNTIME_CLOSED');
+    invariant(object(event),'INVALID_EVENT');
+    const result=await this.store.transaction(d=>recordObservationGap(d.sessions[event.sessionId],event),{control:true});
+    for(const notification of result.events)this.emit(event.sessionId,notification);
+    return {accepted:true};
+  }
+  async recoverReceipt(event) {
+    invariant(!this.closed,'RUNTIME_CLOSED');
+    invariant(object(event),'INVALID_EVENT');
+    const result=await this.store.transaction(d=>{
+      const s=d.sessions[event.sessionId];assertObservation(s,event);
+      const t=s.turn;
+      invariant(t&&t.receiptPending&&t.id===event.turnId&&t.lease===event.lease&&t.authorized,'TURN_IDENTITY_MISMATCH');
+      const nativeId=verifyNativeId(event.nativeMessageId);
+      t.receiptPending=false;t.nativeMessageId=nativeId;t.receivedAt=now();rememberUserReceipt(s,nativeId);
+      if(!t.outcome&&!s.observation.run?.active)beginPromptObservation(s,t.id,now(),{awaitCommandView:true});
+      s.status=s.observation.run?.active?'running':'idle';
+      const c=d.commands[t.commandId];
+      if(c?.result?.receiptPending)c.result={receipt:true,conversationId:s.conversationId,nativeMessageId:nativeId};
+      return {id:s.id,turnId:t.id,state:'receipt'};
+    },{control:true});
+    this.emit(result.id,result);return {accepted:true};
   }
   async interrupt(id) {
-    invariant(!this.closed, 'RUNTIME_CLOSED');
-    const expected = this.snapshot(id).turn?.id;
-    const decision = await this.store.transaction(d => {
-      const s = d.sessions[id]; invariant(s, 'SESSION_UNKNOWN');
-      if (!busy(s) || !s.turn || s.turn.outcome || s.turn.id !== expected) return { settled: true, stopped: s.status === 'idle' };
-      s.turn.cancelRequested = true;
-      const c = d.commands[s.turn.commandId];
-      if (!s.turn.authorized && s.turn.origin!=='browser') {
-        if (c && pending(c)) { c.phase = 'failed'; c.error = 'CANCELLED_BEFORE_SEND'; }
-        finishTurn(s, 'canceled'); s.status = 'idle'; discardUnsent(s,c);
-        return { before: true, commandId: c?.id, turnId: s.turn.id, activityItem:settleActivity(s,'canceled') };
+    invariant(!this.closed,'RUNTIME_CLOSED');
+    const decision=await this.store.transaction(d=>{
+      const s=d.sessions[id];invariant(s,'SESSION_UNKNOWN');
+      const c=s.turn&&d.commands[s.turn.commandId];
+      if(c&&pending(c)&&!s.turn.authorized) {
+        c.phase='failed';c.error='CANCELLED_BEFORE_SEND';
+        finishTurn(s,'canceled');discardUnsent(s,c);
+        s.status=s.observation?.run?.active?'running':'idle';
+        return {before:true,commandId:c.id,turnId:s.turn.id};
       }
-      if (!s.turn.nativeMessageId) return { uncertain: true, turnId: s.turn.id };
-      const old = Object.values(d.commands).find(c => c.kind === 'stop' && c.sessionId === id && c.payload.turnId === s.turn.id && pending(c));
-      if (old) return { commandId: old.id, turnId: s.turn.id };
-      invariant(Object.values(d.commands).filter(pending).length < LIMITS.commands, 'QUEUE_FULL');
-      const commandId = randomUUID(); s.status = 'stopping';
-      d.commands[commandId] = { id: commandId, kind: 'stop', sessionId: id, payload: { turnId: s.turn.id,
-        tabId: s.tabId, conversationId: s.conversationId, nativeMessageId: s.turn.nativeMessageId }, phase: 'queued', createdAt: now(), deadline: now() + this.commandTimeout };
-      return { commandId, turnId: s.turn.id };
-    }, { control: true });
-    if (decision.settled) return { stopped: decision.stopped };
-    if (decision.before) {
-      if (decision.commandId) {
-        await this.inputFiles.remove(decision.commandId);
-        this.settle(decision.commandId, 'CANCELLED_BEFORE_SEND');
-      }
-      this.emit(id, { id, turnId: decision.turnId, state: 'canceled', activityItem:decision.activityItem }); return { stopped: true };
+      const observation=s.observation,page=observation?.page;
+      // Repeating a completed local cancellation is not a second webpage Stop.
+      // A later genuine page run must still go through the current controls.
+      if(c?.error==='CANCELLED_BEFORE_SEND'&&s.turn?.discarded&&s.turn.outcome==='canceled'&&
+        !observation?.run?.active&&!page?.controls.stop.visible)return {settled:true};
+      invariant(page?.controls.stop.visible,'STOP_NOT_AVAILABLE');
+      invariant(page.controls.stop.enabled,'STOP_NOT_ENABLED');
+      invariant(s.conversationId&&s.documentKey&&Number.isInteger(s.tabId),'PAGE_IDENTITY_MISMATCH');
+      const old=Object.values(d.commands).find(command=>command.kind==='stop'&&command.sessionId===id&&
+        command.payload.observationLease===observation.lease&&pending(command));
+      if(old)return {commandId:old.id};
+      invariant(Object.values(d.commands).filter(pending).length<LIMITS.commands,'QUEUE_FULL');
+      const commandId=randomUUID();
+      d.commands[commandId]={id:commandId,kind:'stop',sessionId:id,payload:{
+        observationLease:observation.lease,runId:observation.run?.id??null,
+        tabId:s.tabId,conversationId:s.conversationId,documentKey:s.documentKey},
+        phase:'queued',createdAt:now(),deadline:now()+this.commandTimeout};
+      return {commandId};
+    },{control:true});
+    if(decision.settled)return {stopped:true};
+    if(decision.before) {
+      await this.inputFiles.remove(decision.commandId);
+      this.settle(decision.commandId,'CANCELLED_BEFORE_SEND');
+      this.emit(id,{id,turnId:decision.turnId,state:'canceled'});return {stopped:true};
     }
-    if (decision.uncertain) { await this.failTurn(id, 'STOP_UNCONFIRMED', true, decision.turnId); throw new BridgeError('STOP_UNCONFIRMED'); }
-    try { return await this.wait(decision.commandId); }
-    catch (e) { await this.failTurn(id, 'STOP_UNCONFIRMED', true, decision.turnId); throw e; }
+    // No Stop is never translated into an authorization Deny.
+    return this.wait(decision.commandId);
+  }
+  async answerApproval(id,key,choice) {
+    invariant(!this.closed,'RUNTIME_CLOSED');
+    invariant(APPROVAL_CHOICES.includes(choice),'APPROVAL_INVALID');
+    const commandId=await this.store.transaction(d=>{
+      const s=d.sessions[id],request=s?.approvals?.[key];
+      invariant(s&&request?.state==='open'&&!request.answered&&s.observation&&
+        s.tabId!==null&&s.documentKey,'APPROVAL_GONE');
+      invariant(request.clickable!==false,'APPROVAL_UNRECOGNIZED');
+      invariant(!Object.values(d.commands).some(c=>c.kind==='approval'&&c.sessionId===id&&pending(c)),'APPROVAL_BUSY');
+      invariant(Object.values(d.commands).filter(pending).length<LIMITS.commands,'QUEUE_FULL');
+      const commandId=randomUUID();
+      d.commands[commandId]={id:commandId,kind:'approval',sessionId:id,payload:{
+        observationLease:s.observation.lease,tabId:s.tabId,documentKey:s.documentKey,
+        conversationId:s.conversationId,key,choice},phase:'queued',createdAt:now(),deadline:now()+this.commandTimeout};
+      return commandId;
+    },{control:true});
+    return this.wait(commandId);
   }
   async rebindObservation(proof) {
-    return this.store.transaction(d => {
-      const s = d.sessions[proof.sessionId];
-      invariant(s && ['running','stopping'].includes(s.status) && s.turn && !s.turn.outcome, 'TURN_INACTIVE');
-      invariant(s.turn.id === proof.turnId && s.turn.lease === proof.lease && s.turn.nativeMessageId === proof.nativeMessageId, 'TURN_IDENTITY_MISMATCH');
-      invariant(proof.previousDocumentKey === s.documentKey && conversationId(proof.url) === s.conversationId, 'PAGE_IDENTITY_MISMATCH');
-      invariant(Number.isInteger(proof.tabId) && proof.tabId >= 0 && typeof proof.documentKey === 'string', 'INVALID_TAB');
-      identifier(proof.documentKey);
-      invariant(!Object.values(d.sessions).some(other => other.id !== s.id && other.tabId === proof.tabId), 'TAB_ALREADY_OWNED');
-      s.tabId = proof.tabId; s.documentKey = proof.documentKey;
-      return { sessionId: s.id, turnId: s.turn.id, lease: s.turn.lease, nativeMessageId: s.turn.nativeMessageId,
-        tabId: s.tabId, documentKey: s.documentKey, conversationId: s.conversationId };
-    }, { control: true });
+    invariant(object(proof),'INVALID_REQUEST');
+    return this.store.transaction(d=>{
+      const s=d.sessions[proof.sessionId];
+      invariant(s&&s.conversationId&&s.status!=='abandoned','SESSION_UNKNOWN');
+      invariant(s.observation?.lease===proof.observationLease,'OBSERVATION_LEASE_MISMATCH');
+      invariant(proof.previousDocumentKey===s.documentKey&&conversationId(proof.url)===s.conversationId,'PAGE_IDENTITY_MISMATCH');
+      invariant(Number.isInteger(proof.tabId)&&proof.tabId>=0,'INVALID_TAB');identifier(proof.documentKey);
+      invariant(!Object.values(d.sessions).some(other=>other.id!==s.id&&other.tabId===proof.tabId),'TAB_ALREADY_OWNED');
+      return resetObservationDocument(s,proof.tabId,proof.documentKey);
+    },{control:true});
   }
   async abandon(id) {
     await this.store.transaction(d => {
@@ -877,13 +785,12 @@ export class Broker {
   }
   async tick(time = now()) {
     const peek = this.store.read();
-    if (!Object.values(peek.commands).some(c => pending(c) && c.deadline < time) &&
-      !Object.values(peek.sessions).some(s=>busy(s)&&time-(s.turn.lastObservedAt??s.turn.createdAt)>this.turnTimeout))return;
+    if (!Object.values(peek.commands).some(c => pending(c) && c.deadline < time))return;
     const expired = await this.store.transaction(d => {
       const out = [];
       for (const c of Object.values(d.commands)) if (pending(c) && c.deadline < time) {
         const s=c.sessionId&&d.sessions[c.sessionId];
-        if (c.kind === 'send' && c.phase === 'authorized' && pendingReceipt(c, s, s?.conversationId)) {
+        if (c.kind === 'send' && c.phase === 'authorized' && pendingReceipt(c, s, s?.conversationId, {observedRebind:true})) {
           out.push({ ...c, pendingReceipt:true, sessionId:s.id, turnId:s.turn.id });
           continue;
         }
@@ -903,11 +810,8 @@ export class Broker {
         continue;
       }
       this.settle(c.id, c.error);
-      if (c.kind === 'send' || c.kind === 'stop') await this.failTurn(c.sessionId, c.error, c.uncertain || c.kind === 'stop', c.payload.turnId);
+      if (c.kind === 'send') await this.failTurn(c.sessionId, c.error, c.uncertain, c.payload.turnId);
     }
-    for (const s of Object.values(this.store.read().sessions))
-      if(busy(s)&&time-(s.turn.lastObservedAt??s.turn.createdAt)>this.turnTimeout)
-        await this.failTurn(s.id,'TURN_TIMEOUT',true);
     for (const id of new Set(expired.map(command => command.sessionId)))
       await this.finishArchive(id);
   }

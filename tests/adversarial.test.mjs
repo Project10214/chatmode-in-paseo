@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
-import { fixture, selection, until } from './helpers.mjs';
+import { fixture, selection, until, sourceItem } from './helpers.mjs';
 import { PROTOCOL } from '../server/protocol.mjs';
 import { createProvider, CAPABILITIES } from '../server/provider.mjs';
 
@@ -42,14 +42,14 @@ test('A02: default host-injected Paseo MCP must not prevent every new chat',asyn
 });
 
 test('A03: completion racing with interrupt must not leave the session permanently stopping',async t=>{
- const f=await fixture(t); const s=await f.ready(); const {event}=await f.sending(s);
- await f.broker.observe({...event,kind:'snapshot',messageId:'answer',text:'done'});
- const completion=f.broker.observe({...event,kind:'completed',messageId:'answer',finalConfirmed:true});
+ const f=await fixture(t); const s=await f.ready(); await f.sending(s);
+ await f.view(s,{state:'running',items:[sourceItem('answer','done')]});
+ const completion=f.view(s,{state:'standby'});
  const interruption=f.broker.interrupt(s.id); interruption.catch(()=>{}); await completion;
  // A correct implementation may settle this as a no-op without enqueueing Stop.
  const c=f.broker.queued().find(c=>c.kind==='stop');
  if(c){const cl=await f.broker.claim(c.id,s.tabId,s.documentKey);await f.broker.result(c.id,cl.lease,{error:'STOP_UNCONFIRMED'});}
- await interruption.catch(()=>{});
+ await interruption.catch(error=>assert.ok(['STOP_NOT_AVAILABLE','STOP_UNCONFIRMED'].includes(error.code),error.message));
  t.diagnostic(JSON.stringify({status:f.broker.snapshot(s.id).status,outcome:f.broker.snapshot(s.id).turn.outcome}));
  assert.equal(f.broker.snapshot(s.id).status,'idle');
 });
@@ -93,7 +93,7 @@ test('A07: message admission must reserve space for at least one assistant answe
  let event;
  try { ({event}=await f.sending(s)); }
  catch (e) { assert.equal(e.code,'PROMPT_HISTORY_LIMIT'); assert.equal(f.broker.queued().some(c=>c.kind==='send'),false); return; }
- let err;try{await f.broker.observe({...event,kind:'snapshot',messageId:'new-answer',text:'answer already generated'});}catch(e){err=e.code;}
+ let err;try{await f.view(s,{state:'standby',items:[sourceItem('new-answer','answer already generated')]});}catch(e){err=e;}
  t.diagnostic(JSON.stringify({accepted:true,status:f.broker.snapshot(s.id).status,answerError:err,historyLength:f.broker.snapshot(s.id).history.length}));
  assert.equal(err,undefined,'Already-admitted turn must be able to persist its result, or be refused BEFORE Send');
 });
@@ -105,13 +105,14 @@ async function backgroundFixture(t, options={}) {
  const engine=/'X-CIP-Engine': '([^']+)'/.exec(source)[1];
  const listeners={},routes=[],sent=[],local={config:{endpoint:'http://127.0.0.1:17843',token:'valid-token'},ledger:{}};
  const rows=options.tabs??{}; let queue=options.commands??[];let lastTab=600;let handler;
+ const nativeTabs=Object.fromEntries(Object.keys(rows).map(id=>[id,{id:Number(id),url:'https://chatgpt.com/',active:false}]));
  const response=(obj,ok=true)=>({ok,text:async()=>JSON.stringify(obj)});
- const ctx=vm.createContext({URL,AbortSignal,structuredClone,console,Date,Promise,Set,Map,crypto:webcrypto,
+ const ctx=vm.createContext({URL,AbortSignal,structuredClone,console,Date,Promise,Set,Map,PROTOCOL,crypto:webcrypto,
   setTimeout:()=>123,clearTimeout:()=>{},
   fetch:async(url,o={})=>{const route=new URL(url).pathname;const body=o.body?JSON.parse(o.body):undefined;routes.push({route,body});
    if(route==='/hello')return response({product:'chatmode-in-paseo',protocol:options.protocol??PROTOCOL,epoch:'e'});
    if(route==='/commands')return response({commands:queue});
-   if(route==='/active')return response({sessions:options.active??[]});
+   if(route==='/observations')return response({sessions:options.observations??[]});
    if(route==='/claim'){const c=queue.find(c=>c.id===body.id);return response({...c,...body,lease:'lease-1'});}
    if(route==='/pair')return response({error:'PAIRING_REJECTED'},false);
    return response({accepted:true,authorized:true});},
@@ -119,8 +120,10 @@ async function backgroundFixture(t, options={}) {
    storage:{local:{setAccessLevel:async()=>{},get:async()=>structuredClone(local),set:async obj=>Object.assign(local,structuredClone(obj))},session:{get:async()=>({tabs:structuredClone(rows)}),set:async()=>{}}},
    runtime:{id:'a'.repeat(32),getURL:f=>'chrome-extension://'+'a'.repeat(32)+'/'+f,onMessage:{addListener:fn=>handler=fn},onInstalled:{addListener:()=>{}},onStartup:{addListener:()=>{}}},
    alarms:{onAlarm:{addListener:()=>{}},create:()=>{}},
-   tabs:{create:async()=>({id:++lastTab}),get:async()=>({url:'https://chatgpt.com/',active:false}),remove:async()=>{},onRemoved:{addListener:()=>{}},
-    sendMessage:async(tabId,m)=>{sent.push({tabId,type:m.type,kind:m.command?.kind});if(m.type==='identity')return{ok:true,value:{engine,documentKey:'doc-1',url:'https://chatgpt.com/'}};if(options.sendMessage)return options.sendMessage(tabId,m);return {ok:true,value:{idle:true,documentKey:'doc-1'}};}}}
+   tabs:{create:async options=>{const tab={id:++lastTab,url:options.url,active:false};nativeTabs[tab.id]=tab;return tab;},
+    query:async()=>Object.values(nativeTabs),
+    get:async id=>{if(!nativeTabs[id])throw new Error('No tab with id '+id);return nativeTabs[id];},remove:async id=>{delete nativeTabs[id];},onRemoved:{addListener:()=>{}},
+    sendMessage:async(tabId,m)=>{sent.push({tabId,type:m.type,kind:m.command?.kind});if(m.type==='identity')return{ok:true,value:{engine,protocol:PROTOCOL,documentKey:'doc-1',url:nativeTabs[tabId]?.url}};if(options.sendMessage)return options.sendMessage(tabId,m);return {ok:true,value:{idle:true,documentKey:'doc-1'}};}}}
  });
  vm.runInContext(source+'\nglobalThis.__audit={pump,execute,read:()=>({config,ledger,tabs})};',ctx);
  return {ctx,routes,sent,local,setQueue:q=>queue=q,pump:()=>ctx.__audit.pump(),read:()=>ctx.__audit.read(),message:m=>new Promise(resolve=>handler(m,{id:ctx.chrome.runtime.id,url:ctx.chrome.runtime.getURL('popup.html')},resolve))};
@@ -144,11 +147,14 @@ test('A10: failed re-pairing must preserve an existing working connection',async
 });
 
 test('A11: browser restart retains the active turn and reopens only its bound chat, never replays Send',async t=>{
- const f=await backgroundFixture(t,{tabs:{},active:[{sessionId:'running',tabId:777,documentKey:'old-doc',conversationId:'old-conv',turnId:'turn',lease:'lease',nativeMessageId:'native'}]});
+ const f=await backgroundFixture(t,{tabs:{},observations:[{sessionId:'running',tabId:777,documentKey:'old-doc',conversationId:'old-conv',observationLease:'observation-lease',generation:1,runId:'run'}]});
  await f.pump();
+ await until(()=>Object.values(f.read().tabs).some(row=>row.restoringConversationId==='old-conv'));
  const reopened=Object.values(f.read().tabs).filter(row=>row.restoringConversationId==='old-conv');
- t.diagnostic(JSON.stringify({activeRead:f.routes.some(r=>r.route==='/active'),restoring:reopened.length,lossReports:f.routes.filter(r=>r.route==='/event'&&r.body?.kind==='binding_lost').length}));
- assert.equal(reopened.length,1);
+ t.diagnostic(JSON.stringify({observationsRead:f.routes.some(r=>r.route==='/observations'),restoring:reopened.length}));
+ assert.equal(f.routes.some(r=>r.route==='/observations'),true);
+ assert.equal(f.routes.some(r=>r.route==='/active'||r.route==='/event'),false);
+ assert.equal(reopened.length,1,JSON.stringify(f.routes));
  assert.equal(f.routes.some(r=>r.route==='/claim'||r.route==='/authorize'||r.route==='/result'),false);
  assert.equal(f.routes.some(r=>r.route==='/event'&&r.body?.kind==='binding_lost'),false);
 });

@@ -7,7 +7,7 @@
 **中文** · [English](#english-summary) — 在 Paseo 中创建 Chatmode Agent，由本项目的 Chrome 扩展驱动 ChatGPT 网页收发消息，无需 CoS 桌面应用。当前为 **alpha**。欢迎通过 [Issue](https://github.com/Project10214/chatmode-in-paseo/issues) 反馈问题、通过 Pull Request 贡献代码（中英文均可），见[贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [许可证：MIT](LICENSE)。含源自 [Chat On Steroids](https://github.com/totec448-spec/chat-on-steroids)（MIT）的移植代码，见[第三方声明](THIRD_PARTY_NOTICES.md)。
 
 <a id="english-summary"></a>
-**English summary** — Chatmode in Paseo is a [Paseo](https://paseo.sh) plugin plus a Chrome extension that lets a Paseo "Chatmode" agent talk to the ChatGPT web UI directly, without the CoS desktop app. It is **alpha** software. Issues and pull requests in English or Chinese are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and [LICENSE](LICENSE) (MIT). Portions adapted from [Chat On Steroids](https://github.com/totec448-spec/chat-on-steroids) (MIT) are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Requirements: Node.js ≥ 22.6, Chrome and the Paseo daemon on the same machine, Paseo SDK 0.11.2. The rest of this README is in Chinese; see [docs/PRODUCT_MANUAL.md](docs/PRODUCT_MANUAL.md) for the product manual and [docs/TESTING.md](docs/TESTING.md) for testing.
+**English summary** — Chatmode in Paseo is a [Paseo](https://paseo.sh) plugin plus a Chrome extension that lets a Paseo "Chatmode" agent talk to the ChatGPT web UI directly, without the CoS desktop app. It is **alpha** software. Issues and pull requests in English or Chinese are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and [LICENSE](LICENSE) (MIT). Portions adapted from [Chat On Steroids](https://github.com/totec448-spec/chat-on-steroids) (MIT) are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Requirements: Node.js ≥ 22.6, Chrome and the Paseo daemon on the same machine, Paseo SDK 0.12.0-beta.1 (unreleased candidate). The rest of this README is in Chinese; see [docs/PRODUCT_MANUAL.md](docs/PRODUCT_MANUAL.md) for the product manual and [docs/TESTING.md](docs/TESTING.md) for testing.
 
 在 Paseo 创建 Chatmode Agent，按网页实际观察选择模型、思考强度和 `@` 应用；本项目的 Chrome 扩展发送消息并回传可见回答。开发机文件和终端操作继续使用 ChatGPT 中已经接入并授权的 MCP。
 
@@ -57,7 +57,7 @@ ChatGPT 网页 / 模型 ──已授权 @ 应用──→ 开发主机 MCP
 
 ### 环境与检查
 
-Chrome 与 **Paseo 后台必须在同一台开发主机**；Paseo 手机端可以远程连接该后台。本机服务不应公开到局域网或公网。使用 Node.js 22.6 以上。SDK 目标是 `0.11.2`；清单范围 `>=0.11.2 <0.12.0` 是待实测的兼容目标，不是已验证矩阵。
+Chrome 与 **Paseo 后台必须在同一台开发主机**；Paseo 手机端可以远程连接该后台。本机服务不应公开到局域网或公网。使用 Node.js 22.6 以上。SDK目标是 `0.12.0-beta.2`；宿主范围为 `>=0.11.4`（2026-10-18 起放行之后所有版本，含 beta；Paseo 重启会自动升级）。协议版本协商与已安装 SDK 的事件格式校验会把接口变化变成明确报错；每次 Paseo 更新后再按 [新版兼容核查](docs/PASEO_012_COMPATIBILITY.md) 补做审计。已对照0.11.4与0.12.0-beta.1的加载/重载时序；[新版兼容核查](docs/PASEO_012_COMPATIBILITY.md)不等于整个版本范围或真实账号工作流已通过。当前候选仍未通过旧连接恢复门禁（OBS-P1）；[并发交付](docs/HOST_CONCURRENT_DELIVERY_GATE.md)已按“到达顺序显示、不丢不重”的契约在插件侧修复，迟到旧正文归轮为已知限制，不可按“统一修复完成”发布；最新实现/验收状态见[实施进展](docs/FAITHFUL_SYNC_IMPLEMENTATION.md)。
 
 ```sh
 cd /absolute/path/chatmode-in-paseo

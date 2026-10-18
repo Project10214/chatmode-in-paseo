@@ -1,20 +1,31 @@
 import { BridgeError, invariant, validateSelection, sameSelection } from './protocol.mjs';
 import { createHash } from 'node:crypto';
-import { phaseLabel } from './activity.mjs';
 import { catalogService } from './catalog.mjs';
 import { createChromeWake } from './chrome-wake.mjs';
 import { sessionIdFromPersistence } from './wake.mjs';
+import { createProviderDelivery } from './provider-delivery.mjs';
+import { permissionRequest, approvalChoice } from './approval.mjs';
+import { errorLabel } from '../shared/ui-copy.mjs';
 
 const wakeChrome = createChromeWake();
 
-export const CAPABILITIES = ['prompt.message', 'prompt.image', 'session.configure', 'session.persistence', 'session.archive', 'session.unarchive', 'timeline.plugin'];
-const errorOf = e => ({ message: e instanceof BridgeError ? e.message : 'Chatmode operation failed; inspect the bridge status.', code: e.code ?? 'BRIDGE_FAILURE' });
-/** @returns {import('@getpaseo/plugin/server/provider').ProviderRegistration} */
-export function createProvider(runtime, validateEvent = value => value) {
+export const CAPABILITIES = ['prompt.message', 'prompt.image', 'permission', 'session.configure', 'session.persistence', 'session.archive', 'session.unarchive', 'timeline.plugin'];
+const errorOf = e => ({ message: errorLabel(e.code ?? 'BRIDGE_FAILURE'), code: e.code ?? 'BRIDGE_FAILURE' });
+/**
+ * `hostObservation` (server/host-observation.mjs) is optional and explicit.
+ * commands() proves subscription, not delivery. Production also supplies
+ * readTimeline for the binding-owned native delivery coordinator. Host-neutral
+ * callers without that adapter get one-shot output, never delivery confirmation.
+ * @param {any} runtime
+ * @param {(value: any) => any} [validateEvent]
+ * @param {{ hostObservation?: ReturnType<typeof import('./host-observation.mjs').createHostObservation> | null }} [options]
+ * @returns {import('@getpaseo/plugin/server/provider').ProviderRegistration}
+ */
+export function createProvider(runtime, validateEvent = value => value, { hostObservation = runtime.hostObservation ?? null } = {}) {
   return {
     id: 'chatmode', label: 'Chatmode', icon: 'icon.svg',
-    description: 'ChatGPT browser conversations, using already-authorized ChatGPT apps',
-    async status() { const s=runtime.status();return s.connected||s.paired ? { available: true } : { available: false, diagnostic: 'Pair the Chatmode in Paseo Chrome extension on this daemon host.' }; },
+    description: '在 Paseo 收发 ChatGPT 网页消息，使用已授权应用。',
+    async status() { const s=runtime.status();return s.connected||s.paired ? { available: true } : { available: false, diagnostic: '请在 Paseo 所在电脑配对 Chatmode Chrome 扩展。' }; },
     async getCatalogCacheKey(options) {
       const data = runtime.store.read();
       return JSON.stringify({ scope: options.scope, cwd: options.cwd ?? '', defaults: data.defaults,
@@ -23,7 +34,7 @@ export function createProvider(runtime, validateEvent = value => value) {
     async connect(request) {
       invariant(request.versions.includes(1), 'PROTOCOL_UNSUPPORTED');
       const capabilities = [...new Set(request.capabilities.filter(x => CAPABILITIES.includes(x)))];
-      return createConnection(runtime, capabilities, validateEvent);
+      return createConnection(runtime, capabilities, validateEvent, hostObservation);
     }
   };
 }
@@ -50,7 +61,7 @@ export function hostMcpNotice(servers = {}) {
     invariant(internal, 'MCP_CONFIG_UNSUPPORTED', 'This browser provider cannot import Paseo MCP entries. Use apps already authorized in ChatGPT. Only the host-shaped loopback paseo entry is excluded, with a visible warning.');
   }
   return entries.length ? { id: 'host-mcp-not-imported', severity: 'warning', title: 'Paseo 内置工具未导入网页会话',
-    description: '已识别并排除宿主形状的本地 paseo MCP 配置。此 Provider 不执行该配置，也不转发其凭据；开发机工具须通过 ChatGPT 已授权的 @ 应用。网页模型不能因此自动创建 Paseo 子 Agent。' } : null;
+    description: '网页不会获得 Paseo 内置工具及其凭据。请使用 ChatGPT 已授权应用；此设置不会赋予创建 Paseo 子 Agent 的能力。' } : null;
 }
 export function configState(session, catalog, defaults = {}) {
   const effective=session.pendingConfig??session.config;
@@ -62,16 +73,16 @@ export function configState(session, catalog, defaults = {}) {
     : chosen.length===catalog.apps.length?'all':'keep';
   // One native Paseo select, not a custom popover or one slider per app.
   const tools=[
-    {label:'无工具（普通对话 / 生图）',value:'none'},
+    {label:'不使用应用',value:'none'},
     ...catalog.apps.map(app=>({label:'@ '+app.label,value:'app:'+app.id})),
-    ...(saved.length>1?[{label:'常用多工具组合（'+saved.length+'）',value:'defaults'}]:[]),
-    ...(catalog.apps.length>1?[{label:'所有已授权应用',value:'all'}]:[]),
-    ...(selected==='keep'?[{label:'保留当前组合（'+chosen.length+'）',value:'keep'}]:[])
+    ...(saved.length>1?[{label:'默认组合（'+saved.length+'）',value:'defaults'}]:[]),
+    ...(catalog.apps.length>1?[{label:'全部已授权应用',value:'all'}]:[]),
+    ...(selected==='keep'?[{label:'当前组合（'+chosen.length+'）',value:'keep'}]:[])
   ];
   return {model:effective.model,...(effective.thinkingOption?{thinkingOption:effective.thinkingOption}:{}),
     models:wireModels(catalog),modes:[],thinkingOptions:catalog.models.find(m=>m.id===effective.model)?.thinkingOptions??[],
     settings:[{type:'select',id:'app:quick',label:'工具',value:selected,options:tools,
-      description:'在这里直接切换已授权的 ChatGPT 应用；不会替你授予 MCP 权限。多工具常用组合在 Chatmode 设置页维护。'}]};
+      description:'选择 ChatGPT 已授权应用，不新增权限。默认组合可在 Chatmode 设置中修改。'}]};
 }
 export function selectionFrom(config, catalog, defaults) {
   invariant(catalog, 'CATALOG_REQUIRED', 'Refresh the browser catalog before creating an agent.');
@@ -126,145 +137,217 @@ export function promptContent(prompt) {
   return {text,attachments};
 }
 export const promptText = prompt => promptContent(prompt).text;
-function createConnection(runtime, capabilities, validateEvent) {
-  const { broker, store } = runtime;
-  const listeners = new Set(), sessions = new Map(), opening = new Set(), promptResults = new Map(), startedTurns = new Set(), endedTurns = new Set();
-  let closed = false, closing = false;
-  const controller = new AbortController();
-  const emit = value => {
-    if(value.type==='timeline.item' && value.item?.type==='plugin' && !capabilities.includes('timeline.plugin')) {
+// Plain-text card summary for clients that did not negotiate timeline.plugin.
+// Page notices are quoted verbatim; button states are reported, never clicked.
+export function activityText(data) {
+  const lines = [];
+  if (data.sync?.state === 'blocked') lines.push('正文同步受阻：' + data.sync.issues.filter(x => x.blocking && x.resolvedAt === null).map(x => x.code).join('、'));
+  else if (data.sync?.state === 'partial') lines.push('部分内容未同步：' + data.sync.issues.filter(x => x.resolvedAt === null).map(x => x.code).join('、'));
+  if (data.outcome === 'failed' && data.error) lines.push('Paseo 跟踪中断：' + data.error + '；网页任务是否停止未确认');
+  for (const notice of data.page?.notices ?? []) {
+    lines.push('网页提示（' + ([notice.redacted ? '已脱敏' : '', notice.clipped ? '已截断' : ''].filter(Boolean).join('、') || '原文') + '）：' + notice.text);
+    if (notice.buttons.length) lines.push('网页按钮（仅展示）：' + notice.buttons.map(b => `${b.label}（${b.enabled ? '可用' : '不可用'}）`).join('、'));
+  }
+  return lines.join('\n');
+}
+const BARRIER_RETRY_MS=5000;
+function createConnection(runtime,capabilities,validateEvent,observation=null) {
+  const {broker,store}=runtime;
+  const listeners=new Set(),sessions=new Map(),opening=new Set(),promptResults=new Map();
+  const startedTurns=new Set(),endedTurns=new Set();
+  const controller=new AbortController();
+  let closed=false,closing=false;
+  const emit=value=>{
+    if(value.type==='timeline.item'&&value.item.type==='plugin'&&!capabilities.includes('timeline.plugin')) {
       const item=value.item;
-      if(item.kind==='native-activity') {
-        value={type:'session.notice',sessionId:value.sessionId,notice:{id:'native-status',severity:'info',
-          title:phaseLabel(item.data.phase),dismissed:['completed','failed','canceled'].includes(item.data.phase)}};
-      } else value={...value,item:{type:'assistant_message',id:item.id,text:`图片已生成。此客户端未协商图片卡片，请在 ChatGPT 查看：https://chatgpt.com/c/${item.data.conversationId}`}};
+      if(item.kind==='page-state')value={type:'session.notice',sessionId:value.sessionId,notice:{
+        id:item.id,severity:item.data.state==='abnormal'?'warning':'info',
+        title:({running:'运行中',standby:'待命',abnormal:'异常／状态无法确认'})[item.data.state]}};
+      else value={...value,item:{type:'notification',id:item.id,level:'info',
+        message:item.kind==='native-activity'?activityText(item.data):
+          '当前客户端无法显示此网页资源卡片。\n'+JSON.stringify(item.data)}};
     }
-    let event;
-    try { event = validateEvent(value); }
+    let event,valid=true;
+    try {event=validateEvent(value);}
     catch {
-      const error = { code: 'PROVIDER_EVENT_INVALID', message: 'Provider output did not match the installed Paseo SDK. No success was confirmed.' };
-      event = value.requestId ? { type: 'request.failed', requestId: value.requestId, error }
-        : { type: 'session.runtime_failed', sessionId: value.sessionId, error };
-      event = validateEvent(event);
+      valid=false;
+      const error={code:'PROVIDER_EVENT_INVALID',message:errorLabel('PROVIDER_EVENT_INVALID')};
+      event=validateEvent(value.requestId?{type:'request.failed',requestId:value.requestId,error}:
+        {type:'session.notice',sessionId:value.sessionId,notice:{
+          id:'source-projection-error',severity:'error',title:'CIP 内容投影失败',description:error.message}});
     }
-    if (!closed) for (const fn of listeners) { try { fn(event); } catch {} }
+    let forwarded=valid&&!closed&&!closing&&listeners.size>0;
+    if(!closed)for(const fn of listeners)try {fn(event);}catch {forwarded=false;}
+    return forwarded;
   };
-  const end = (hostId, turnId, state, error) => {
-    const key = `${hostId}:${turnId}`; if (endedTurns.has(key)) return; endedTurns.add(key);
-    const snapshot=(()=>{try{const s=sessions.get(hostId);return s&&broker.snapshot(s.id);}catch{return null;}})();
-    const discarded = snapshot?.turn?.id === turnId && snapshot.turn.discarded === true;
-    const unconfirmed = !discarded && error === 'RECEIPT_UNCONFIRMED';
-    const link = snapshot?.conversationId;
-    const message = discarded ? '本条消息确认未发送，已作废，不会自动重试。请提交一条新消息。'
-      : unconfirmed ? link ? '此条消息的送达结果无法确认，但已保留 ChatGPT 对话绑定。不会自动重发；你可以继续发送一条新的消息。'
-        : '网页可能已收到消息，但发送回执尚未确认。不会自动重发；请勿重复发送原消息。'
-      : error;
-    emit({type:'session.notice',sessionId:hostId,notice:{id:'native-permission',severity:'info',title:'授权等待已结束',dismissed:true}});
-    emit({type:'session.notice',sessionId:hostId,notice:{id:'native-delivery',severity:unconfirmed||discarded?'warning':'info',
-      title:discarded?'消息未发送，已作废；不会自动重试':unconfirmed?'已尝试发送，回执未确认；并非仍在排队':'本轮投递已结束；以回执或错误为准',dismissed:!unconfirmed&&!discarded}});
-    // Settle native tool cards before the turn terminal without inventing a
-    // successful tool result when its webpage status was not confirmed.
-    try {
-      const session=sessions.get(hostId);
-      const turn=session&&broker.snapshot(session.id).turn;
-      if(turn?.id===turnId)for(const item of turn.nativeTerminalItems??[])
-        emit({type:'timeline.item',sessionId:hostId,item});
-    }catch{}
-    emit({ type: 'session.turn', sessionId: hostId, turnId, state, ...(error ? { error: { code: error, message } } : {}) });
+  const host=id=>{const binding=sessions.get(id);invariant(binding,'SESSION_UNKNOWN');return binding;};
+  const keyFor=event=>event.item?'item:'+event.item.id:event.state==='approval'?'approval:'+event.approval.key:
+    event.state==='approval-closed'?'approval-close:'+event.key:event.state+':'+(event.turnId??'conversation');
+  const hold=(queue,event)=>queue.set(keyFor(event),event);
+  const emitItem=(hostId,item)=>{
+    const binding=sessions.get(hostId);if(!binding)return;
+    const before=binding.items.get(item.id);
+    if(before&&JSON.stringify(before)===JSON.stringify(item))return;
+    if(item.type==='assistant_message'&&binding.delivery){
+      binding.items.set(item.id,item);binding.delivery.submit(item);return;
+    }
+    if(before&&['assistant_message','reasoning'].includes(item.type)&&before.type===item.type&&
+      !item.text.startsWith(before.text)) {
+      // This is a concrete non-prefix source revision, not Work expansion.
+      // Keep the new original in the source ledger; do not concatenate it to
+      // the old native answer or silently convert formal output to plugin text.
+      emit({type:'session.notice',sessionId:hostId,notice:{id:'source-revision:'+item.id,
+        severity:'warning',title:'CIP：正文修订无法原位同步',
+        description:'新原文已保存；当前宿主的原生文本接口只支持追加，未把新旧正文错误拼接。'}});
+      return;
+    }
+    binding.items.set(item.id,item);
+    // Host-neutral callers without a read adapter retain unconfirmed one-shot
+    // emission only. Production installs the adapter before opening sessions.
+    emit({type:'timeline.item',sessionId:hostId,item});
   };
-  // Paseo may receive a NEW user message while Chrome is recovering an older
-  // native turn. Hold only that new request until the old turn is settled.
-  // This is not a replay, does not reserve a Send lease, and aborts on Stop.
-  async function waitForPriorTurn(id, signal) {
-    if (!['sending','running','stopping'].includes(broker.snapshot(id).status)) return;
-    await new Promise((resolve, reject) => {
-      let settled = false;
-      const done = error => {
-        if (settled) return; settled = true;
-        unsubscribe(); signal.removeEventListener('abort', abort);
-        error ? reject(error) : resolve();
-      };
-      const abort = () => done(new BridgeError('SEND_CANCELLED'));
-      const inspect = () => {
-        try {
-          if (!['sending','running','stopping'].includes(broker.snapshot(id).status)) done();
-        } catch (error) { done(error); }
-      };
-      const unsubscribe = broker.subscribe(id, inspect);
-      signal.addEventListener('abort', abort, { once:true });
-      if (signal.aborted) abort();
-      else inspect();
+  const announce=(hostId,turnId)=>{
+    const key=hostId+':'+turnId;
+    if(startedTurns.has(key)||endedTurns.has(key))return;
+    startedTurns.add(key);
+    emit({type:'session.turn',sessionId:hostId,turnId,state:'started'});
+  };
+  const end=(hostId,turnId,state,error)=>{
+    const key=hostId+':'+turnId;
+    if(!startedTurns.has(key)||endedTurns.has(key))return;
+    endedTurns.add(key);
+    emit({type:'session.turn',sessionId:hostId,turnId,state,
+      ...(error?{error:{code:error,message:errorLabel(error)}}:{})});
+  };
+  const publish=(hostId,event)=>{
+    const binding=sessions.get(hostId);if(!binding)return;
+    if(event.state==='source'||event.state==='artifact'||event.state==='page-status') {
+      if(event.item)emitItem(hostId,event.item);
+      binding.delivery?.kick();
+      return;
+    }
+    if(event.state==='page-running') {
+      const run=broker.snapshot(binding.id).observation?.run;
+      if(run?.active&&run.id===event.turnId)announce(hostId,event.turnId);
+      return;
+    }
+    if(event.state==='page-standby') {end(hostId,event.turnId,'completed');return;}
+    if(event.state==='approval') {
+      if(!capabilities.includes('permission')) {
+        // Without permission UI this card is a notice; track it so an external
+        // close can retire that same notice instead of leaving it stale.
+        binding.permissions.set(event.approval.key,'open');
+        emit({type:'session.notice',sessionId:hostId,notice:{id:'approval:'+event.approval.key,
+          severity:'warning',title:'请在网页处理授权',description:event.approval.text??'当前客户端不支持授权操作。'}});
+        return;
+      }
+      const signature=JSON.stringify(event.approval);
+      if(binding.permissionSignatures.get(event.approval.key)===signature)return;
+      binding.permissionSignatures.set(event.approval.key,signature);
+      binding.permissions.set(event.approval.key,'open');
+      emit({type:'session.permission',sessionId:hostId,request:permissionRequest(event.approval)});
+      return;
+    }
+    if(event.state==='approval-closed') {
+      if(binding.permissions.get(event.key)!=='open')return;
+      if(event.answered&&binding.respondingPermissions.get(event.key)===event.answered) {
+        binding.permissions.set(event.key,'resolved');
+        emit({type:'session.permission_resolved',sessionId:hostId,permissionId:event.key});
+      } else {
+        // The public host interface defaults an unrecorded resolution to Deny.
+        // It cannot truthfully express a withdrawal/unknown external choice.
+        // Report this narrow limitation rather than fabricate a Deny.
+        emit({type:'session.notice',sessionId:hostId,notice:{id:'approval-closed:'+event.key,
+          severity:'warning',title:'网页授权框已关闭',
+          description:'Paseo 未记录此次选择，无法据此标记允许或拒绝。原授权提示可能仍保留，请勿重复操作。'}});
+      }
+      return;
+    }
+    if(event.state==='bound')emit({type:'session.notice',sessionId:hostId,notice:{
+      id:'native-conversation-bound',severity:'info',title:'已关联 ChatGPT 对话'}});
+    else if(event.state==='receipt-pending')emit({type:'session.notice',sessionId:hostId,notice:{
+      id:'native-delivery',severity:'warning',title:'消息送达待确认',
+      description:'继续读取原对话并核对发送回执，不会重发。'}});
+    else if(event.state==='receipt') {
+      emit({type:'session.notice',sessionId:hostId,notice:{id:'native-delivery',
+        severity:'info',title:'网页已确认接收',dismissed:true}});
+      if(event.appNetworkEvidence==='omitted')emit({type:'session.notice',sessionId:hostId,notice:{
+        id:'native-app-evidence',severity:'warning',title:'所选 @ 应用是否提交尚未确认',
+        description:'正文已送达，但未读到完整应用引用。不会重发消息。'}});
+    } else if(['failed','canceled'].includes(event.state)) {
+      const turn=broker.snapshot(binding.id).turn;
+      if(event.state==='failed' && turn?.id===event.turnId && turn.authorized &&
+          !turn.notSent && !turn.discarded && !turn.receivedAt) {
+        emit({type:'session.notice',sessionId:hostId,notice:{id:'native-delivery',
+          severity:'warning',title:'已尝试发送，送达未确认',dismissed:false,
+          description:'没有收到可核实的网页回执，网页任务是否继续尚未确认；不会自动重发。'}});
+      }
+      end(hostId,event.turnId,event.state,event.error);
+    }
+  };
+  const requestBarrier=(hostId,binding)=>{
+    if(!binding.ready||(binding.confirmed&&(!binding.delivery||binding.agentId))||binding.barrierInflight||sessions.get(hostId)!==binding)return;
+    if(!observation) {binding.confirmed=true;flushBinding(hostId,binding);return;}
+    binding.barrierInflight=true;binding.barrierAt=Date.now();
+    void observation.request(binding.id).then(result=>{
+      binding.barrierInflight=false;
+      if(result?.woken!==true||sessions.get(hostId)!==binding||!binding.ready)return;
+      // Subscription only, never acknowledgement of a native timeline item.
+      binding.agentId=result.agentId;
+      binding.confirmed=true;flushBinding(hostId,binding);
+      binding.delivery?.kick();
+    },()=>{binding.barrierInflight=false;});
+  };
+  function flushBinding(hostId,binding) {
+    if(!binding.ready||!binding.confirmed||binding.deferred)return;
+    const held=binding.held;binding.held=new Map();
+    for(const event of held.values())publish(hostId,event);
+    binding.delivery?.kick();
+  }
+  const observe=(hostId,event)=>{
+    const binding=sessions.get(hostId);if(!binding)return;
+    if(binding.deferred) {hold(binding.deferred,event);return;}
+    if(!binding.ready||!binding.confirmed) {
+      hold(binding.held,event);
+      if(Date.now()-(binding.barrierAt??0)>=BARRIER_RETRY_MS)requestBarrier(hostId,binding);
+      return;
+    }
+    publish(hostId,event);
+  };
+  const stopConfirmations=observation?.onHostAvailable(()=>{
+    for(const [hostId,binding] of sessions)requestBarrier(hostId,binding);
+  })??(()=>{});
+  const releaseDeferred=(hostId,binding,failed)=>{
+    if(!binding?.deferred||binding.releasing)return;
+    const deliver=()=>{
+      const queue=binding.deferred;binding.deferred=null;binding.releasing=false;
+      if(sessions.get(hostId)!==binding)return;
+      for(const event of queue?.values()??[])observe(hostId,event);
+      flushBinding(hostId,binding);
+    };
+    // This handles failures AFTER Provider entry, not a host pre-Provider race.
+    if(failed){binding.releasing=true;setImmediate(deliver);}else deliver();
+  };
+  async function waitForPriorTurn(id,signal) {
+    if(!['sending','running','stopping'].includes(broker.snapshot(id).status))return;
+    await new Promise((resolve,reject)=>{
+      let settled=false;
+      const done=error=>{if(settled)return;settled=true;unsubscribe();signal.removeEventListener('abort',abort);
+        error?reject(error):resolve();};
+      const abort=()=>done(new BridgeError('SEND_CANCELLED'));
+      const inspect=()=>{try {if(!['sending','running','stopping'].includes(broker.snapshot(id).status))done();}
+        catch(error){done(error);}};
+      const unsubscribe=broker.subscribe(id,inspect);
+      signal.addEventListener('abort',abort,{once:true});if(signal.aborted)abort();else inspect();
     });
   }
-  const buffered = new Map();
-  const observe = (hostId, event) => {
-    const key = `${hostId}:${event.turnId}`;
-    if(event.state==='external-gap'){
-      emit({type:'session.notice',sessionId:hostId,notice:{id:'external-transcript-gap',severity:'warning',
-        title:'ChatGPT 网页存在多轮尚未同步的消息',
-        description:'无法安全证明遗漏轮次的顺序。已保留会话绑定；不会自动回放或再次发送，请在原网页核对。'}});
-      return;
-    }
-    // Paseo 0.11.2 treats a provider-created started turn as an autonomous
-    // native run. No Paseo-origin prompt disposition or outbound Send exists.
-    if (event.state === 'external-started') {
-      if (startedTurns.has(key)) return;
-      startedTurns.add(key);
-      emit({type:'session.turn',sessionId:hostId,turnId:event.turnId,state:'started'});
-      emit({type:'timeline.item',sessionId:hostId,item:event.item});
-      for(const pending of buffered.get(key)??[])observe(hostId,pending);
-      buffered.delete(key);
-      return;
-    }
-    if (!startedTurns.has(key) && event.state !== 'receipt') { const list = buffered.get(key) ?? []; list.push(event); buffered.set(key, list); return; }
-    if (event.state === 'bound') emit({type:'session.notice',sessionId:hostId,notice:{
-      id:'native-conversation-bound',severity:'info',
-      title:'已绑定 ChatGPT 对话链接',description:'绑定不代表这条消息已投递成功；即使单轮出错，链接仍会保留。'
-    }});
-    else if (event.state === 'receipt-pending') emit({type:'session.notice',sessionId:hostId,notice:{
-      id:'native-delivery',severity:'warning',title:'发送回执暂不可读，正在观察同一 ChatGPT 对话',
-      description:'网页可能已接收并正在执行；不会因固定时间结束跟踪，不会重发消息。只有确认原生用户消息身份后才回传回答。'
-    }});
-    else if (event.state === 'receipt') {
-      emit({type:'session.notice',sessionId:hostId,notice:{id:'native-delivery',severity:'info',title:'网页已确认接收',dismissed:true}});
-      if(event.appNetworkEvidence==='omitted')emit({type:'session.notice',sessionId:hostId,notice:{
-        id:'native-app-evidence',severity:'warning',title:'所选 @ 应用缺少网络提交证据',
-        description:'正文已确认送达，但在本桥接支持解析的消息内容中未找到所选应用的完整引用；实际工具可用性未证实。不会重发消息。'
-      }});
-      else if(event.appNetworkEvidence==='included')emit({type:'session.notice',sessionId:hostId,notice:{
-        id:'native-app-evidence',severity:'info',title:'应用提交证据正常',dismissed:true
-      }});
-    }
-    else if (event.state === 'snapshot' || event.state === 'image' ||
-      event.state === 'activity' || event.state === 'native-timeline') {
-      emit({type:'timeline.item',sessionId:hostId,item:event.item});
-      emit({type:'session.notice',sessionId:hostId,notice:{id:'native-tracking-gap',
-        severity:'info',title:'网页原生消息已恢复',dismissed:true}});
-      if(event.state==='activity' && event.item.data.phase!=='approval')
-        emit({type:'session.notice',sessionId:hostId,notice:{id:'native-permission',severity:'info',title:'授权等待已结束',dismissed:true}});
-    }
-    else if(event.state==='waiting'){
-      const gap=event.reason==='transcript-unavailable';
-      emit({type:'session.notice',sessionId:hostId,notice:{
-        id:gap?'native-tracking-gap':'native-permission',severity:gap?'info':'warning',
-        title:gap?'网页正在运行，等待消息状态恢复':event.reason==='final-unconfirmed'?
-          '网页回答的结束状态尚未确认':'在 ChatGPT 网页中确认所需授权',
-        description:gap?'保留已绑定对话；不会因为暂时读不到消息就断开，也不会自动重发。':
-          '此桥接不会自动点击授权或扩大 MCP 权限。'
-      }});
-    }
-    else if (['completed', 'failed', 'canceled'].includes(event.state)) {
-      if(event.activityItem)emit({type:'timeline.item',sessionId:hostId,item:event.activityItem});
-      end(hostId, event.turnId, event.state, event.error);
-    }
-  };
-  const host = id => { const s = sessions.get(id); invariant(s, 'SESSION_UNKNOWN'); return s; };
-  const configEvent = (hostId, sid) => emit({ type: 'session.config', sessionId: hostId, config: configState(broker.snapshot(sid), store.read().catalog,store.read().defaults) });
-  const disposition = (hostId, clientMessageId, result) => {
-    const key = `${hostId}:${clientMessageId}`;
-    const prior = promptResults.get(key);
-    if (prior?.result) return;
-    promptResults.set(key, { ...(prior ?? {}), result }); emit({ type: 'session.prompt_result', sessionId: hostId, clientMessageId, result });
+  const configEvent=(hostId,sid)=>emit({type:'session.config',sessionId:hostId,
+    config:configState(broker.snapshot(sid),store.read().catalog,store.read().defaults)});
+  const disposition=(hostId,clientMessageId,result)=>{
+    const key=hostId+':'+clientMessageId,prior=promptResults.get(key);
+    if(prior?.result)return;
+    promptResults.set(key,{...(prior??{}),result});
+    emit({type:'session.prompt_result',sessionId:hostId,clientMessageId,result});
   };
   async function dispatch(input) {
     invariant(!closed && !closing, 'CONNECTION_CLOSED');
@@ -298,22 +381,42 @@ function createConnection(runtime, capabilities, validateEvent) {
               await broker.recoverUnboundControl(s.id);
               s = broker.snapshot(s.id);
             }
-            invariant(s.status==='idle'||(s.status==='blocked'&&s.conversationId&&s.turn?.outcome)||
-              (s.conversationId&&s.turn?.lease&&!s.turn.outcome&&
-                (['running','stopping'].includes(s.status)||(s.status==='sending'&&s.turn.receiptPending))),
-              'SESSION_REQUIRES_INSPECTION');
+            invariant(s.status!=='abandoned'&&!s.archiveIntent,'SESSION_REQUIRES_INSPECTION');
           } else s = await broker.create(selection, { cwd: input.config.cwd, systemPrompt: input.config.systemPrompt ?? '' });
           invariant(!closed && !closing, 'CONNECTION_CLOSED');
           invariant(!broker.owners.has(s.id), 'SESSION_ALREADY_ATTACHED');
-          binding = { id: s.id, controller: new AbortController(), unsubscribe: broker.subscribe(s.id, e => observe(input.sessionId, e)) };
+          const hostId = input.sessionId;
+          binding={id:s.id,controller:new AbortController(),unsubscribe:broker.subscribe(s.id,e=>observe(hostId,e)),
+            held:new Map(),items:new Map(),permissions:new Map(),permissionSignatures:new Map(),
+            respondingPermissions:new Map(),ready:false,confirmed:false};
           broker.owners.set(s.id, binding); sessions.set(input.sessionId, binding);
+          if(typeof observation?.readTimeline==='function') {
+            const active=()=>!closed&&!closing&&!broker.closed&&sessions.get(hostId)===binding&&
+              !binding.controller.signal.aborted&&broker.owners.get(binding.id)===binding;
+            binding.delivery=createProviderDelivery({sessionId:s.id,hostId,store,isCurrent:active,
+              isReady:()=>binding.ready&&binding.confirmed&&!binding.deferred&&!binding.releasing,
+              readHost:async(bindingGeneration,isCurrent)=>{
+                if(!binding.agentId){requestBarrier(hostId,binding);throw new BridgeError('HOST_AGENT_UNAVAILABLE');}
+                const agentId=binding.agentId;
+                const view=await observation.readTimeline(binding.id,{agentId,hostId,bindingGeneration,isCurrent});
+                return {agentId,view};
+              },
+              emit:event=>{
+                if(!capabilities.includes('timeline.plugin'))return false;
+                return emit(event);
+              },
+              notice:codes=>emit({type:'session.notice',sessionId:hostId,notice:{id:'native-content-delivery',
+                severity:codes.length?'warning':'info',title:codes.length?'正文送达待核对':'正文同步提示已解除',
+                description:codes.length?'原文仍保留；未据此确认宿主持久化或盲目补发。'+codes.join('、'):undefined,
+                dismissed:codes.length===0}})
+            });
+          }
           // An unbound preparatory tab has no durable ChatGPT conversation yet.
           // Only those ephemeral tab IDs may be dropped during restoration.
           // Once /c/<id> is recorded, keep its tab/document/link intact.
           if(input.persistence && !s.conversationId)
             await store.transaction(d=>{d.sessions[s.id].tabId=null;d.sessions[s.id].documentKey=null;});
-          const resumingActive = s.turn && !s.turn.outcome &&
-            (['running','stopping'].includes(s.status)||(s.status==='sending'&&s.turn.receiptPending));
+          const resumingActive=['sending','running','stopping'].includes(s.status);
           if(resumingActive){
             if(!sameSelection(selection,s.pendingConfig??s.config))
               await broker.stageConfiguration(s.id,selection);
@@ -330,27 +433,21 @@ function createConnection(runtime, capabilities, validateEvent) {
             persistence: { version: 1, data: { id: s.id } }, cwd: s.cwd, ...(input.config.title ? { title: input.config.title } : {}) });
           if (mcpNotice) emit({ type: 'session.notice', sessionId: input.sessionId, notice: mcpNotice });
           emit({ type: 'session.notice', sessionId: input.sessionId, notice: { id: 'native-config-pending', severity: 'info',
-            title: resumingActive ? '已恢复仍在运行的 ChatGPT 对话监控' :
-              s.conversationId ? '已恢复已绑定的 ChatGPT 对话；下一条消息将验证原网页' : '配置已保存；首次发送时打开 ChatGPT 并核验配置',
-            description: resumingActive ? '保留原轮次及绑定，继续观察；不会重发之前的消息。' :
-              s.conversationId ? '旧消息不会自动重发；网页与配置将在下一次新消息时重新核验。' : '当前尚未声称网页已应用这些选项。' } });
+            title: resumingActive ? '已恢复网页跟踪' :
+              s.conversationId ? '已恢复原对话关联' : '配置已保存，待发送时应用',
+            description: resumingActive ? '继续读取原对话，不会重发消息。' :
+              s.conversationId ? '下次发送前核对原网页及配置，不会重发旧消息。' : '首次发送前打开 ChatGPT 并核对配置。' } });
           configEvent(input.sessionId, s.id);
-          if(s.externalGap)observe(input.sessionId,{state:'external-gap'});
-          if (input.history === 'replay') for (const item of broker.snapshot(s.id).history) emit({ type: 'timeline.item', sessionId: input.sessionId, item });
-          emit({ type: 'session.ready', requestId: input.requestId, sessionId: input.sessionId });
-          if(resumingActive){
-            const key=`${input.sessionId}:${s.turn.id}`;
-            startedTurns.add(key);
-            emit({type:'session.turn',sessionId:input.sessionId,turnId:s.turn.id,state:'started'});
-            if(s.turn.origin==='browser' && input.history!=='replay'){
-              const user=s.history.find(item=>item.id===`user:${s.turn.id}`);
-              if(user)emit({type:'timeline.item',sessionId:input.sessionId,item:user});
-            }
-            for(const event of buffered.get(key)??[])observe(input.sessionId,event);
-            buffered.delete(key);
-            if(s.turn.receiptPending)observe(input.sessionId,{turnId:s.turn.id,state:'receipt-pending'});
-          }
-        } catch (e) { binding?.unsubscribe(); if (binding && broker.owners.get(binding.id) === binding) broker.owners.delete(binding.id); sessions.delete(input.sessionId); throw e; }
+          if(input.history==='replay')for(const item of broker.snapshot(s.id).history)emitItem(input.sessionId,item);
+          emit({type:'session.ready',requestId:input.requestId,sessionId:input.sessionId});
+          binding.ready=true;
+          const current=broker.snapshot(s.id),run=current.observation?.run;
+          if(run?.active)observe(input.sessionId,{state:'page-running',turnId:run.id});
+          for(const approval of Object.values(current.approvals??{}))
+            if(approval.state==='open')observe(input.sessionId,{state:'approval',approval});
+          if(current.turn?.receiptPending)observe(input.sessionId,{state:'receipt-pending',turnId:current.turn.id});
+          requestBarrier(input.sessionId,binding);
+        } catch (e) { binding?.delivery?.close(); binding?.unsubscribe(); if (binding && broker.owners.get(binding.id) === binding) broker.owners.delete(binding.id); sessions.delete(input.sessionId); throw e; }
         finally { opening.delete(input.sessionId); }
         return;
       }
@@ -361,25 +458,30 @@ function createConnection(runtime, capabilities, validateEvent) {
         const previous = promptResults.get(promptKey);
         if (previous) {
           if (previous.fingerprint !== fingerprint) emit({ type: 'session.notice', sessionId: input.sessionId,
-            notice: { id: 'message-id-conflict', severity: 'error', title: '消息 ID 已被使用；修改内容重试须使用新 ID' } });
+            notice: { id: 'message-id-conflict', severity: 'error', title: '消息标识已使用，请新建一条消息' } });
           return;
         }
         invariant(promptResults.size < 4000, 'PROMPT_HISTORY_LIMIT');
         promptResults.set(promptKey, { fingerprint, result: null });
         invariant(capabilities.includes('prompt.message'), 'CAPABILITY_NOT_NEGOTIATED');
         const binding = host(input.sessionId); const { id } = binding;
+        // A host prompt comes from a registered, subscribed host session.
+        binding.confirmed = true;
         const {text:value,attachments}=promptContent(input.prompt);
         invariant(!attachments.some(p=>p.type==='image')||capabilities.includes('prompt.image'),'CAPABILITY_NOT_NEGOTIATED');
+        // Its own failure is reported on that request; the prompt then checks the page itself.
+        if (binding.configuring) await binding.configuring.catch(() => {});
         invariant(!binding.preparing, 'SESSION_BUSY');
         const preparing = new AbortController(); binding.preparing = preparing;
+        binding.deferred ??= new Map();
         let result, slot;
         try {
           const signal = AbortSignal.any([controller.signal, binding.controller.signal, preparing.signal]);
           if (['sending','running','stopping'].includes(broker.snapshot(id).status)) {
             emit({type:'session.notice',sessionId:input.sessionId,notice:{
               id:'native-prior-turn',severity:'info',
-              title:'上一轮 ChatGPT 仍在运行，新消息等待发送',
-              description:'正在恢复原绑定对话。旧消息不会重发；本条新消息将在上一轮真正结束后发送。'
+              title:'上一轮尚未结束，新消息等待发送',
+              description:'正在恢复原对话跟踪。本条新消息将在上一轮结束后发送，旧消息不会重发。'
             }});
             // Browser must be woken BEFORE waiting for the existing turn to
             // settle; otherwise a Chrome-quit/active-turn case deadlocks.
@@ -400,10 +502,10 @@ function createConnection(runtime, capabilities, validateEvent) {
             await broker.prepareContinuation(id);
             emit({type:'session.notice',sessionId:input.sessionId,notice:{
               id:'native-recovered-link',severity:'warning',
-              title:'继续已绑定对话',description:'上一条结果不明，保留原始消息记录；此次仅发送你新输入的消息，不重发旧消息。'
+              title:'继续原 ChatGPT 对话',description:'上一条结果未确认。本次仅发送新消息，不重发旧消息。'
             }});
           }
-          slot = await broker.slots.acquire(id, { signal, onPosition: position => emit({type:'session.notice',sessionId:input.sessionId,notice:{id:'native-queue',severity:'info',title:position?`等待并发名额 · 队列第 ${position} 位（尚未发送）`:'已取得名额，正在核验网页',dismissed:position===0}}) });
+          slot = await broker.slots.acquire(id, { signal, onPosition: position => emit({type:'session.notice',sessionId:input.sessionId,notice:{id:'native-queue',severity:'info',title:position?`排队第 ${position} 位 · 尚未发送`:'正在核对网页',dismissed:position===0}}) });
           // A bound Agent is sufficient user intent to bring Chrome back.
           // Do this BEFORE queuing any Send, so a failed OS wake is not a
           // failed/duplicate ChatGPT message.
@@ -422,6 +524,10 @@ function createConnection(runtime, capabilities, validateEvent) {
           } else await broker.ensurePage(id, { signal });
           invariant(!signal.aborted && !closed && !closing, 'SEND_CANCELLED');
           result = await broker.prompt(id, input.prompt.clientMessageId, value, { signal, attachments });
+          // Accept once a frame from after the one-shot dispatch is observed,
+          // or its command result arrives. Do not hold authorization/content
+          // for a slow message receipt; the page controls still end the run.
+          if(!result.replay)await broker.waitForSendObservation(broker.snapshot(id).turn.commandId);
         } finally {
           slot?.release(); if (binding.preparing === preparing) binding.preparing = null;
           emit({type:'session.notice',sessionId:input.sessionId,notice:{id:'native-prior-turn',severity:'info',title:'上一轮等待已结束',dismissed:true}});
@@ -429,18 +535,16 @@ function createConnection(runtime, capabilities, validateEvent) {
         }
         const delivery = broker.snapshot(id).turn;
         emit({type:'session.notice',sessionId:input.sessionId,notice:{id:'native-delivery',severity:'info',
-          title:delivery?.receivedAt?'网页已确认接收':'消息已排队，等待网页接收',dismissed:Boolean(delivery?.receivedAt)}});
-        const key = `${input.sessionId}:${result.turnId}`;
-        disposition(input.sessionId, input.prompt.clientMessageId, { type: 'turn', turnId: result.turnId });
-        if (!startedTurns.has(key)) {
-          startedTurns.add(key);
-          emit({ type: 'timeline.item', sessionId: input.sessionId, item: { type: 'user_message', id: `user:${result.turnId}`, text: value, clientMessageId: input.prompt.clientMessageId } });
-          emit({ type: 'session.turn', sessionId: input.sessionId, turnId: result.turnId, state: 'started' });
-          for (const event of buffered.get(key) ?? []) observe(input.sessionId, event); buffered.delete(key);
-          if (result.outcome) end(input.sessionId, result.turnId, result.outcome);
-          const turn = broker.snapshot(id).turn;
-          if (turn.id === result.turnId && turn.outcome) end(input.sessionId, turn.id, turn.outcome);
-        }
+          title:delivery?.receivedAt?'网页已确认接收':'正在发送，等待送达确认',dismissed:Boolean(delivery?.receivedAt)}});
+        const current=broker.snapshot(id),run=current.observation?.run;
+        const wire=current.turn?.id===result.turnId&&current.turn.observedRunId?
+          current.turn.observedRunId:run?.active?run.id:result.turnId;
+        disposition(input.sessionId,input.prompt.clientMessageId,{type:'turn',turnId:wire});
+        emitItem(input.sessionId,{type:'user_message',id:'user:'+result.turnId,text:value,clientMessageId:input.prompt.clientMessageId});
+        announce(input.sessionId,wire);
+        releaseDeferred(input.sessionId,binding,false);
+        if(current.turn?.id===result.turnId&&current.turn.outcome)
+          end(input.sessionId,wire,current.turn.outcome);
         return;
       }
       case 'session.configure': {
@@ -455,17 +559,48 @@ function createConnection(runtime, capabilities, validateEvent) {
         if(['sending','running','stopping'].includes(old.status)){
           await broker.stageConfiguration(id,selection);
           emit({type:'session.notice',sessionId:input.sessionId,notice:{id:'deferred-config',severity:'info',
-            title:'工具与模型已保存，将在下一轮发送前应用'}});
+            title:'新配置已保存，下轮发送前应用'}});
         }else if(old.tabId===null) await broker.deferConfigure(id, selection);
         else {
-          const signal=AbortSignal.any([controller.signal,binding.controller.signal]);
-          await (runtime.chromeWake ?? wakeChrome)({status:()=>runtime.status(),signal});
-          await broker.configure(id, selection, { signal });
+          // A prompt sent right after this (Paseo applies the composer's
+          // model first) waits for it instead of failing CONFIGURATION_BUSY.
+          const work=(async()=>{
+            const signal=AbortSignal.any([controller.signal,binding.controller.signal]);
+            await (runtime.chromeWake ?? wakeChrome)({status:()=>runtime.status(),signal});
+            await broker.configure(id, selection, { signal });
+          })();
+          binding.configuring=work;
+          try { await work; } finally { if(binding.configuring===work) binding.configuring=null; }
         }
         configEvent(input.sessionId, id); emit({ type: 'request.completed', requestId: input.requestId }); return;
       }
+      case 'session.permission': {
+        const binding = host(input.sessionId), permissions = (binding.permissions ??= new Map());
+        if (permissions.get(input.permissionId) !== 'open') return;
+        try {
+          const choice = approvalChoice(input.response);
+          binding.respondingPermissions.set(input.permissionId,choice);
+          await broker.answerApproval(binding.id, input.permissionId, choice);
+          if (permissions.get(input.permissionId) === 'open') {
+            permissions.set(input.permissionId, 'resolved');
+            emit({ type: 'session.permission_resolved', sessionId: input.sessionId, permissionId: input.permissionId });
+          }
+        } catch (e) {
+          // Nothing was clicked, or the click was not confirmed. The request
+          // stays open in Paseo; the page card is still the source of truth.
+          emit({ type: 'session.notice', sessionId: input.sessionId, notice: { id: 'native-permission-answer', severity: 'warning',
+            title: '授权操作未确认', description: `请先核对网页授权状态，再决定是否重试。错误码：${errorOf(e).code}` } });
+        }
+        return;
+      }
       case 'session.interrupt': {
-        const binding = host(input.sessionId); binding.preparing?.abort(); const { id } = binding; await broker.interrupt(id); emit({ type: 'request.completed', requestId: input.requestId }); return;
+        const binding=host(input.sessionId),preparing=Boolean(binding.preparing);
+        binding.preparing?.abort();
+        const current=broker.snapshot(binding.id),command=current.turn&&store.read().commands[current.turn.commandId];
+        const unsent=command?.kind==='send'&&['queued','claimed'].includes(command.phase)&&!current.turn.authorized;
+        if(!preparing||unsent||current.observation?.page?.controls.stop.visible)
+          await broker.interrupt(binding.id);
+        emit({type:'request.completed',requestId:input.requestId});return;
       }
       case 'session.archive': {
         // Paseo sends persistence even when the Agent has no open Provider session.
@@ -482,17 +617,12 @@ function createConnection(runtime, capabilities, validateEvent) {
         return;
       }
       case 'session.close': {
-        const binding = host(input.sessionId); binding.controller.abort();
-        let failure;
-        try { if (store.read().sessions[binding.id]) await broker.interrupt(binding.id); }
-        catch (e) { failure = errorOf(e); }
-        finally {
-          binding.unsubscribe(); if (broker.owners.get(binding.id) === binding) broker.owners.delete(binding.id); sessions.delete(input.sessionId);
-          emit({ type: 'session.closed', sessionId: input.sessionId, ...(failure ? { error: failure } : {}) });
-        }
-        if (failure) emit({ type: 'request.failed', requestId: input.requestId, error: failure });
-        else emit({ type: 'request.completed', requestId: input.requestId });
-        return;
+        const binding=host(input.sessionId);binding.delivery?.close();binding.controller.abort();binding.unsubscribe();
+        if(broker.owners.get(binding.id)===binding)broker.owners.delete(binding.id);
+        sessions.delete(input.sessionId);
+        // Detaching a host is neither Stop nor unbinding the webpage.
+        emit({type:'session.closed',sessionId:input.sessionId});
+        emit({type:'request.completed',requestId:input.requestId});return;
       }
       default: throw new BridgeError('CAPABILITY_UNSUPPORTED');
     }
@@ -502,18 +632,23 @@ function createConnection(runtime, capabilities, validateEvent) {
     async send(input) {
       invariant(!closed && !closing, 'CONNECTION_CLOSED');
       // Do not await a browser roundtrip here: acceptance is separate from lifecycle events.
-      invariant(['catalog', 'session.open', 'session.prompt', 'session.configure', 'session.interrupt', 'session.archive', 'session.unarchive', 'session.close'].includes(input.type), 'CAPABILITY_UNSUPPORTED');
+      invariant(['catalog', 'session.open', 'session.prompt', 'session.configure', 'session.interrupt', 'session.permission', 'session.archive', 'session.unarchive', 'session.close'].includes(input.type), 'CAPABILITY_UNSUPPORTED');
       queueMicrotask(() => dispatch(input).catch(e => {
-        if (input.type === 'session.prompt') disposition(input.sessionId, input.prompt.clientMessageId, { type: 'failed', error: errorOf(e) });
+        if (input.type === 'session.prompt') {
+          disposition(input.sessionId, input.prompt.clientMessageId, { type: 'failed', error: errorOf(e) });
+          const binding = sessions.get(input.sessionId);
+          if (!binding?.preparing) releaseDeferred(input.sessionId, binding, true);
+        }
         else if ('requestId' in input) emit({ type: 'request.failed', requestId: input.requestId, error: errorOf(e) });
       }));
     },
     onEvent(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     async close() {
-      if (closed || closing) return; closing = true; controller.abort();
+      if (closed || closing) return; closing = true; controller.abort(); stopConfirmations();
       // Closing the Provider connection is not a user's Stop command. Keep
       // live browser turns for a later connection/restart to reattach safely.
       for (const [hostId, binding] of sessions) {
+        binding.delivery?.close();
         binding.controller.abort();
         binding.unsubscribe();
         if (broker.owners.get(binding.id) === binding) broker.owners.delete(binding.id);

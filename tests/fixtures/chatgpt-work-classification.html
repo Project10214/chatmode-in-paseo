@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Offline public Work classification fixture — synthetic, not a live capture</title>
+<style>
+  body { font: 16px sans-serif; }
+  [data-markdown-text-tone="tertiary"] { color: #777; }
+  .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); }
+</style>
+<aside><div data-message-author-role="assistant" data-message-id="sidebar-message">SIDEBAR_OTHER_CONVERSATION</div></aside>
+<div data-app-shell-page-surface style="display:none">
+  <main><div data-message-author-role="assistant" data-message-id="kept">HIDDEN_KEPT_PAGE</div></main>
+</div>
+<div data-app-shell-page-surface>
+<main data-app-shell-main-surface data-conversation-id="fixture-conversation">
+  <div data-thread-find-target="conversation">
+    <article data-turn-key="turn-one">
+      <div data-content-search-turn-key="fallback-turn-0">
+        <div data-chatgpt-search-unit-key="fallback-turn-0:0:user" data-chatgpt-search-message-ids="user-one user-one">
+          <div data-content-search-unit-key="fallback-turn-0:0:user"><p>请核对代码，保留原文。</p></div>
+        </div>
+        <details id="public-work" open>
+          <summary>Work</summary>
+          <div data-markdown-text-style="assistant-message" data-markdown-text-tone="primary" data-selected-text-overlay-target="progress-one"><p>我先核对代码，再检查测试。</p></div>
+          <div data-markdown-text-style="assistant-message" data-markdown-text-tone="tertiary" data-selected-text-overlay-target="summary-one"><p>Focused on checking the implementation</p></div>
+          <div data-message-author-role="assistant" data-message-channel="commentary" data-message-id="progress-two"><p>测试仍在运行，尚未确认结果。</p></div>
+          <div data-tool-call-id="call-one" data-tool-name="read_file" data-tool-status="completed">
+            <div>读取文件</div>
+            <pre data-testid="tool-call-input">{"path":"fixture.txt"}</pre>
+            <pre data-testid="tool-call-output">fixture line 1
+  fixture line 2</pre>
+            <pre data-testid="tool-call-output" hidden>HIDDEN_TOOL_OUTPUT</pre>
+          </div>
+          <div id="unknown-work">Unknown public activity 7X — keep me verbatim</div>
+          <div data-tool-name="pretend_tool">工具外观但没有调用身份</div>
+          <div hidden data-markdown-text-style="assistant-message">PRIVATE_HIDDEN_CHILD</div>
+          <div data-message-channel="analysis">PRIVATE_ANALYSIS</div>
+          <div aria-hidden="true">PRIVATE_ARIA_CHILD</div>
+          <div style="display:none">PRIVATE_CSS_CHILD</div>
+          <div class="sr-only">PRIVATE_SR_ONLY</div>
+        </details>
+        <div id="final-one" data-content-search-unit-key="fallback-turn-0:2:assistant" data-chatgpt-search-unit-key="fallback-turn-0:2:assistant" data-chatgpt-search-message-ids="answer-one answer-one">
+          <span class="sr-only">ChatGPT said:</span>
+          <div data-markdown-text-style="assistant-message" data-markdown-text-tone="primary"><p>核对完成。<strong>正式回答保持独立。</strong></p><p>原文含有 tool、completed，不代表工具结果或网页状态。</p></div>
+          <button data-testid="copy-turn-action-button">Copy</button>
+        </div>
+      </div>
+    </article>
+    <section data-testid="conversation-turn-legacy">
+      <div data-message-author-role="user" data-message-id="user-two"><p>第二轮：继续。</p></div>
+      <div data-message-author-role="assistant" data-message-id="answer-two"><div class="markdown"><p>第二轮正式回答。</p></div></div>
+    </section>
+    <article data-turn-key="turn-three">
+      <div data-content-search-unit-key="turn-three:0:user" data-message-id="user-three"><p>查看公开过程。</p></div>
+      <button type="button" aria-controls="work-panel" aria-expanded="false">Work</button>
+      <div id="work-panel" hidden aria-hidden="true">
+        <div data-message-author-role="assistant" data-message-id="progress-three" data-message-channel="commentary">这是可展开的公开进度。</div>
+        <div hidden>PRIVATE_WITHIN_PUBLIC_PANEL</div>
+      </div>
+      <div data-chatgpt-search-unit-key="turn-three:2:assistant" data-chatgpt-search-message-ids='["answer-three","answer-three"]'>第三轮正式回答。</div>
+    </article>
+    <div id="unknown-top">无法分类的正文提示：Error 9Z</div>
+    <div id="partial" data-chatgpt-search-unit-key="mixed" data-chatgpt-search-message-ids="unknown-a unknown-b">身份无法拆分，但原文必须保留。</div>
+    <div role="alert">网页错误原文，不要求有输入框。</div>
+    <div data-codex-approval-surface="true" id="approval">
+      <div role="alert">Allow ChatGPT to use fixture-tool?</div>
+      <div>Only this synthetic request is visible.</div>
+      <form>
+        <button type="button">Always allow</button>
+        <button type="button" id="deny">Deny<kbd aria-hidden="true">Esc</kbd></button>
+        <button type="submit" id="allow">Allow once<kbd aria-hidden="true">⏎</kbd></button>
+        <button type="button" aria-haspopup="menu" aria-label="Approval options"></button>
+      </form>
+    </div>
+    <div data-message-author-role="assistant" data-message-id="media-message"><p>附图和文件：</p><img alt="公开图片" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="><a href="data:text/plain,fixture" download="fixture.txt">fixture.txt</a></div>
+    <div data-conversation-id="other-conversation"><div data-message-id="other" data-message-author-role="assistant">OTHER_VISIBLE_CONVERSATION</div></div>
+    <details><summary>Unrelated hidden details</summary><div>PRIVATE_NON_WORK_DISCLOSURE</div></details>
+    <div id="private-panel" hidden>PRIVATE_UNLINKED_PANEL</div>
+    <div class="markdown"><button aria-expanded="false" aria-controls="private-panel">Work</button><p>Quoted Work button is not a native disclosure.</p></div>
+    <script type="application/json">{"secret":"PRIVATE_SCRIPT_DATA"}</script>
+  </div>
+  <form data-chatgpt-composer><div id="prompt-textarea" contenteditable="true" role="textbox">EDITOR_DRAFT</div><button aria-label="Start Voice">Voice</button></form>
+</main>
+</div>

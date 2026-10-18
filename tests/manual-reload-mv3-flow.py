@@ -4,12 +4,13 @@ No production Chrome Profile, token, login, model call or Paseo Agent touched.
 First install 0.2.6 then load 0.2.7 from same extension ID. Chrome need not
 emit onInstalled(update); the new worker must observe stored manifest version.
 """
-import json, os, tempfile, shutil, time, threading
+import json, os, tempfile, shutil, time, threading, re
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from playwright.sync_api import sync_playwright
 
 ROOT=Path(__file__).resolve().parents[1]
+PROTOCOL=int(re.search(r'export const PROTOCOL = (\d+)',(ROOT/'server/protocol.mjs').read_text()).group(1))
 TOKEN='fixture-reload-token'
 C_ID='bound-chat'
 S_ID='manual-reload-agent'
@@ -28,7 +29,7 @@ class Runtime(BaseHTTPRequestHandler):
   def do_GET(self):
     name=self.path.split('?')[0]
     with lock:calls.append((name,'GET'))
-    if name=='/hello':return self._json({'product':'chatmode-in-paseo','protocol':5})
+    if name=='/hello':return self._json({'product':'chatmode-in-paseo','protocol':PROTOCOL})
     if name=='/recovery-targets':
       return self._json({'sessions':[{'sessionId':S_ID,'conversationId':C_ID,'tabId':TARGET_ID[0]}]})
     if name=='/active' or name=='/bindings':return self._json({'sessions':[]})

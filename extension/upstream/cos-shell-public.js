@@ -1,66 +1,46 @@
 /* Chat On Steroids — MIT, Copyright (c) 2026 Chat On Steroids contributors.
  * Public-only transplant from extension/fiber.js @ e40562640361ca8f74158b2262ca8c555b00abed:
- * shellTurnSource, shellItemText, unescapeFallbackMarkdown, turnViewOf,
+ * shellTurnSource, shellItemText, turnViewOf,
  * messagesFromTurnView, shellQueries and shellConversation.
  * CIP adaptations: explicit bounds/refusals; no tool/media/analysis payloads;
  * sourceFor connects the existing committed Fiber reader to these source readers.
+ * Message-level completion and the raw public representation are forwarded.
+ * One-shot DIL decoding lives in shared/public-prose.mjs on the receiver.
  * This does not send messages or infer receipts from a URL, elapsed time or button.
  */
 (() => {
   'use strict';
   const MAX_CLIMB = 80, MAX_ROOT_DEPTH = 2048, MAX_ROWS = 400, MAX_RENDERED_TEXT = 256000;
-  const MAX_FORMULA_LINES = 400;
   const str = value => typeof value === 'string' && value.length > 0 && value.length <= 200 ? value : null;
   const reject = code => { throw new Error(code); };
   const boundedText = text => { if (typeof text === 'string' && text.length > MAX_RENDERED_TEXT) reject('TRANSCRIPT_LIMIT'); return text; };
   const ONLY_CONTENT_REFERENCES = /^\s*(?:::chatgpt-content-reference\{[^}\n]*\}\s*)+$/;
 
-  function unescapeFallbackMarkdown(markdown) {
-    const lines = markdown.split('\n');
-    const out = [];
-    let fence = null;
-    for (let index = 0; index < lines.length; index++) {
-      const line = lines[index];
-      const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-      if (fence) {
-        if (marker && marker[0] === fence[0] && marker.length >= fence.length && !line.slice(line.indexOf(marker) + marker.length).trim()) fence = null;
-        out.push(line); continue;
-      }
-      if (marker && !(marker[0] === '`' && line.slice(line.indexOf(marker) + marker.length).includes('`'))) { fence = marker; out.push(line); continue; }
-      if (line.trim() === '\\[') {
-        let close = -1;
-        for (let at = index + 1; at < lines.length && at <= index + MAX_FORMULA_LINES; at++) if (lines[at].trim() === '\\]') { close = at; break; }
-        if (close > index) { for (; index <= close; index++) out.push(lines[index]); index--; continue; }
-      }
-      let text = '';
-      for (let at = 0; at < line.length;) {
-        const char = line[at];
-        if (char === '\\' && line[at + 1] === '(') {
-          const close = line.indexOf('\\)', at + 2);
-          if (close >= 0) { text += line.slice(at, close + 2); at = close + 2; continue; }
-        }
-        if (char === '\\' && /[!-\/:-@[-`{-~]/.test(line[at + 1] || '')) { text += line[at + 1]; at += 2; continue; }
-        if (char === '`') {
-          const run = /^`+/.exec(line.slice(at))[0];
-          const close = new RegExp(`(?<!\`)${run}(?!\`)`).exec(line.slice(at + run.length));
-          if (close) { const end = at + run.length + close.index + run.length; text += line.slice(at, end); at = end; continue; }
-          text += run; at += run.length; continue;
-        }
-        text += char; at++;
-      }
-      out.push(text);
-    }
-    return out.join('\n');
-  }
+  // Read an owned public representation; do not decode or retain prose here.
+  // The receiver performs one-shot format adaptation after message completion.
   function shellItemText(item) {
-    const content = typeof item?.content === 'string' ? boundedText(item.content) : '';
-    if (!ONLY_CONTENT_REFERENCES.test(content)) return content;
-    const id = str(item.messageId);
-    if (Array.isArray(item.contentReferences) && item.contentReferences.length > MAX_ROWS) reject('TRANSCRIPT_LIMIT');
-    const own = (Array.isArray(item.contentReferences) ? item.contentReferences : []).filter(reference =>
-      reference?.type === 'dil' && id && reference.source_message_id === id &&
-      typeof reference.model_dil_v2?.fallbackMarkdown === 'string' && reference.model_dil_v2.fallbackMarkdown.trim());
-    return own.length === 1 ? unescapeFallbackMarkdown(boundedText(own[0].model_dil_v2.fallbackMarkdown)) : content;
+    const content=typeof item?.content==='string'?boundedText(item.content):null;
+    if(content!==null&&!ONLY_CONTENT_REFERENCES.test(content))
+      return {text:content,format:'text',readable:true};
+    const id=str(item?.messageId),refs=Array.isArray(item?.contentReferences)?item.contentReferences:[];
+    if(refs.length>MAX_ROWS)return {text:'',format:'dil',readable:false};
+    const dil=refs.filter(r=>r?.type==='dil');
+    const own=dil.filter(r=>r.source_message_id===id&&
+      typeof r.model_dil_v2?.fallbackMarkdown==='string'&&r.model_dil_v2.fallbackMarkdown.trim());
+    if(own.length===1)return {text:boundedText(own[0].model_dil_v2.fallbackMarkdown),format:'dil',readable:true};
+    // A media-only reference is not an unreadable prose body.
+    if(content!==null&&ONLY_CONTENT_REFERENCES.test(content)&&dil.length===0)
+      return {text:'',format:'text',readable:true};
+    return {text:'',format:dil.length?'dil':'text',readable:false};
+  }
+  function projectProse(item,complete){
+    try{
+      const result=shellItemText(item);
+      return {...result,issue:complete&&!result.readable?'ANSWER_CONTENT_UNAVAILABLE':null};
+    }catch(error){
+      if(error?.message!=='TRANSCRIPT_LIMIT')throw error;
+      return {text:'',format:'text',readable:false,issue:'ANSWER_CONTENT_LIMIT'};
+    }
   }
   function shellQueries(fiber) {
     try {
@@ -96,28 +76,60 @@
     }
     return null;
   }
-  function messagesFromTurnView(turn) {
-    if (!turn || typeof turn !== 'object' || !Array.isArray(turn.items)) return null;
-    if (turn.items.length > MAX_ROWS) reject('TRANSCRIPT_LIMIT');
-    const out = [], seen = new Set();
-    for (const item of turn.items) {
-      if (!item || !['user-message', 'assistant-message'].includes(item.type)) continue;
-      const user = item.type === 'user-message';
-      const id = str(item.messageId) || (user ? str(item.serverMessageId) : str(item.latestMessageId));
-      if (!id) continue;
-      if (seen.has(id) || (user && item.serverMessageId && item.messageId && item.serverMessageId !== item.messageId)) reject('TRANSCRIPT_CONFLICT');
-      if (item.channel === 'analysis' || item.phase === 'analysis' || item.isVisuallyHidden === true) continue;
-      const text = user ? boundedText(item.message) : shellItemText(item);
-      const final = !user && item.phase === 'final_answer';
-      const terminal = final && item.completed === true && turn.status === 'complete';
-      seen.add(id);
-      out.push({ id, author: { role: user ? 'user' : 'assistant' }, recipient: 'all',
-        channel: user ? null : final ? 'final' : 'commentary',
-        status: terminal ? 'finished_successfully' : 'in_progress', end_turn: terminal,
-        content: { content_type: 'text', parts: [typeof text === 'string' ? text : ''] }, metadata: {} });
+  const publicProseItem=item=>item&&typeof item==='object'&&!Array.isArray(item)&&
+    item.isVisuallyHidden!==true&&item.isTransient!==true&&
+    (item.recipient==null||item.recipient==='all')&&
+    !['analysis','private'].includes(item.channel)&&!['analysis','private'].includes(item.phase)&&
+    item.reasoningRecap?.type!=='hide_all'&&
+    item.metadata?.is_visually_hidden!==true&&item.metadata?.is_visually_hidden_from_conversation!==true&&
+    item.metadata?.is_visually_hidden_reasoning_group!==true&&
+    item.metadata?.summary_type!=='raw_cot';
+  function projectTurnMessages(turn,source){
+    if(!turn||!Array.isArray(turn.items))return null;
+    if(turn.items.length>MAX_ROWS)reject('TRANSCRIPT_LIMIT');
+    const messages=[],seen=new Set();
+    const topLevel=new Set(turn.items.filter(x=>publicProseItem(x)&&x.type==='assistant-message')
+      .map(x=>str(x.messageId)||str(x.latestMessageId)).filter(Boolean));
+    let work=0,lastAnswer=null;
+    function scan(items,position=[],nested=false){
+      if(position.length>4||!Array.isArray(items)||items.length>MAX_ROWS)reject('TRANSCRIPT_LIMIT');
+      for(const [index,item] of items.entries()){
+        if(++work>MAX_ROWS)reject('TRANSCRIPT_LIMIT');
+        if(!publicProseItem(item))continue;
+        const at=[...position,index];
+        if(item.type==='chatgpt-reasoning-group'){scan(item.items??[],at,true);continue;}
+        if(!nested&&item.type==='generated-image'){lastAnswer=item;continue;}
+        if(!['user-message','assistant-message'].includes(item.type))continue;
+        const user=item.type==='user-message';
+        if(nested&&user)continue;
+        const id=str(item.messageId)||(user?str(item.serverMessageId):str(item.latestMessageId));
+        if(!id)continue;
+        // Proved subordinate copies are excluded BEFORE touching the parser.
+        if(nested&&topLevel.has(id))continue;
+        if(seen.has(id)||(user&&item.serverMessageId&&item.messageId&&item.serverMessageId!==item.messageId))
+          reject('TRANSCRIPT_CONFLICT');
+        seen.add(id);
+        const final=!user&&!nested&&item.phase==='final_answer';
+        // Message readiness is independent of channel and task completion.
+        // Only the terminal flag below also requires the native turn to end.
+        const messageDone=item.completed===true;
+        const {text,issue,format='text',readable=true}=user?{text:boundedText(item.message),issue:null}:
+          projectProse({messageId:id,content:item.content,contentReferences:item.contentReferences},messageDone);
+        if(final)lastAnswer=item;
+        const terminal=final&&item.completed===true&&turn.status==='complete'&&!issue;
+        messages.push({id,author:{role:user?'user':'assistant'},recipient:'all',
+          channel:user?null:final?'final':'commentary',
+          status:terminal?'finished_successfully':'in_progress',end_turn:terminal,
+          content:{content_type:'text',parts:[typeof text==='string'?text:'']},
+          metadata:{cipPosition:at,cipProseFormat:format,cipProseReadable:readable,
+            cipMessageState:user||messageDone?'complete':'pending',...(issue?{cipProseIssue:issue}:{})}});
+      }
     }
-    return out;
+    scan(turn.items);
+    if(lastAnswer?.type==='generated-image')for(const row of messages){row.end_turn=false;row.status='in_progress';}
+    return messages;
   }
+  function messagesFromTurnView(turn) { return projectTurnMessages(turn,'view'); }
   function shellEntryOf(fiber) {
     for (let at = fiber, up = 0; at && up < 16; up++, at = at.return) {
       if (Array.isArray(at.memoizedProps?.entry?.turn?.items)) return at.memoizedProps.entry;
@@ -125,42 +137,10 @@
     return null;
   }
   function shellTurnSource(fiber, section, turnId) {
-    const entry = shellEntryOf(fiber);
-    if (!entry || !turnId || entry.id !== turnId) return null;
-    if (entry.turn.items.length > MAX_ROWS) reject('TRANSCRIPT_LIMIT');
-    const messages = [], seen = new Set();
-    const remember = id => { if (!id || seen.has(id)) return false; seen.add(id); return true; };
-    const topLevel = new Set(entry.turn.items.filter(item => item?.type === 'assistant-message').map(item => str(item.messageId)).filter(Boolean));
-    let work = 0, lastAnswer = null;
-    for (const item of entry.turn.items) {
-      if (++work > MAX_ROWS) reject('TRANSCRIPT_LIMIT');
-      if (item?.type === 'user-message' || item?.type === 'assistant-message') {
-        const user = item.type === 'user-message', id = str(item.messageId) || (user ? str(item.serverMessageId) : null);
-        if (!id) continue;
-        if (!remember(id) || (user && item.serverMessageId && item.messageId && item.serverMessageId !== item.messageId)) reject('TRANSCRIPT_CONFLICT');
-        if (item.channel === 'analysis' || item.phase === 'analysis' || item.isVisuallyHidden === true) continue;
-        const role = user ? 'user' : 'assistant', text = user ? boundedText(item.message) : shellItemText(item);
-        const final = !user && item.phase === 'final_answer';
-        if (final) lastAnswer = item;
-        const completed = final && item.completed === true && entry.turn.status === 'complete';
-        messages.push({ id, author: { role }, content: { content_type: 'text', parts: [typeof text === 'string' ? text : ''] },
-          channel: user ? null : final ? 'final' : 'commentary', end_turn: completed,
-          status: completed ? 'finished_successfully' : 'in_progress', metadata: {} });
-      } else if (item?.type === 'generated-image') {
-        lastAnswer = item; // No image payload support; an older text final cannot end this output.
-      } else if (item?.type === 'chatgpt-reasoning-group' && Array.isArray(item.items) && item.reasoningRecap?.type !== 'hide_all') {
-        if (item.items.length > MAX_ROWS) reject('TRANSCRIPT_LIMIT');
-        for (const step of item.items) {
-          if (++work > MAX_ROWS) reject('TRANSCRIPT_LIMIT');
-          if (step?.type !== 'assistant-message' || step.channel === 'analysis' || step.phase === 'analysis' || step.isVisuallyHidden === true) continue;
-          const id = str(step.messageId), text = shellItemText(step);
-          if (!id || topLevel.has(id) || !remember(id) || !text || ONLY_CONTENT_REFERENCES.test(text)) continue;
-          messages.push({ id, author: { role: 'assistant' }, content: { content_type: 'text', parts: [text] },
-            channel: 'commentary', end_turn: false, status: step.completed === true ? 'finished_successfully' : 'in_progress', metadata: {} });
-        }
-      }
-    }
-    return { entry, messages, endMessageId: lastAnswer?.type === 'generated-image' ? null : globalThis.CIP_COS_PUBLIC_CORE.turnEndMessageId(messages) };
+    const entry=shellEntryOf(fiber);
+    if(!entry||!turnId||entry.id!==turnId)return null;
+    const messages=projectTurnMessages(entry.turn,'shell');
+    return {entry,messages,endMessageId:globalThis.CIP_COS_PUBLIC_CORE.turnEndMessageId(messages)};
   }
   // Integration only: prefer the exact native typed model to legacy DOM captions.
   function sourceFor(fiber, section, evidence) {

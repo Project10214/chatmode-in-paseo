@@ -18,31 +18,6 @@ async function setup(t){
   }};
 }
 
-test('ADV1-01: a duplicate native user id may never silently change body or document',async t=>{
-  const {f,proof}=await setup(t),original=await f.broker.importExternalTurn(proof);
-  assert.equal(original.imported,true);
-  await assert.rejects(f.broker.importExternalTurn({...proof,text:'FORGED'}),e=>e.code==='EXTERNAL_MESSAGE_CONFLICT');
-  await assert.rejects(f.broker.importExternalTurn({...proof,documentKey:'different-doc'}),e=>e.code==='PAGE_IDENTITY_MISMATCH');
-  const re=await f.broker.importExternalTurn(proof);
-  assert.equal(re.duplicate,true);assert.equal(re.turnId,original.turnId);
-  assert.equal(f.broker.snapshot(proof.sessionId).history.filter(x=>x.messageId==='manual-user-1').length,1);
-});
-
-test('ADV1-02: a second tab must not steal an extant conversation binding',async t=>{
-  const {f,proof}=await setup(t);
-  await assert.rejects(f.broker.importExternalTurn({...proof,tabId:9900,documentKey:'foreign-doc'}),e=>e.code==='PAGE_IDENTITY_MISMATCH');
-  const s=f.broker.snapshot(proof.sessionId);
-  assert.equal(s.tabId,proof.tabId);assert.equal(s.documentKey,proof.documentKey);assert.equal(s.status,'idle');
-});
-
-test('ADV1-03: durable native id is mandatory for external-gap notices',async t=>{
-  const {f,proof}=await setup(t);
-  await assert.rejects(f.broker.noteExternalGap({sessionId:proof.sessionId,conversationId:proof.conversationId,
-    url:proof.url,reason:'multiple_unobserved_turns',tabId:90000,documentKey:'not-owned',
-    previousNativeMessageId:'unrelated'}),e=>e.code==='PAGE_IDENTITY_MISMATCH');
-  assert.equal(f.broker.snapshot(proof.sessionId).externalGap,undefined);
-});
-
 test('ADV1-04: wake may never revive archived Paseo Agent via stale cache',async()=>{
   const sid='fb482e6c-2e0a-49d5-9e02-66f3ebf57747';
   let archived=false, commands=0, scans=0;
@@ -58,3 +33,14 @@ test('ADV1-04: wake may never revive archived Paseo Agent via stale cache',async
   assert.equal((await wake.wake(sid)).woken,false);
   assert.equal(commands,1);
 });
+
+/* Retired assertions (mechanism removed):
+ * ADV1-01 duplicate external native user id -> the external-turn import lane is
+ *   gone. Source identity conflicts are rejected in the ledger
+ *   (SOURCE_IDENTITY_CONFLICT, source-ledger tests) and by CM-R6.
+ * ADV1-02 a second tab stealing a binding -> observation identity is fenced by
+ *   lease/document/tab: CONTOBS-01, MON-11/MON-17, LINK3, R10.
+ * ADV1-03 external-gap notices requiring a durable native id -> noteExternalGap
+ *   and the external-gap notice lane are gone; observation gaps are recorded
+ *   by recordObservationGap without an invented native id (CM-R9, OBS-HTTP1).
+ */

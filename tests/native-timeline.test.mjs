@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
-import {fixture,selection,until} from './helpers.mjs';
+import {fixture,pageView,selection,until} from './helpers.mjs';
 import {nativeTimelineItem} from '../server/native-timeline.mjs';
 import {createProvider,CAPABILITIES} from '../server/provider.mjs';
 
@@ -23,7 +23,7 @@ test('TIMELINE-01: public reasoning recap and separate tool call identities, no 
     tool('call-b',{invocation:{server:'tasks',tool:'get_item',arguments:{apiKey:'NEVER_EXPOSE'}}}),
     tool('secret',{metadata:{is_visually_hidden_from_conversation:true}})
   ]});
-  assert.deepEqual(value.reasoning,[{id:'reason-1',text:'正在比较两种实现方案'}]);
+  assert.deepEqual(value.reasoning,[{id:'reason-1',text:'正在比较两种实现方案',position:[0,-1]}]);
   assert.deepEqual(value.calls.map(x=>x.callId),['call-a','call-b']);
   assert(value.calls.every(c=>c.status==='running'));
   assert.equal(JSON.stringify(value).includes('PRIVATE_COT'),false);
@@ -58,73 +58,68 @@ test('TIMELINE-03: server strictly rejects arbitrary private details and foreign
   ])assert.throws(()=>nativeTimelineItem(bad,'turn-1'));
 });
 
-test('TIMELINE-04: broker native tool cards are upserted per callId with streamed status and reasoning',async t=>{
-  const f=await fixture(t),s=await f.ready(),{event}=await f.sending(s);
-  const seen=[];f.broker.subscribe(s.id,v=>seen.push(v));
-  const observation=item=>f.broker.observe({...event,kind:'native_timeline',item});
-  const publicTool={type:'tool_call',callId:'mcp-tool-1',name:'mymac · run_shell_command',
-    kind:'tool',status:'running'};
-  await observation(publicTool);
-  await observation(publicTool);
-  await observation({...publicTool,status:'completed'});
-  await observation({type:'tool_call',callId:'mcp-tool-2',name:'tasks · list_items',
-    kind:'search',status:'running'});
-  await observation({type:'reasoning',id:'recap-1',text:'先核对代码'});
-  await observation({type:'reasoning',id:'recap-1',text:'先核对代码，再确认错误'});
-  await observation({type:'reasoning',id:'recap-1',text:'改写全部文本'});
-  const history=f.broker.snapshot(s.id).history;
-  const calls=history.filter(x=>x.type==='tool_call');
-  assert.equal(calls.length,2);
-  assert.equal(calls[0].status,'completed');
-  assert.equal(calls[1].status,'running');
-  assert.deepEqual(history.filter(x=>x.type==='reasoning').map(x=>x.text),['先核对代码，再确认错误']);
-  assert.equal(seen.filter(x=>x.state==='native-timeline').length,5);
-  assert.equal(f.broker.snapshot(s.id).status,'running');
-  for(const invalid of [{...event,tabId:999},{...event,lease:'other'},{...event,nativeMessageId:'other'}])
-    await assert.rejects(f.broker.observe({...invalid,kind:'native_timeline',item:publicTool}));
-  await f.broker.observe({...event,kind:'snapshot',messageId:'final-answer',text:'答复'});
-  await f.broker.observe({...event,kind:'completed',messageId:'final-answer',finalConfirmed:true});
-  const finished=f.broker.snapshot(s.id);
-  assert.equal(finished.history.find(x=>x.callId==='mcp-tool-1').status,'completed');
-  assert.equal(finished.history.find(x=>x.callId==='mcp-tool-2').status,'canceled',
-    'unknown tool outcome must not be invented as success');
-  assert.equal(finished.turn.outcome,'completed');
+test('TIMELINE-04: tool and reasoning sources upsert by source identity without inventing outcomes',async t=>{
+ const f=await fixture(t),s=await f.ready();await f.sending(s);
+ const tool=(id,status,text)=>({id,userMessageId:null,role:'page',lane:'process',kind:'tool_call',
+  text,format:'text',order:[1],callId:'call-'+id,name:'mymac · run_shell_command',status});
+ const reasoning=(text)=>({id:'recap-1',userMessageId:null,role:'assistant',lane:'process',
+  kind:'reasoning',text,format:'markdown',order:[2]});
+ const frame=options=>f.view(s,options);
+ await frame({items:[tool('tool-1','running','running read')]});
+ await frame({items:[tool('tool-1','completed','completed read')]});
+ await frame({items:[tool('tool-1','completed','completed read'),tool('tool-2','running','second call')]});
+ await frame({items:[tool('tool-1','completed','completed read'),tool('tool-2','running','second call'),
+  reasoning('先核对代码')]});
+ await frame({items:[tool('tool-1','completed','completed read'),tool('tool-2','running','second call'),
+  reasoning('先核对代码，再确认错误')]});
+ const history=f.broker.snapshot(s.id).history;
+ const calls=history.filter(x=>x.type==='tool_call');
+ assert.equal(calls.length,2,'two callIds are two cards');
+ assert.equal(calls[0].status,'completed');assert.equal(calls[1].status,'running');
+ const recaps=history.filter(x=>x.type==='reasoning');
+ assert.deepEqual(recaps.map(x=>x.text),['先核对代码，再确认错误'],'the same source updates in place');
+ assert.equal(new Set(recaps.map(x=>x.id)).size,1);
+ assert.equal(f.broker.snapshot(s.id).status,'running','a tool status is not turn completion');
+ await assert.rejects(f.broker.observeView({...pageView(f.broker.snapshot(s.id)),observationLease:'other'}));
+ await frame({state:'standby',items:[tool('tool-1','completed','completed read'),
+  tool('tool-2','running','second call'),reasoning('先核对代码，再确认错误')]});
+ const finished=f.broker.snapshot(s.id);
+ assert.equal(finished.turn.outcome,'completed');
+ assert.equal(finished.history.find(x=>x.callId==='call-tool-2').status,'running',
+  'standby does not invent a finished/canceled tool');
 });
-
-test('TIMELINE-05: Paseo emits NATIVE reasoning and tool_call, retaining distinct identities',async t=>{
-  const f=await fixture(t),events=[];
-  const runtime={...f,status:()=>({connected:true})};
-  const conn=await createProvider(runtime).connect({versions:[1],capabilities:CAPABILITIES});
-  t.after(()=>conn.close());conn.onEvent(e=>events.push(e));
-  const config={cwd:'/fixture',env:{},settings:{},mcpServers:{},persist:true,
-    model:selection.model,thinkingOption:selection.thinkingOption,providerOptions:{appIds:selection.appIds}};
-  const s=await f.ready(),{event}=await f.sending(s);
-  await conn.send({type:'session.open',requestId:'bind',sessionId:'host',
-    config,persistence:{version:1,data:{id:s.id}},history:'skip'});
-  await until(()=>events.some(x=>x.type==='session.ready'));
-  // Provider receives a native turn from its own existing observation mechanism.
-  const toolCall={type:'tool_call',callId:'mcp-1',name:'mymac · search_text',
-    kind:'search',status:'running'};
-  await f.broker.observe({...event,kind:'native_timeline',item:toolCall});
-  await f.broker.observe({...event,kind:'native_timeline',item:{...toolCall,status:'completed'}});
-  await f.broker.observe({...event,kind:'native_timeline',item:{type:'reasoning',id:'thought-1',text:'已验证网页摘要'}});
-  const interim=events.filter(x=>x.type==='timeline.item'&&
-    ['tool_call','reasoning'].includes(x.item?.type));
-  assert.deepEqual(interim.map(x=>x.item.type),['tool_call','tool_call','reasoning']);
-  assert.equal(interim[0].item.id,interim[1].item.id);
-  assert.equal(interim[0].item.status,'running');
-  assert.equal(interim[1].item.status,'completed');
-  await conn.close();
-  const reopened=await createProvider(runtime).connect({versions:[1],capabilities:CAPABILITIES});
-  t.after(()=>reopened.close());
-  const replay=[];reopened.onEvent(e=>replay.push(e));
-  await reopened.send({type:'session.open',requestId:'replay',sessionId:'host-again',
-    config,persistence:{version:1,data:{id:s.id}},history:'replay'});
-  await until(()=>replay.some(x=>x.type==='session.ready'));
-  assert.equal(replay.filter(x=>x.type==='timeline.item'&&x.item?.type==='tool_call').length,1);
-  assert.equal(replay.filter(x=>x.type==='timeline.item'&&x.item?.type==='reasoning').length,1);
+test('TIMELINE-05: Paseo emits stable tool/reasoning items and a reconnect replays each once',async t=>{
+ const f=await fixture(t),events=[];
+ const runtime={...f,status:()=>({connected:true})};
+ const config={cwd:'/fixture',env:{},settings:{},mcpServers:{},persist:true,
+  model:selection.model,thinkingOption:selection.thinkingOption,providerOptions:{appIds:selection.appIds}};
+ const conn=await createProvider(runtime).connect({versions:[1],capabilities:CAPABILITIES});
+ t.after(()=>conn.close());conn.onEvent(e=>events.push(e));
+ const s=await f.ready();await f.sending(s);
+ await conn.send({type:'session.open',requestId:'bind',sessionId:'host',
+  config,persistence:{version:1,data:{id:s.id}},history:'skip'});
+ await until(()=>events.some(x=>x.type==='session.ready'));
+ const tool=(status,text)=>({id:'tool-source',userMessageId:null,role:'page',lane:'process',
+  kind:'tool_call',text,format:'text',order:[1],callId:'mcp-1',name:'mymac · search_text',status});
+ const recap={id:'thought-1',userMessageId:null,role:'assistant',lane:'process',kind:'reasoning',
+  text:'已验证网页摘要',format:'markdown',order:[2]};
+ await f.view(s,{items:[tool('running','searching')]});
+ await f.view(s,{items:[tool('completed','searched'),recap]});
+ const interim=events.filter(x=>x.type==='timeline.item'&&['tool_call','reasoning'].includes(x.item?.type));
+ assert.deepEqual(interim.map(x=>x.item.type),['tool_call','tool_call','reasoning']);
+ assert.equal(interim[0].item.id,interim[1].item.id);
+ assert.equal(interim[0].item.status,'running');
+ assert.equal(interim[1].item.status,'completed');
+ await conn.close();
+ const reopened=await createProvider(runtime).connect({versions:[1],capabilities:CAPABILITIES});
+ t.after(()=>reopened.close());
+ const replay=[];reopened.onEvent(e=>replay.push(e));
+ await reopened.send({type:'session.open',requestId:'replay',sessionId:'host-again',
+  config,persistence:{version:1,data:{id:s.id}},history:'replay'});
+ await until(()=>replay.some(x=>x.type==='session.ready'));
+ assert.equal(replay.filter(x=>x.type==='timeline.item'&&x.item?.type==='tool_call').length,1);
+ assert.equal(replay.filter(x=>x.type==='timeline.item'&&x.item?.type==='reasoning').length,1);
 });
-
 test('TIMELINE-REAL: signed-in ChatGPT link_<hex>/read tool IDs yield two separate public Paseo tool cards',()=>{
   // Captured public metadata only, from actual user-visible, completed ChatGPT
   // turn after two independent mymac read calls on unpredictable test files.
@@ -146,10 +141,13 @@ test('TIMELINE-REAL: signed-in ChatGPT link_<hex>/read tool IDs yield two separa
   const value=project(turn);
   assert.deepEqual(value.calls.map(c=>c.callId),turns.map(t=>t.callId));
   assert.deepEqual(value.calls.map(c=>c.name),['mymac · read','mymac · read']);
-  assert.deepEqual(value.calls.map(c=>c.status),['running','running'],
-    'native completed=false MUST NOT be represented as tool success');
+  // The turn is complete, so these calls are no longer running; they are
+  // marked as settled by the turn end, which the card states explicitly.
+  assert.deepEqual(value.calls.map(c=>[c.status,c.settled]),[['completed',true],['completed',true]]);
   for(const call of value.calls){
-    const safe=nativeTimelineItem({type:'tool_call',...call},'real-turn');
+    const {position,...publicCall}=call;
+    assert.equal(position[0],1);
+    const safe=nativeTimelineItem({type:'tool_call',...publicCall},'real-turn');
     assert.equal(safe.name,'mymac · read');
     assert.equal(safe.type,'tool_call');
     assert(!JSON.stringify(safe).includes('link_'),'internal connector ID must not leak to Paseo');
@@ -170,4 +168,46 @@ test('TIMELINE-REAL-SAFETY: linked-tool decoder rejects paths, URLs and hidden c
   const value=project({status:'in_progress',items:raw});
   assert.deepEqual(value.calls.map(x=>x.callId),['ok']);
   assert.deepEqual(value.calls.map(x=>x.name),['mymac · read']);
+});
+
+test('TIMELINE-APP: an approval-gated app call shows one readable card; the wait step is not a card', async () => {
+  const {recordNativeTimeline, toolOrigin} = await import('../server/native-timeline.mjs');
+  const apps = [{id: 'asdk_app_6a61dc538d588191aba0dea895a73f80', label: 'mymac'}];
+  const session = {turn: {id: 't1'}, history: []};
+  const shown = [];
+  const feed = (callId, name, status) => {
+    const input = {type: 'tool_call', callId, name, kind: 'tool', status};
+    const out = recordNativeTimeline(session, nativeTimelineItem(input, 't1', {apps}), {origin: toolOrigin(input, apps)});
+    if (out?.item) shown.push(out.item);
+  };
+  // Order observed on the live page (2026-10-17): waiting card, wait step, then the run.
+  feed('c-pending', 'asdk_app_6a61dc538d588191aba0dea895a73f80 · run_shell_command', 'running');
+  feed('c-wait', 'codex_apps · mymac.approval_wait', 'completed');
+  feed('c-run', 'codex_apps · mymac.run_shell_command', 'running');
+  feed('c-run', 'codex_apps · mymac.run_shell_command', 'completed');
+  feed('c-pending', 'asdk_app_6a61dc538d588191aba0dea895a73f80 · run_shell_command', 'running');
+  const cards = session.history.filter(r => r.type === 'tool_call');
+  assert.equal(cards.length, 1, JSON.stringify(cards));
+  assert.equal(cards[0].name, 'mymac · run_shell_command');
+  assert.equal(cards[0].status, 'completed');
+  assert.equal(cards[0].id, 'tool:t1:c-pending');
+  assert(shown.every(i => i.id === 'tool:t1:c-pending' && i.name === 'mymac · run_shell_command'));
+  // A second approval-gated call is its own card.
+  feed('c-pending-2', 'asdk_app_6a61dc538d588191aba0dea895a73f80 · run_shell_command', 'running');
+  feed('c-run-2', 'codex_apps · mymac.run_shell_command', 'completed');
+  assert.deepEqual(session.history.map(r => [r.id, r.status]), [['tool:t1:c-pending', 'completed'], ['tool:t1:c-pending-2', 'completed']]);
+  // Unknown app ids never leak the raw id; other servers keep their name.
+  assert.equal(nativeTimelineItem({type: 'tool_call', callId: 'x', name: 'asdk_app_unknown123 · read', kind: 'tool', status: 'running'}, 't1', {apps}).name, 'ChatGPT 应用 · read');
+  assert.equal(nativeTimelineItem({type: 'tool_call', callId: 'y', name: 'tasks · get_item', kind: 'tool', status: 'running'}, 't1', {apps}).name, 'tasks · get_item');
+});
+
+test('TIMELINE-DONE: tool calls of a turn ChatGPT reports complete are completed even without per-call flags', () => {
+  const done = project({status: 'complete', items: [tool('call-a'), tool('call-b', {status: 'failed'}), tool('call-c', {completed: true})]});
+  assert.deepEqual(done.calls.map(c => [c.callId, c.status, c.settled ?? false]), [['call-a', 'completed', true], ['call-b', 'failed', false], ['call-c', 'completed', false]]);
+  const card = nativeTimelineItem({type: 'tool_call', callId: 'call-a', name: 'presure · state', kind: 'tool', status: 'completed', settled: true}, 't1');
+  assert.equal(card.status, 'completed');
+  assert.match(card.detail.text, /网页未单独确认此调用的结果/);
+  assert.throws(() => nativeTimelineItem({type: 'tool_call', callId: 'x', name: 'a · b', kind: 'tool', status: 'running', settled: true}, 't1'), /NATIVE_TIMELINE_INVALID/);
+  const live = project({status: 'in_progress', items: [tool('call-a')]});
+  assert.equal(live.calls[0].status, 'running');
 });

@@ -6,6 +6,21 @@
   "additionalSourceCommits": ["e40562640361ca8f74158b2262ca8c555b00abed"],
   "files": [
     {
+      "localPath": "shared/public-prose.mjs",
+      "localSha256": "91bbb1f2bd746bf168fe89b6d919b733d1ed2126794da4c81fbd82765cd7d78e",
+      "world": "SERVER",
+      "importedBy": "server/message-delivery.mjs",
+      "sourceCommit": "e40562640361ca8f74158b2262ca8c555b00abed",
+      "sourcePath": "extension/fiber.js",
+      "sourceBlobSha": "8ebcd1ee38a596847d10f37174dfbe26f0fb2c70",
+      "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/e40562640361ca8f74158b2262ca8c555b00abed/extension/fiber.js",
+      "sourceFunctions": [
+        "unescapeFallbackMarkdown"
+      ],
+      "sourceRangeHint": "1730–1799; moved from cos-shell-public.js",
+      "relation": "One-shot receiver-side decoding of a completed public DIL representation. Original CoS final semantics retained; no incremental grammar state in Chrome. CIP format/size validation wrapper, not whole-file upstream equivalence."
+    },
+    {
       "localPath": "extension/upstream/cos-images-main.js",
       "localSha256": "64315eae044a14e442442deed6cf675737a54ad54cf0abd3fdeb74c03d5f76f2",
       "world": "MAIN",
@@ -130,7 +145,7 @@
     },
     {
       "localPath": "extension/upstream/cos-picker-main.js",
-      "localSha256": "26653e6ae6bdd6eda20495cfcd09d9a53c7d551730c60f59311a91fa432bc2c8",
+      "localSha256": "1dc27d44bf9adcc8c40aedf8f33ae78578374f2275c9043a5df6a683acf38da5",
       "world": "MAIN",
       "sourcePath": "extension/fiber.js",
       "sourceBlobSha": "3f1bbf2e803f2d50b482572eb6ffd0d1b8592f7f",
@@ -146,11 +161,11 @@
         "pickerSnapshot"
       ],
       "sourceRangeHint": "265–330, 2615–2810; alpha3.6 search anchor follows e40562640361ca8f74158b2262ca8c555b00abed fiber.js:79–85",
-      "relation": "function-level transplant with documented adaptations; projection includes CoS SEARCH_TURN_ANCHOR and rejects layout-shaped message IDs; alpha.4.1 also projects only same-native-user public reasoning recaps and bounded tool-call details; not an unchanged whole file; alpha.4.14 keeps file-only user turns (empty text, no file pointers or names), including empty native items from the typed shell/view projection, so an attachment-only Send has an exact native user identity"
+      "relation": "function-level transplant with documented adaptations; projection includes CoS SEARCH_TURN_ANCHOR and rejects layout-shaped message IDs; alpha.4.1 also projects only same-native-user public reasoning recaps and bounded tool-call details; not an unchanged whole file; alpha.4.14 keeps file-only user turns (empty text, no file pointers or names), including empty native items from the typed shell/view projection, so an attachment-only Send has an exact native user identity; alpha.4.16 forwards only a fixed allowlist of content-free canonical public-prose errors on proven source divergence, while unrelated transcript interruptions stay retryable; alpha.4.17 candidate carries per-message/per-user issues and source positions, rather than erasing the whole transcript for a prose issue; current unshipped completion-mode candidate forwards raw public text, format, readability and per-message completion; no browser incremental prose state or decode. CoS one-shot decoder is relocated to the receiver shared/public-prose.mjs; complete-message transcript IPC uses a separate v2 ask/reply channel so surviving v1 MAIN listeners are neither invoked nor accepted after extension reload; alpha.4.21 pairs inline citation directives with page source pills (idea from CoS src/renderer/chat.ts citationPills) only when counts match, rendered as Markdown links"
     },
     {
       "localPath": "extension/upstream/cos-activity-main.js",
-      "localSha256": "7e55d8ca995f911b4eef0ef431114147d4d2e84643aace02a4cb233bcf4a6c5c",
+      "localSha256": "46e164efb83345e37adbaaca483c5dbb1cfa8bc170355114a583d93a3a324016",
       "world": "MAIN",
       "sourceCommit": "e40562640361ca8f74158b2262ca8c555b00abed",
       "sourcePath": "extension/fiber.js",
@@ -158,19 +173,19 @@
       "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/e40562640361ca8f74158b2262ca8c555b00abed/extension/fiber.js",
       "sourceFunctions": ["viewCallsOf", "shellTurnTrace"],
       "sourceRangeHint": "1793–1827, 2125–2185, 2192–2274",
-      "relation": "bounded public-status and native timeline adaptation: retains native tool IDs, visible public reasoning recaps, completion states, and strictly turn-owned visible DOM tool input/output excerpts with credential redaction; projects only safe action labels from exact opaque link_<hex>/<action> names observed on signed-in ChatGPT (never exposes internal link IDs); excludes private chain-of-thought, raw invocation arguments/results, unrelated URLs and credentials"
+      "relation": "bounded public-status and native timeline adaptation: retains native tool IDs, visible public reasoning recaps, completion states, and strictly turn-owned visible DOM tool input/output excerpts with credential redaction; projects only safe action labels from exact opaque link_<hex>/<action> names observed on signed-in ChatGPT (never exposes internal link IDs); excludes private chain-of-thought, raw invocation arguments/results, unrelated URLs and credentials; alpha.4.17 candidate carries native nested source positions alongside public recaps and tool entries for cross-type ordering"
     },
     {
       "localPath": "extension/upstream/cos-shell-public.js",
-      "localSha256": "4e0b379cbbe745857444a5b964ede6304f32b245de7612d1b46590dab2c95078",
+      "localSha256": "6b4410e37103f44dd8868dd24d2b5fe407046e4382feea3bf99b037e3773280f",
       "world": "MAIN",
       "sourceCommit": "e40562640361ca8f74158b2262ca8c555b00abed",
       "sourcePath": "extension/fiber.js",
       "sourceBlobSha": "8ebcd1ee38a596847d10f37174dfbe26f0fb2c70",
       "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/e40562640361ca8f74158b2262ca8c555b00abed/extension/fiber.js",
-      "sourceFunctions": ["shellTurnSource", "shellItemText", "unescapeFallbackMarkdown", "turnViewOf", "messagesFromTurnView", "shellQueries", "shellConversation"],
+      "sourceFunctions": ["shellTurnSource", "shellItemText", "turnViewOf", "messagesFromTurnView", "shellQueries", "shellConversation"],
       "sourceRangeHint": "1730–1799, 1829–1842, 2054–2122, 2192–2288",
-      "relation": "public-only function transplant; removes raw tool/media payloads, adds size/conflict refusals, sourceFor and explicit visible tool surface scoping for native Paseo detail cards; not an unchanged whole file"
+      "relation": "public-only CoS function transplant; CIP adaptation now calls a separate bounded CIP-owned public-prose-main.js canonicalizer for same-ID fallbackMarkdown, passing per-message completion separately from turn-final proof and public source kind; media-only references do not invent prose failures; final CoS unescape semantics retained and no private payload exposed; not a byte-identical upstream file; alpha.4.17 candidate selects proved top-level copies before decoding, shares shell/view public nested-message traversal, excludes private parents and records message-local errors/source positions; current unshipped completion-mode candidate forwards raw public text, format, readability and per-message completion; no browser incremental prose state or decode. CoS one-shot decoder is relocated to the receiver shared/public-prose.mjs"
     },
     {
       "localPath": "extension/upstream/cos-transcript-core.js",

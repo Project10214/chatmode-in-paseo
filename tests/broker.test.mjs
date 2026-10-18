@@ -1,12 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture, selection, until } from './helpers.mjs';
+import { fixture, selection, until, pageView, sourceItem } from './helpers.mjs';
 
 test('two sessions send concurrently without sharing conversation identities', async t => {
   const f = await fixture(t); const a = await f.ready(), b = await f.ready({ model: 'm2', appIds: ['asdk_app_b'] });
   const x = await f.sending(a), y = await f.sending(b);
   assert.notEqual(x.result.turnId, y.result.turnId); assert.notEqual(f.broker.snapshot(a.id).conversationId, f.broker.snapshot(b.id).conversationId);
-  await assert.rejects(f.broker.observe({ ...x.event, sessionId: b.id, kind: 'snapshot', messageId: 'a1', text: 'wrong owner' }), /TURN_IDENTITY_MISMATCH/);
+  const injected=pageView(f.broker.snapshot(a.id),{items:[sourceItem('a1','wrong owner')]});
+  await assert.rejects(f.broker.observeView({...injected,sessionId:b.id}),/OBSERVATION_LEASE_MISMATCH/);
+  await assert.rejects(f.broker.observeView({...injected,sessionId:b.id,
+    observationLease:f.broker.snapshot(b.id).observation.lease}),/PAGE_IDENTITY_MISMATCH/);
+  assert.equal(f.broker.snapshot(b.id).history.some(item=>item.id==='page:a1'),false);
 });
 test('stable client ID deduplicates sending and rejects changed contents', async t => {
   const f = await fixture(t); const s = await f.ready(); const a = await f.broker.prompt(s.id, 'same', 'hello'), b = await f.broker.prompt(s.id, 'same', 'hello');
@@ -51,39 +55,57 @@ test('cancel before authorization sends nothing and produces one terminal outcom
   await f.broker.prompt(s.id, 'a', 'hello'); await f.broker.interrupt(s.id); await f.broker.interrupt(s.id);
   assert.equal(f.broker.queued().length, 0); assert.equal(events.filter(e => e.state === 'canceled').length, 1);
 });
-test('stop without a proven native anchor is unconfirmed, not canceled', async t => {
-  const f = await fixture(t); const s = await f.ready(); await f.sending(s, 'a', 'a', false);
-  await assert.rejects(f.broker.interrupt(s.id), /STOP_UNCONFIRMED/); assert.equal(f.broker.snapshot(s.id).status, 'blocked');
+test('without a visible Stop an uncertain Send is not falsely canceled or converted into Deny', async t => {
+  const f=await fixture(t),s=await f.ready();
+  const {claim}=await f.sending(s,'a','a',false);
+  await assert.rejects(f.broker.interrupt(s.id),/STOP_NOT_AVAILABLE/);
+  assert.equal(f.broker.snapshot(s.id).turn.outcome,null);
+  assert.equal(f.store.read().commands[claim.id].phase,'authorized');
+  assert.equal(Object.values(f.store.read().commands).some(c=>['stop','approval'].includes(c.kind)),false);
 });
-test('wrong document, wrong turn and wrong native anchor cannot inject observations', async t => {
-  const f = await fixture(t); const s = await f.ready(); const { event } = await f.sending(s);
-  for (const patch of [{ documentKey: 'other' }, { tabId: 999 }, { nativeMessageId: 'other' }, { url: 'https://chatgpt.com/c/other' }, { lease: 'other' }]) {
-    await assert.rejects(f.broker.observe({ ...event, ...patch, kind: 'snapshot', messageId: 'a', text: 'bad' }));
-  }
-  assert.equal(f.broker.snapshot(s.id).history.filter(x => x.type === 'assistant_message').length, 0);
+test('wrong document, tab, conversation and observation lease cannot inject observations', async t => {
+  const f=await fixture(t),s=await f.ready();await f.sending(s);
+  const current=f.broker.snapshot(s.id),view=pageView(current,{items:[sourceItem('a','bad')]});
+  for(const patch of [{documentKey:'other'},{tabId:999},{url:'https://chatgpt.com/c/other'},{observationLease:'other'}])
+    await assert.rejects(f.broker.observeView({...view,...patch}));
+  assert.equal(f.broker.snapshot(s.id).history.filter(x=>x.type==='assistant_message').length,0);
 });
-test('only proven final after a matching snapshot completes a turn', async t => {
-  const f = await fixture(t); const s = await f.ready(); const { event } = await f.sending(s); const events = []; f.broker.subscribe(s.id, e => events.push(e));
-  await assert.rejects(f.broker.observe({ ...event, kind: 'completed', finalConfirmed: true, messageId: 'answer' }), /FINAL_UNCONFIRMED/);
-  await f.broker.observe({ ...event, kind: 'snapshot', messageId: 'answer', text: 'Hello' });
-  await f.broker.observe({ ...event, kind: 'snapshot', messageId: 'answer', text: 'Hello there' });
-  await f.broker.observe({ ...event, kind: 'completed', finalConfirmed: true, messageId: 'answer' });
-  await f.broker.observe({ ...event, kind: 'completed', finalConfirmed: true, messageId: 'answer' });
-  assert.equal(events.filter(x => x.state === 'completed').length, 1);
-  const state = f.broker.snapshot(s.id); assert.equal(state.history.filter(x => x.type === 'assistant_message').length, 1); assert.equal(state.prompts['message-1'].outcome, 'completed');
+test('standby ends once without waiting for a final body, and later content still updates', async t => {
+  const f=await fixture(t),s=await f.ready();await f.sending(s);
+  const events=[];f.broker.subscribe(s.id,event=>events.push(event));
+  const ending=pageView(f.broker.snapshot(s.id),{state:'standby'});
+  await f.broker.observeView(ending);await f.broker.observeView(ending);
+  assert.equal(events.filter(event=>event.state==='page-standby').length,1);
+  assert.equal(f.broker.snapshot(s.id).prompts['message-1'].outcome,'completed');
+  await f.view(s,{state:'standby',items:[sourceItem('answer','Hello')]});
+  await f.view(s,{state:'standby',items:[sourceItem('answer','Hello there')]});
+  const answers=f.broker.snapshot(s.id).history.filter(item=>item.type==='assistant_message');
+  assert.equal(answers.length,1);assert.equal(answers[0].text,'Hello there');
+  assert.equal(events.filter(event=>event.state==='page-running').length,0);
+  assert.equal(f.broker.queued().length,0);
 });
-test('native errors end only this turn, preserve verified link, and never auto-send', async t => {
-  const f = await fixture(t); const s = await f.ready(); const { event } = await f.sending(s);
-  await f.broker.observe({ ...event, kind: 'failed', error: 'NATIVE_ERROR' });
+test('page errors preserve original text and binding without inventing a task failure or sending again', async t => {
+  const f=await fixture(t),s=await f.ready();await f.sending(s);
+  await f.view(s,{state:'running'});
+  await f.view(s,{state:'abnormal',items:[sourceItem('page-error','错误请点击重试',{role:'page',kind:'notice'})]});
   const state=f.broker.snapshot(s.id);
-  assert.equal(state.status,'idle');
   assert.equal(state.conversationId,'chat-'+s.tabId);
-  assert.equal(state.turn.outcome,'failed');
-  assert.equal(f.broker.queued().length,0,'failure must not queue another model, message, or account');
+  assert.equal(state.observation.page.state,'abnormal');
+  assert.equal(state.turn.outcome,null);
+  assert.equal(state.history.find(item=>item.id==='page:page-error').data.source.text,'错误请点击重试');
+  assert.equal(f.broker.queued().length,0);
 });
-test('waiting for permission remains active and never auto-approves', async t => {
-  const f = await fixture(t); const s = await f.ready(); const { event } = await f.sending(s);
-  await f.broker.observe({ ...event, kind: 'waiting' }); assert.equal(f.broker.snapshot(s.id).status, 'running'); assert.equal(f.broker.queued().length, 0);
+test('authorization with Voice and no Stop is standby, retains the request and never auto-approves', async t => {
+  const f=await fixture(t),s=await f.ready();await f.sending(s);
+  const approval={key:'approval-broker-test',app:'mymac',tool:null,input:null,clickable:true};
+  await f.view(s,{page:{observedAt:Date.now(),readable:true,controls:{
+    stop:{visible:false,enabled:false},send:{visible:false,enabled:false},voice:{visible:true,enabled:true}}},
+    approvals:[approval]});
+  const state=f.broker.snapshot(s.id);
+  assert.equal(state.observation.page.state,'standby');
+  assert.equal(state.turn.outcome,'completed');
+  assert.equal(state.approvals[approval.key].state,'open');
+  assert.equal(f.broker.queued().length,0);
 });
 test('configuration must be read back; echoing another model cannot commit', async t => {
   const f = await fixture(t); const s = await f.broker.create(selection); const p = f.broker.configure(s.id, selection); p.catch(() => {});
@@ -158,4 +180,22 @@ test('app evidence unknown and no-app cases cannot fabricate proof',async t=>{
   await f.sending(noApp,'no-app','plain text');
   const plainSend=Object.values(f.store.read().commands).find(c=>c.kind==='send'&&c.sessionId===noApp.id);
   assert.equal(plainSend.result.appNetworkEvidence,'none');
+});
+test('an old local cancellation does not suppress Stop for a later actual webpage run',async t=>{
+  const f=await fixture(t),s=await f.ready();
+  await f.sending(s);await f.view(s,{state:'standby'});
+  await f.broker.prompt(s.id,'cancel-local','not sent');
+  await f.broker.interrupt(s.id);
+  await f.view(s,{state:'running'});
+  const stopped=f.broker.interrupt(s.id);stopped.catch(()=>{});
+  const command=await until(()=>f.broker.queued().find(c=>c.kind==='stop'));
+  const current=f.broker.snapshot(s.id);
+  assert.equal(command.payload.observationLease,current.observation.lease);
+  const claim=await f.broker.claim(command.id,current.tabId,current.documentKey);
+  await f.broker.result(command.id,claim.lease,{stopped:true});
+  await stopped;
+  assert.equal(f.broker.snapshot(s.id).observation.run.active,true,'click receipt is not standby');
+  await f.view(s,{state:'standby'});
+  assert.equal(f.broker.snapshot(s.id).observation.run.active,false);
+  assert.equal(Object.values(f.store.read().commands).filter(c=>c.kind==='stop').length,1);
 });
