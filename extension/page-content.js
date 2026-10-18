@@ -175,6 +175,12 @@
     // Unknown visible content is collected rather than lost to a whitelist.
     return node.closest('p,pre,li,h1,h2,h3,h4,h5,h6,blockquote,div,section,article,summary') || node;
   }
+  // Site/citation favicons are UI chrome, not conversation media. They are
+  // cross-origin and would only produce tainted/unsupported artifact cards.
+  function uiImage(node) {
+    const src = attr(node, 'src') || '';
+    return /(?:^|\/\/)(?:[a-z0-9-]+\.)*google\.[a-z.]+\/s2\/favicons|\/favicon(?:\?|\.|$)/i.test(src);
+  }
   function collect(root, panels, approvalDetails, issues) {
     const records = new Map(), assignments = new WeakMap();
     const record = owner => {
@@ -187,9 +193,21 @@
           const owner = ownerOf(node.parentElement, root, panels);
           assignments.set(node, owner); record(owner); return;
         }
-        if (node.nodeType !== Node.ELEMENT_NODE || !readable(node, panels) || node.matches(APPROVAL) || approvalDetails.has(node) ||
-            node.matches('button,[role="button"]')) return;
+        if (node.nodeType !== Node.ELEMENT_NODE || !readable(node, panels) || node.matches(APPROVAL) || approvalDetails.has(node))
+          return;
+        // Image cards (generated images, attachments, lightboxes) are often
+        // wrapped in a button. The button itself is control chrome, but the
+        // visible <img> inside is conversation media and must still be read.
+        if (node.matches('button,[role="button"]')) {
+          for (const image of node.querySelectorAll('img')) {
+            if (!readable(image, panels) || uiImage(image)) continue;
+            record(image).media = { src: attr(image, 'src'), alt: attr(image, 'alt') || '' };
+            record(image).mediaKind = 'image';
+          }
+          return;
+        }
         if (node.matches('img,a[download],[data-file-id]')) {
+          if (node.tagName === 'IMG' && uiImage(node)) return;
           record(node).media = node.tagName === 'IMG' ? { src: attr(node, 'src'), alt: attr(node, 'alt') || '' } :
             { href: attr(node, 'href'), name: attr(node, 'download'), fileId: attr(node, 'data-file-id') };
           record(node).mediaKind = node.tagName === 'IMG' ? 'image' : 'file';

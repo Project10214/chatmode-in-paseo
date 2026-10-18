@@ -144,6 +144,11 @@ with sync_playwright() as pw:
         check([row['text'] for row in error['items']] == ['页面暂时无法打开', 'Unknown response 93X\n请稍后重试。'], 'full-page errors without composer or message metadata retained')
         error = load('<aside>OTHER_SIDEBAR</aside><h1>Whole-page error without main</h1><div role="alert">No composer</div>')
         check([row['text'] for row in error['items']] == ['Whole-page error without main', 'No composer'], 'body fallback reads whole-page errors but never sidebar')
+        media_snapshot = load('<main><section data-testid="conversation-turn-1"><div data-message-author-role="assistant" data-message-id="answer-media"><button type="button"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9YkCvYoAAAAASUVORK5CYII=" alt="Generated image"></button></div><a href="https://example.com"><img src="https://www.google.com/s2/favicons?domain=example.com"></a></section></main>')
+        media_rows = [row for row in media_snapshot['items'] if row['kind'] == 'image']
+        check(len(media_rows) == 1 and media_rows[0]['text'] == 'Generated image' and
+              media_rows[0]['media']['provenance'] == 'visible-image-resource',
+              'generated image inside a button is collected; citation favicons are ignored')
         server_approvals = []
         for filename in ['chatgpt-approval-card.html', 'chatgpt-approval-card-chrome.html']:
             markup = (ROOT / 'tests/fixtures' / filename).read_text()
