@@ -24,6 +24,9 @@ export function observationDescriptor(session) {
   return {sessionId:session.id,tabId:session.tabId,documentKey:session.documentKey,
     conversationId:session.conversationId,observationLease:observation.lease,
     generation:observation.generation,runId:observation.run?.id??null,
+    // Only an active run needs its page reopened by the extension. Idle or
+    // historical bindings must be observed only through an already-open tab.
+    active:Boolean(observation.run?.active||['sending','running','stopping'].includes(session.status)),
     ...(session.turn?.receiptPending?{receiptPending:true,turnId:session.turn.id,
       lease:session.turn.lease,nativeMessageId:null}:{})};
 }

@@ -8,7 +8,7 @@ import { fixture, sourceItem } from './helpers.mjs';
 
 const source = await readFile(new URL('../extension/background.js', import.meta.url), 'utf8');
 const engine = /'X-CIP-Engine': '([^']+)'/.exec(source)[1];
-const session = { observationLease:'observation-a',generation:1,runId:'run-a',sessionId:'session-a',turnId:'turn-a',lease:'test-lease',tabId:71,documentKey:'document-a',conversationId:'chat-a',nativeMessageId:'native-user-a' };
+const session = { observationLease:'observation-a',generation:1,runId:'run-a',active:true,sessionId:'session-a',turnId:'turn-a',lease:'test-lease',tabId:71,documentKey:'document-a',conversationId:'chat-a',nativeMessageId:'native-user-a' };
 async function worker(local = {config:{endpoint:'http://127.0.0.1:17843',token:'test-only'}}, clock = {now:10000}) {
   const calls=[], state={tab:{id:71,url:'https://chatgpt.com/c/chat-a'},identity:{engine,protocol:PROTOCOL,documentKey:'document-a',url:'https://chatgpt.com/c/chat-a',nativeMessageId:'native-user-a'},matches:[],created:[],monitor:true};
   let handler, tabRemoved;

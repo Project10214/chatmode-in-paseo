@@ -263,12 +263,12 @@ test('CONT-04 same-document A -> B -> A revocation rejects queued old frames and
 });
 
 test('CONT-05 foreign current routes are never read; recovery uses only the exact bound URL', async t => {
-  const f = await worker(t);
-  await f.watch();
+  const f = await worker(t), active = descriptor({ active: true });
+  await f.watch(active);
   f.messages.length = 0;
   f.state.tabs.get(71).url = 'https://chatgpt.com/c/unrelated';
   f.state.identities.get(71).url = f.state.tabs.get(71).url;
-  await f.watch();
+  await f.watch(active);
   assert.equal(f.messages.some(call => call.tabId === 71), false);
   assert.equal(f.created.length, 1);
   assert.equal(f.created[0].url, URL_A);
@@ -305,12 +305,12 @@ for (const mode of ['same-tab-foreign-owner', 'replacement-foreign-owner', 'ambi
 
 test('CONT-06 Chrome restart reuses a persisted replacement and rebinds without the old native user', async t => {
   const first = await worker(t, { pageTabs: [] });
-  await first.watch();
+  await first.watch(descriptor({ active: true }));
   assert.equal(first.created.length, 1);
   const replacement = first.created[0];
   const restarted = await worker(t, { local: first.local, pageTabs: [replacement] });
   restarted.state.identities.get(replacement.id).nativeMessageId = 'newer-external-user';
-  await restarted.watch();
+  await restarted.watch(descriptor({ active: true }));
   assert.equal(restarted.created.length, 0);
   assert.equal(restarted.byRoute('/rebind-observation').length, 1);
   assert.equal(restarted.byMessage('monitor')[0].tabId, replacement.id);
@@ -323,7 +323,7 @@ test('CONT-07 tab removal does not recreate Chrome windows in the close/Quit cal
   f.state.tabs.delete(71);
   await f.events.removed(71);
   assert.equal(f.created.length, 0);
-  await f.watch();
+  await f.watch(descriptor({ active: true }));
   assert.equal(f.created.length, 1);
   assertReadOnly(f);
 });
@@ -588,4 +588,20 @@ test('CONT-23 navigation during a pending receipt probe cannot post stale receip
   assert.equal(f.local.tabs[71].observationRevoked, true);
   assert.equal(f.local.tabs[71].observationLease, undefined);
   assertReadOnly(f);
+});
+
+test('CONT-24 an idle bound conversation without a tab is never auto-opened', async t => {
+  const f = await worker(t, { state: { observations: [descriptor({
+    sessionId: 'idle-session', conversationId: 'chat-idle', tabId: 998, active: false })] } });
+  await f.pump();
+  assert.equal(f.created.length, 0, 'historical/idle bindings must not open tabs');
+  assert.equal(f.messages.filter(m => m.message.type === 'monitor').length, 0);
+});
+
+test('CONT-25 an active run without its page reopens exactly one tab', async t => {
+  const f = await worker(t, { state: { observations: [descriptor({
+    sessionId: 'run-session', conversationId: 'chat-run', tabId: 997, active: true })] } });
+  await f.pump();
+  assert.equal(f.created.length, 1);
+  assert.equal(f.created[0].url, 'https://chatgpt.com/c/chat-run');
 });

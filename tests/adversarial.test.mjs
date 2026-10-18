@@ -147,7 +147,7 @@ test('A10: failed re-pairing must preserve an existing working connection',async
 });
 
 test('A11: browser restart retains the active turn and reopens only its bound chat, never replays Send',async t=>{
- const f=await backgroundFixture(t,{tabs:{},observations:[{sessionId:'running',tabId:777,documentKey:'old-doc',conversationId:'old-conv',observationLease:'observation-lease',generation:1,runId:'run'}]});
+ const f=await backgroundFixture(t,{tabs:{},observations:[{sessionId:'running',tabId:777,documentKey:'old-doc',conversationId:'old-conv',observationLease:'observation-lease',generation:1,runId:'run',active:true}]});
  await f.pump();
  await until(()=>Object.values(f.read().tabs).some(row=>row.restoringConversationId==='old-conv'));
  const reopened=Object.values(f.read().tabs).filter(row=>row.restoringConversationId==='old-conv');

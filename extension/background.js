@@ -392,6 +392,10 @@ async function watchSession(s, profile) {
           delete tabs[id];
         }
         if (!actual) {
+          // A bound-but-idle conversation is not a reason to open a tab. Only an
+          // active run (sending/running/stopping or pending receipt) may reopen
+          // its page; idle/historical bindings wait for an existing tab.
+          if (s.active !== true) return;
           if (config !== profile) return;
           const tab = await chrome.tabs.create({ url: boundUrl(s), active: false });
           tabs[tab.id] = { sessionId: s.sessionId, restoringConversationId: s.conversationId };
