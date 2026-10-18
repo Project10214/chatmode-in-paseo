@@ -21,7 +21,7 @@ export function pageStateFromControls(page: Pick<PageStateData, 'readable' | 'co
   return page.controls.send.visible || page.controls.voice.visible ? 'standby' : 'abnormal';
 }
 export const pageStateLabel: Record<PageState, string> = {
-  running: '运行中', standby: '待命', abnormal: '异常／状态无法确认'
+  running: '运行中', standby: '待命', abnormal: '状态无法确认'
 };
 const controlIssues = new Set([
   'CONTROLS_READ_FAILED', 'CONTROLS_METADATA_TOO_LARGE', 'PAGE_STATUS_INVALID',

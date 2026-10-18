@@ -55,7 +55,7 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
         </Text>
         {state.observation?<View style={{gap:4}}>
           <Text selectable style={{color:c.foregroundMuted,fontSize:12,lineHeight:18}}>
-            {`已绑定 ${state.observation.bound} · 运行中 ${state.observation.running} · 待命 ${state.observation.standby} · 异常／状态无法确认 ${state.observation.abnormal}`}
+            {`已绑定 ${state.observation.bound} · 运行中 ${state.observation.running} · 待命 ${state.observation.standby} · 状态无法确认 ${state.observation.abnormal}`}
           </Text>
           <Text selectable style={{color:state.observation.sourceIssues?c.statusWarning:c.foregroundMuted,fontSize:12,lineHeight:18}}>
             {`源采集问题 ${state.observation.sourceIssues} · 最近观测：${state.observation.lastObservedAt?new Date(state.observation.lastObservedAt).toLocaleTimeString():'尚无'}`}

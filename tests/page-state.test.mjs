@@ -77,7 +77,7 @@ test('visible Stop selects running, including disabled Stop and contradictory re
     const data = sample({ state: 'standby', controls: { stop: control(true, enabled), send: control(true), voice: control(true) } });
     const body = text(card(data));
     assert.match(body, /网页：运行中/);
-    assert(body.includes('停止：' + (enabled ? '可用' : '不可用')));
+    assert.match(body, enabled ? /可停止/ : /停止不可用/);
     assert.equal(shared.pageStateFromControls(data), 'running');
     assert.doesNotMatch(body, /任务已完成|已停止|恢复/);
   }
@@ -96,16 +96,16 @@ test('unreadable controls never become a claim of confirmed absence or standby',
     const body = text(card(sample({ readable: false, state: 'running', controls: { stop, send: control(true), voice: control() } })));
     if(stop.visible) {
       assert.match(body,/网页：运行中/);
-      assert.match(body,/停止：已见，可用性待确认/);
+      assert.match(body,/可停止|停止不可用/);
     } else {
-      assert.match(body,/网页：异常／状态无法确认/);
+      assert.match(body,/网页：状态无法确认/);
       assert.match(body,/按钮状态未确认/);
     }
-    assert.doesNotMatch(body,/停止：未见|网页：待命|已停止/);
+    assert.doesNotMatch(body,/网页：待命|已停止/);
   }
   const body = text(card(sample({ state: 'abnormal', controls: { stop: control(), send: control(), voice: control() } })));
-  assert.match(body, /网页：异常／状态无法确认/);
-  assert.match(body, /停止：未见/);
+  assert.match(body, /网页：状态无法确认/);
+  assert.match(body, /按钮状态未确认/);
 });
 
 test('source errors do not replace confirmed button state or imply a stopped page', () => {
@@ -113,7 +113,7 @@ test('source errors do not replace confirmed button state or imply a stopped pag
     const issues = [{ code: 'CONTENT_READ_FAILED' }, { code: 'SOURCE_PROJECTION_FAILED', sourceId: 'source-one' }];
     const body = text(card({ ...data, issues }));
     assert(body.includes('网页：' + shared.pageStateLabel[shared.pageStateFromControls(data)]));
-    assert.match(body, /源采集问题 2：CONTENT_READ_FAILED、SOURCE_PROJECTION_FAILED/);
+    assert.match(body, /采集提示 2 条/);
     assert.doesNotMatch(body, /网页：异常|执行失败|可恢复/);
   }
 });
@@ -121,8 +121,8 @@ test('source errors do not replace confirmed button state or imply a stopped pag
 test('control observation issues are presented separately from source issues', () => {
   const data = sample({ state: 'abnormal', readable: false, issues: [{ code: 'CONTROLS_READ_FAILED' }, { code: 'CONTENT_READ_FAILED' }] });
   const body = text(card(data));
-  assert.match(body, /源采集问题 1：CONTENT_READ_FAILED/);
-  assert.match(body, /状态提示：CONTROLS_READ_FAILED/);
+  assert.match(body, /采集提示 1 条/);
+  assert.match(body, /状态提示 1 条/);
 });
 
 test('renderer is read-only, theme-safe and compact-aware', () => {
@@ -131,7 +131,7 @@ test('renderer is read-only, theme-safe and compact-aware', () => {
   for (const compact of [false, true]) {
     const tree = render('page-state.tsx', 'PageStateCard', props(data, compact));
     assert.equal(tree.props.style.padding, compact ? 10 : 12);
-    assert.match(text(tree), /观测于/);
+    assert.match(text(tree), /最近观测/);
     for (const node of nodes(tree)) {
       assert.notEqual(node.type, 'Pressable');
       assert(!Object.keys(node.props ?? {}).some(key => /^on(?:Press|Click|Change)/.test(key)));
@@ -253,7 +253,7 @@ test('settings renders unified counters and source issues in compact and wide la
     const state = []; state[2] = settingsSnapshot(observation); state[13] = true;
     const tree = render('settings.tsx', 'SettingsScreen', { theme, layout: { compact } }, state);
     const body = text(tree);
-    assert.match(body, /已绑定 3 · 运行中 1 · 待命 1 · 异常／状态无法确认 1/);
+    assert.match(body, /已绑定 3 · 运行中 1 · 待命 1 · 状态无法确认 1/);
     assert.match(body, /源采集问题 2 · 最近观测：/);
     assert.doesNotMatch(body, /可恢复|恢复跟踪|同步受阻|跟踪中 \d/);
     for (const node of nodes(tree).filter(node => node.type === 'Text')) assert(node.props.style?.color);

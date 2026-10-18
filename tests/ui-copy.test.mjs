@@ -200,7 +200,7 @@ test('COPY provider notices do not infer page execution, completion or approval 
   await until(() => events.some(e => e.type === 'session.ready'));
   // An unreadable page is reported as unknown state, not as running/finished.
   await f.view(s, { state: 'abnormal', items: [] });
-  const abnormal = await until(() => events.find(e => e.notice?.title === '异常／状态无法确认'));
+  const abnormal = await until(() => events.find(e => e.notice?.title === '状态无法确认'));
   assert.doesNotMatch(abnormal.notice.title, /正在运行|已完成/);
   // A published non-prefix revision is an explicit limitation notice.
   await f.view(s, { state: 'running', items: [sourceItem('answer', 'new', { nativeMessageId: 'native-answer' })] });

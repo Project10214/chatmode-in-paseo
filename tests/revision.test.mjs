@@ -117,7 +117,7 @@ test('R15: updated context is sent as explicit user-level text on the next turn'
 });
 test('R16: the host-shaped MCP exception is narrow and emits an explicit limitation notice', () => {
   assert.equal(hostMcpNotice({}), null);
-  assert.match(hostMcpNotice({ paseo: { type: 'http', url: 'http://127.0.0.1:1234/mcp/agents' } }).title, /未导入/);
+  assert.match(hostMcpNotice({ paseo: { type: 'http', url: 'http://127.0.0.1:1234/mcp/agents' } }).title, /不会进入网页/);
   for (const entry of [{ paseo: { type: 'http', url: 'https://example.com/mcp/agents' } }, { paseo: { type: 'stdio', command: 'anything' } }, { other: { type: 'http', url: 'http://127.0.0.1:1234/mcp/agents' } }]) assert.throws(() => hostMcpNotice(entry), /MCP/);
 });
 test('R17: saved thinking default updates both the model descriptor and catalog cache identity', async t => {

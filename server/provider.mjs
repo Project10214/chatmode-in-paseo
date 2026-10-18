@@ -60,8 +60,8 @@ export function hostMcpNotice(servers = {}) {
     } catch {}
     invariant(internal, 'MCP_CONFIG_UNSUPPORTED', 'This browser provider cannot import Paseo MCP entries. Use apps already authorized in ChatGPT. Only the host-shaped loopback paseo entry is excluded, with a visible warning.');
   }
-  return entries.length ? { id: 'host-mcp-not-imported', severity: 'warning', title: 'Paseo 内置工具未导入网页会话',
-    description: '网页不会获得 Paseo 内置工具及其凭据。请使用 ChatGPT 已授权应用；此设置不会赋予创建 Paseo 子 Agent 的能力。' } : null;
+  return entries.length ? { id: 'host-mcp-not-imported', severity: 'warning', title: 'Paseo 内置工具不会进入网页',
+    description: '请使用 ChatGPT 已授权应用。' } : null;
 }
 export function configState(session, catalog, defaults = {}) {
   const effective=session.pendingConfig??session.config;
@@ -162,7 +162,7 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
       const item=value.item;
       if(item.kind==='page-state')value={type:'session.notice',sessionId:value.sessionId,notice:{
         id:item.id,severity:item.data.state==='abnormal'?'warning':'info',
-        title:({running:'运行中',standby:'待命',abnormal:'异常／状态无法确认'})[item.data.state]}};
+        title:({running:'运行中',standby:'待命',abnormal:'状态无法确认'})[item.data.state]}};
       else value={...value,item:{type:'notification',id:item.id,level:'info',
         message:item.kind==='native-activity'?activityText(item.data):
           '当前客户端无法显示此网页资源卡片。\n'+JSON.stringify(item.data)}};
@@ -406,8 +406,8 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
                 return emit(event);
               },
               notice:codes=>emit({type:'session.notice',sessionId:hostId,notice:{id:'native-content-delivery',
-                severity:codes.length?'warning':'info',title:codes.length?'正文送达待核对':'正文同步提示已解除',
-                description:codes.length?'原文仍保留；未据此确认宿主持久化或盲目补发。'+codes.join('、'):undefined,
+                severity:codes.length?'warning':'info',title:codes.length?'正文同步待确认':'正文同步已恢复',
+                description:codes.length?'原文已保留，稍后自动重试。':undefined,
                 dismissed:codes.length===0}})
             });
           }
@@ -434,9 +434,9 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
           if (mcpNotice) emit({ type: 'session.notice', sessionId: input.sessionId, notice: mcpNotice });
           emit({ type: 'session.notice', sessionId: input.sessionId, notice: { id: 'native-config-pending', severity: 'info',
             title: resumingActive ? '已恢复网页跟踪' :
-              s.conversationId ? '已恢复原对话关联' : '配置已保存，待发送时应用',
-            description: resumingActive ? '继续读取原对话，不会重发消息。' :
-              s.conversationId ? '下次发送前核对原网页及配置，不会重发旧消息。' : '首次发送前打开 ChatGPT 并核对配置。' } });
+              s.conversationId ? '已恢复对话关联' : '配置已保存，待发送时应用',
+            description: resumingActive ? '继续读取原对话；不会重发消息。' :
+              s.conversationId ? '不会重发旧消息。' : '首次发送时生效。' } });
           configEvent(input.sessionId, s.id);
           if(input.history==='replay')for(const item of broker.snapshot(s.id).history)emitItem(input.sessionId,item);
           emit({type:'session.ready',requestId:input.requestId,sessionId:input.sessionId});

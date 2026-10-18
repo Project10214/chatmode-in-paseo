@@ -465,7 +465,9 @@
           // no turn/native identity; keep all other page errors and notices.
           if (item.role === 'page' && item.kind === 'notice' && !inTurn &&
               item.nativeMessageId === undefined &&
-              /ChatGPT can make mistakes|ChatGPT 可能会犯错|ChatGPT 可能會出錯/i.test(item.text))
+              (/ChatGPT can make mistakes|ChatGPT 可能会犯错|ChatGPT 可能會出錯/i.test(item.text) ||
+               /^(?:Worked|Thought) for\s*[\d.]+\s*s$/i.test(item.text.trim()) ||
+               /^(?:已工作|已用时)\s*[\d.]+\s*秒$/.test(item.text.trim())))
             continue;
           item.userMessageId = item.role === 'page' && item.kind === 'notice' && !inTurn ? null : userMessageId;
           if (row.media) {

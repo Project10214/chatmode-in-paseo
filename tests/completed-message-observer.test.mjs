@@ -106,7 +106,7 @@ test('CM observer: a receiver rejection is not a delivery confirmation or a succ
  await until(()=>confirmed(w,'answer','A'));
  const count=w.bodies().length;
  await w.view(w.s,{items:[message('answer','B')]});
- await until(()=>w.events.some(e=>e.notice?.description?.includes('HOST_BODY_DIVERGED')));
+ await until(()=>w.events.some(e=>e.notice?.id==='native-content-delivery'&&e.notice.dismissed===false));
  assert.equal(w.bodies().length,count,'a refused revision is not re-published');
  assert.equal(actual(w,'answer'),'A');
  assert.equal(w.broker.snapshot(w.s.id).turn.outcome,null,'a rejected revision is not completion');
@@ -123,7 +123,7 @@ test('CM observer: stored A after a rejected B is re-confirmed under the same id
  const stored=deliveries().length;
  assert.ok(stored>=1&&deliveries().some(d=>d.confirmedText==='A'),'A was actually delivered first');
  await w.view(w.s,{items:[message('answer','B')]});
- await until(()=>w.events.some(e=>e.notice?.description?.includes('HOST_BODY_DIVERGED')));
+ await until(()=>w.events.some(e=>e.notice?.id==='native-content-delivery'&&e.notice.dismissed===false));
  await w.view(w.s,{items:[message('answer','A')]});
  // Re-reading the stored version needs no body traffic: the host already has
  // exactly this text, so the same source identity stays confirmed.

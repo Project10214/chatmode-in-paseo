@@ -20,7 +20,10 @@ export function createProviderDelivery({sessionId,hostId,store,readHost,emit,isC
   const report=codes=>{
     const safe=[...new Set(codes.map(code=>/^(?:HOST|BODY|CHECKPOINT|DELIVERY|SOURCE|NATIVE)_[A-Z_]+$/.test(code)?code:'DELIVERY_UNAVAILABLE'))].sort();
     const key=safe.join(',');
-    if(current()&&key!==lastNotice){lastNotice=key;notice(safe);}
+    // Normal in-flight delivery is not a user-facing problem. Only a real
+    // issue set produces one notice per distinct set; clearing it dismisses.
+    if(!current()||key===lastNotice||(!key&&lastNotice===null))return;
+    lastNotice=key;notice(safe);
   };
   const persist=async durable=>{
     invariant(current(),'DELIVERY_BINDING_EXPIRED');
@@ -72,8 +75,7 @@ export function createProviderDelivery({sessionId,hostId,store,readHost,emit,isC
     }
     if(!ready())return;
     const outcome=await coordinator.observeHost(view);
-    const codes=outcome.issues.map(issue=>issue.code);
-    report(codes.length?codes:unfinished()?['DELIVERY_PENDING']:[]);
+    report(outcome.issues.map(issue=>issue.code));
   }
   function unfinished() {
     if([...sources.values()].some(item=>submitted.get(item.id)!==JSON.stringify(item)))return true;
@@ -95,7 +97,7 @@ export function createProviderDelivery({sessionId,hostId,store,readHost,emit,isC
     });
   }
   return {
-    submit(item){if(!current())return;sources.set(item.id,structuredClone(item));report(['DELIVERY_PENDING']);kick();},
+    submit(item){if(!current())return;sources.set(item.id,structuredClone(item));kick();},
     kick,
     close(){closed=true;clearTimeout(timer);timer=null;void coordinator?.close();},
     async drain(){if(inflight)await inflight;}

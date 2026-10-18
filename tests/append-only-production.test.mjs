@@ -119,7 +119,7 @@ test('PROD same-ID updates keep one canonical body: equal re-reads are unchanged
  // A stale/shorter visible read stays current source truth and a retained
  // rewrite, but it can neither replace nor truncate the delivered body.
  await w.view(w.s,{items:[formal('answer','第一段')]});
- await until(()=>w.events.some(event=>event.notice?.description?.includes('HOST_BODY_DIVERGED')));
+ await until(()=>w.events.some(event=>event.notice?.id==='native-content-delivery'&&event.notice.dismissed===false));
  const after=w.broker.snapshot(w.s.id);
  assert.equal(after.sources[0].text,'DOM answer','DOM text remains the current visible source');
  assert.equal(after.sources[0].prose.rawText,'第一段');

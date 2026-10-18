@@ -24,8 +24,9 @@ test('PD-2 source storage and standby continue while subscription/marker observa
   assert.equal(w.bodies().length,0);
   w.holdMarker(true);w.releaseBarrier();await until(()=>w.markers().length>0);
   await sleep(300);assert.equal(w.bodies().length,0,'unobserved anchor is not an ACK');
-  const pending=w.events.filter(e=>e.notice?.id==='native-content-delivery').at(-1).notice;
-  assert.equal(pending.dismissed,false);assert.match(pending.description,/DELIVERY_PENDING/);
+  // Normal in-flight delivery is not a user-facing warning. Only a real issue
+  // set produces a notice; an unresolved-but-clean pass stays quiet.
+  assert.equal(w.events.filter(e=>e.notice?.id==='native-content-delivery').length,0);
   w.holdMarker(false);await until(()=>w.text()==='pending');
 });
 test('PD-3 a dropped body is repaired only after its marker, with a fresh transport id',async t=>{
@@ -80,7 +81,7 @@ test('PD-7 epoch change cannot cause a silent full-body replay',async t=>{
   const w=await world(t);await w.capture('A');
   await until(()=>w.broker.snapshot(w.s.id).nativeDelivery?.durable.attempts.some(a=>a.status==='confirmed'));
   const count=w.bodies().length;w.epoch('new-epoch');await w.capture('AB');
-  await until(()=>w.events.some(e=>e.notice?.description?.includes('HOST_EPOCH_MISMATCH')));
+  await until(()=>w.events.some(e=>e.notice?.id==='native-content-delivery'&&e.notice.dismissed===false&&e.notice.title==='正文同步待确认'));
   assert.equal(w.bodies().length,count);
   assert.equal(w.broker.snapshot(w.s.id).sources.find(s=>s.id==='formal').text,'AB');
 });
@@ -102,7 +103,7 @@ test('PD-9 durable preparation failure prevents all native/checkpoint emission',
     return result;
   },options);
   await w.capture('A');
-  await until(()=>w.events.some(e=>e.notice?.description?.includes('DELIVERY_UNAVAILABLE')));
+  await until(()=>w.events.some(e=>e.notice?.id==='native-content-delivery'&&e.notice.dismissed===false&&e.notice.title==='正文同步待确认'));
   assert.equal(w.bodies().length,0);assert.equal(w.markers().length,0);
   assert.equal(w.broker.snapshot(w.s.id).sources.find(s=>s.id==='formal').text,'A');
   deny=false;await w.capture('AB');await until(()=>w.text()==='AB');
@@ -121,7 +122,7 @@ test('PD-11 a published non-prefix revision is retained but never concatenated t
   const w=await world(t);await w.capture('published');
   await until(()=>w.broker.snapshot(w.s.id).nativeDelivery?.durable.attempts.some(a=>a.status==='confirmed'));
   await w.capture('replacement');
-  await until(()=>w.events.some(e=>e.notice?.description?.includes('HOST_BODY_DIVERGED')));
+  await until(()=>w.events.some(e=>e.notice?.id==='native-content-delivery'&&e.notice.dismissed===false));
   assert.equal(w.text(),'published');assert.equal(w.bodies().length,1);
   assert.equal(w.broker.snapshot(w.s.id).sources.find(s=>s.id==='formal').text,'replacement');
   assert.equal(w.broker.snapshot(w.s.id).nativeDelivery.durable.sources[0].text,'replacement');
@@ -134,7 +135,7 @@ test('PD-12 a new binding cannot relabel an ambiguous prior attempt as never sen
   await w.connection.send({type:'session.close',sessionId:'host-one',requestId:'close'});
   await until(()=>w.events.some(e=>e.type==='session.closed'));
   w.fail(false);const before=w.bodies().length;await w.open('host-two');
-  await until(()=>w.events.some(e=>e.sessionId==='host-two'&&e.notice?.description?.includes('DELIVERY_PRIOR_UNCONFIRMED')));
+  await until(()=>w.events.some(e=>e.sessionId==='host-two'&&e.notice?.id==='native-content-delivery'&&e.notice.dismissed===false));
   assert.equal(w.bodies().length,before);assert.equal(w.text(),'');
   assert.equal(w.broker.snapshot(w.s.id).sources.find(s=>s.id==='formal').text,'A');
 });

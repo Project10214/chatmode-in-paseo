@@ -92,7 +92,7 @@ test('CM-R4 published rewrite is retained as current source but cannot replace o
  const w=await world(t,{pageState:'running'});
  await w.view(w.s,{items:[message('a','原文')]});await until(()=>confirmed(w,'a','原文'));
  await w.view(w.s,{items:[message('a','改写后的原文')]});
- await until(()=>w.events.some(e=>e.notice?.description?.includes('HOST_BODY_DIVERGED')));
+ await until(()=>w.events.some(e=>e.notice?.id==='native-content-delivery'&&e.notice.dismissed===false));
  const state=w.broker.snapshot(w.s.id);
  assert.equal(actual(w,'a'),'原文');assert.equal(w.bodies().length,1);
  assert.equal(rowOf(state,'a').text,'改写后的原文','local projection is not host truth');
@@ -112,7 +112,7 @@ test('CM-R5 known native history identity survives raw adoption, prefix growth a
  const count=w.bodies().length;
  await w.view(w.s,{state:'standby',items:[message('a','Hello'),message('b','Partial and complete'),message('c','New start')]});
  await until(()=>actual(w,'b')==='Partial and complete');
- await until(()=>w.events.some(e=>e.notice?.description?.includes('HOST_BODY_DIVERGED')));
+ await until(()=>w.events.some(e=>e.notice?.id==='native-content-delivery'&&e.notice.dismissed===false));
  assert.equal(actual(w,'a'),'Hello');assert.equal(actual(w,'c'),'Old start');
  const state=w.broker.snapshot(w.s.id);
  assert.deepEqual(assistants(state).map(i=>i.id),history.map(i=>i.id));
