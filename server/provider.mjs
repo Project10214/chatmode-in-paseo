@@ -534,6 +534,11 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
           } else await broker.ensurePage(id, { signal });
           invariant(!signal.aborted && !closed && !closing, 'SEND_CANCELLED');
           result = await broker.prompt(id, input.prompt.clientMessageId, value, { signal, attachments });
+          // The user's own message is already durably admitted. Echo it now so
+          // the Paseo timeline does not wait for the native click/receipt; the
+          // later prompt_result and turn events still gate host execution.
+          emitItem(input.sessionId,{type:'user_message',id:'user:'+result.turnId,text:value,
+            clientMessageId:input.prompt.clientMessageId});
           // Accept once a frame from after the one-shot dispatch is observed,
           // or its command result arrives. Do not hold authorization/content
           // for a slow message receipt; the page controls still end the run.
@@ -550,7 +555,6 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
         const wire=current.turn?.id===result.turnId&&current.turn.observedRunId?
           current.turn.observedRunId:run?.active?run.id:result.turnId;
         disposition(input.sessionId,input.prompt.clientMessageId,{type:'turn',turnId:wire});
-        emitItem(input.sessionId,{type:'user_message',id:'user:'+result.turnId,text:value,clientMessageId:input.prompt.clientMessageId});
         announce(input.sessionId,wire);
         releaseDeferred(input.sessionId,binding,false);
         if(current.turn?.id===result.turnId&&current.turn.outcome)
