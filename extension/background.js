@@ -208,7 +208,7 @@ async function execute(command) {
       if (!tabs[tabId] || tabs[tabId].sessionId !== command.sessionId) throw codeError('TAB_NOT_OWNED');
     }
     ledger[command.id].tabId = tabId; await saveLedger();
-    if (['configure','ensure'].includes(command.kind) && !reopened) await settleBlankTab(tabId);
+    if (['open','configure','ensure'].includes(command.kind) && !reopened) await settleBlankTab(tabId);
     const page = command.kind === 'close-tab'
       ? { documentKey: command.payload.documentKey }
       : await identity(tabId, command.kind==='ensure'?command.payload:null);
