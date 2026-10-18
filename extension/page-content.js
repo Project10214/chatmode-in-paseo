@@ -466,8 +466,8 @@
           if (item.role === 'page' && item.kind === 'notice' && !inTurn &&
               item.nativeMessageId === undefined &&
               (/ChatGPT can make mistakes|ChatGPT 可能会犯错|ChatGPT 可能會出錯/i.test(item.text) ||
-               /^(?:Worked|Thought) for\s*[\d.]+\s*s$/i.test(item.text.trim()) ||
-               /^(?:已工作|已用时)\s*[\d.]+\s*秒$/.test(item.text.trim())))
+               /^(?:Worked|Thought) for\b/i.test(item.text.trim()) ||
+               /^(?:已工作|已用时)\b/.test(item.text.trim())))
             continue;
           item.userMessageId = item.role === 'page' && item.kind === 'notice' && !inTurn ? null : userMessageId;
           if (row.media) {

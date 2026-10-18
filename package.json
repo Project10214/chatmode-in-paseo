@@ -1,6 +1,6 @@
 {
   "name": "chatmode-in-paseo",
-  "version": "0.1.0-alpha.4.32",
+  "version": "0.1.0-alpha.4.33",
   "description": "Direct ChatGPT browser provider for Paseo; no CoS desktop app",
   "private": true,
   "license": "MIT",
