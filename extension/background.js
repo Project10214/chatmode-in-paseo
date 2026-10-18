@@ -90,7 +90,20 @@ async function settleBlankTab(tabId) {
     try { const r = await tabRpc(tabId, { type: 'page-ready' }, 3000); return r?.ok === true && r.value?.composer === true; }
     catch { return false; }
   };
+  // chrome.tabs.create() resolving only proves a tab object exists. A tab in a
+  // background/occluded window can stay blank or throttled, so also wait for
+  // the actual ChatGPT document. If it still is not loading, bring that one
+  // tab to the foreground once (never reload a loaded page first).
+  const loaded = async () => {
+    try { const tab = await chrome.tabs.get(tabId);
+      return tab?.status === 'complete' && !tab.discarded && String(tab.url || '').startsWith('https://chatgpt.com/'); }
+    catch { return false; }
+  };
   for (const end = Date.now() + 8000; Date.now() < end; await delay(500)) if (await ready()) return false;
+  if (!(await loaded())) {
+    try { await chrome.tabs.update?.(tabId, { active: true }); } catch {}
+    for (const end = Date.now() + 10000; Date.now() < end; await delay(500)) if (await ready()) return false;
+  }
   try { await chrome.tabs.reload(tabId); } catch { return false; }
   for (const end = Date.now() + 30000; Date.now() < end; await delay(500)) if (await ready()) break;
   return true;
