@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Chatmode in Paseo — ChatGPT Bridge",
-  "version": "0.2.32",
+  "version": "0.2.33",
   "description": "Connect a local Paseo Chatmode provider directly to managed ChatGPT tabs. No CoS desktop app.",
   "minimum_chrome_version": "125",
   "permissions": [
@@ -20,8 +20,14 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://chatgpt.com/*"],
-      "js": ["upstream/cos-apps-observer.js", "upstream/cos-send-evidence.js", "public-message-main.js"],
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "upstream/cos-apps-observer.js",
+        "upstream/cos-send-evidence.js",
+        "public-message-main.js"
+      ],
       "world": "MAIN",
       "run_at": "document_start"
     },
@@ -67,5 +73,5 @@
     "default_title": "Chatmode in Paseo",
     "default_popup": "popup.html"
   },
-  "version_name": "0.2.32"
+  "version_name": "0.2.33"
 }
