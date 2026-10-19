@@ -108,30 +108,6 @@ async function settleBlankTab(tabId) {
   for (const end = Date.now() + 30000; Date.now() < end; await delay(500)) if (await ready()) break;
   return true;
 }
-// A newly created background tab has never painted its conversation. ChatGPT's
-// current renderer keeps the first answer in a reveal/hydration state until the
-// tab has been visible once; the observer then sees no assistant message until
-// the user clicks the tab. Activate it once before the first Send, then restore
-// the previously active tab. The page stays hydrated for later background turns.
-async function hydrateTab(tabId) {
-  let tab;
-  try { tab = await chrome.tabs.get(tabId); } catch { return false; }
-  if (tab?.active !== false) return true;
-  if (typeof chrome.tabs.update !== 'function') return false;
-  let previous = null;
-  try {
-    const active = await chrome.tabs.query({ windowId: tab.windowId, active: true });
-    previous = (Array.isArray(active) ? active : []).find(candidate => candidate.id !== tabId) ?? null;
-  } catch {}
-  try { await chrome.tabs.update(tabId, { active: true }); } catch { return false; }
-  // One visible paint is enough; do not wait for a native answer here.
-  await delay(1000);
-  try {
-    const current = await chrome.tabs.get(tabId);
-    if (current?.active === true && previous?.id != null) await chrome.tabs.update(previous.id, { active: true });
-  } catch {}
-  return true;
-}
 async function identity(tabId, expected = null) {
   const deadline = Date.now() + 25000;
   do {
@@ -246,12 +222,6 @@ async function execute(command) {
     }
     ledger[command.id].tabId = tabId; await saveLedger();
     if (['open','configure','ensure'].includes(command.kind) && !reopened) await settleBlankTab(tabId);
-    // Hydrate once per tab before any identity/claim/send. For a brand-new
-    // conversation this runs before the first Send; for an existing bound tab
-    // it repairs bindings created before this fix on their next command.
-    if (command.kind !== 'close-tab' && command.kind !== 'catalog' && tabs[tabId]?.hydrated !== true) {
-      if (await hydrateTab(tabId)) { tabs[tabId] = { ...tabs[tabId], hydrated: true }; await saveTabs(); }
-    }
     const page = command.kind === 'close-tab'
       ? { documentKey: command.payload.documentKey }
       : await identity(tabId, command.kind==='ensure'?command.payload:null);
