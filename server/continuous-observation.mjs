@@ -263,5 +263,14 @@ export function recordObservationGap(session,event,at=Date.now()) {
   const page=unreadablePage(at),issues=[{code:'OBSERVATION_UNAVAILABLE',reason}];
   session.observation.page=page;
   const item=stateItem(session,page,issues);putHistory(session,item);
-  return {events:[{id:session.id,state:'page-status',turnId:session.observation.run?.id??null,item,page,issues}]};
+  const events=[{id:session.id,state:'page-status',turnId:session.observation.run?.id??null,item,page,issues}];
+  // The page document is gone; an open approval can no longer be answered or
+  // observed. Dismiss its Paseo card explicitly as withdrawn/unknown, never as
+  // an allow or deny. The user must re-check the ChatGPT page.
+  for(const [key,approval] of Object.entries(session.approvals??{})) {
+    if(approval?.state!=='open')continue;
+    approval.state='resolved';approval.withdrawn=true;
+    events.push({id:session.id,state:'approval-closed',key,answered:null,withdrawn:true,reason});
+  }
+  return {events};
 }

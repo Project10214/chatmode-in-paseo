@@ -204,6 +204,13 @@ with sync_playwright() as pw:
           '<button>Always allow</button><button>Deny</button></div></main>')
         check(snapshot['approvals'][0]['autoEligible'] is True and snapshot['approvals'][0]['clickable'] is False,
               'persistent-only cards are auto-eligible but have no manual allow-once action')
+        snapshot = load('<main><div data-codex-approval-surface="true"><div role="alert">presure</div>'+
+          '<div>Reconnect presure</div><div>Your presure connection has expired.</div>'+
+          '<button>Not now</button><button>Reconnect</button></div></main>')
+        reconnect=snapshot['approvals'][0]
+        check(reconnect['clickable'] is True and reconnect['autoEligible'] is False
+              and reconnect['allowLabel'] == 'Reconnect' and reconnect['denyLabel'] == 'Not now',
+              'reconnect cards are manually actionable but never auto-approved')
         snapshot = load('<main><div data-codex-approval-surface="true"><button>Sure</button><button>Deny</button></div></main>')
         check(snapshot['approvals'][0]['autoEligible'] is False, 'unknown labels are not auto-eligible')
         snapshot = load('<main><div data-codex-approval-surface="true"><button>Always allow</button><button>Deny</button></div></main>')

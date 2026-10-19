@@ -51,7 +51,12 @@ with sync_playwright() as pw:
           window.addAutoApproval=(labels=['Allow once','Allow','Deny'])=>{const card=document.createElement('div');card.dataset.codexApprovalSurface='true';
             card.innerHTML='<div role="alert">Allow ChatGPT to use fixture-tool?</div>'+labels.map((label,i)=>`<button data-choice="${i}">${label}</button>`).join('');
             messages.append(card);for(const button of card.querySelectorAll('button'))button.onclick=()=>{actionClicks['auto-'+button.dataset.choice]=(actionClicks['auto-'+button.dataset.choice]||0)+1;button.disabled=true;
-              if(![...card.querySelectorAll('button')].some(other=>!other.disabled&&!['deny','cancel'].includes(other.textContent.toLowerCase())))card.remove();};
+              if(![...card.querySelectorAll('button')].some(other=>!other.disabled&&!['deny','cancel','not now','later'].includes(other.textContent.toLowerCase())))card.remove();};
+            return card;};
+          window.addReconnectApproval=()=>{const card=document.createElement('div');card.dataset.codexApprovalSurface='true';
+            card.innerHTML='<div role="alert">presure</div><div>Reconnect presure</div><div>Your presure connection has expired.</div>'+
+              '<button data-choice="deny">Not now</button><button data-choice="allow">Reconnect</button>';
+            messages.append(card);for(const button of card.querySelectorAll('button'))button.onclick=()=>{actionClicks[button.dataset.choice]++;button.disabled=true;card.remove();};
             return card;};
           const actualNow=Date.now;window.actionClock=0;Date.now=()=>actualNow()+actionClock;
         }''', CID)
@@ -138,6 +143,21 @@ with sync_playwright() as pw:
               and page.evaluate("actionClicks['auto-0']")==1 and page.evaluate("actionClicks['auto-1']")==1
               and (page.evaluate("actionClicks['auto-2']") or 0)==0,
               'auto approval clicks all generic confirmation candidates inside a recognized approval card')
+        page.close()
+
+        page = fresh()
+        page.evaluate("addReconnectApproval()")
+        result = page.evaluate("tryAction(()=>CIP_DOM.answerApproval(approvalOptions('allow-once')))")
+        check(result['ok'] and result['value']['choice']=='allow-once'
+              and page.evaluate('actionClicks.allow')==1 and page.evaluate('actionClicks.deny')==0,
+              'reconnect cards expose the exact Reconnect button as a manual allow action')
+        page.close()
+
+        page = fresh()
+        page.evaluate("addReconnectApproval()")
+        result = page.evaluate("tryAction(()=>CIP_DOM.answerApproval(approvalOptions('allow-auto')))")
+        check(not result['ok'] and page.evaluate('actionClicks.allow')==0 and page.evaluate('actionClicks.deny')==0,
+              'reconnect cards are never auto-approved by the allowlist switch')
         page.close()
 
         page = fresh()

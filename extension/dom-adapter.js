@@ -752,7 +752,12 @@
     guard();
     if (content.resolveApproval(key, choice) !== button || !actionable(button)) fail('APPROVAL_GONE');
     const displayedRequest = card.innerText;
+    const reconnect = /^(?:Reconnect|Connect|重新连接|重新連結|连接|連接)$/i.test(label(button));
     button.click(); // Never called by read(), receipt reconciliation or Stop.
+    // Reconnect intentionally leaves the ChatGPT document for OAuth. Waiting
+    // for a post-click DOM guard would turn a successful click into
+    // NAVIGATION_CHANGED and strand the Paseo permission forever.
+    if (reconnect) return { answered: true, key, choice, reconnect: true };
     await until(() => {
       if (!card.isConnected) return true;
       if (card.innerText !== displayedRequest) fail('APPROVAL_UNCONFIRMED');

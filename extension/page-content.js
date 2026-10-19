@@ -47,6 +47,9 @@
       'continue','yes','ok','okay','proceed','confirm','i understand','got it',
       '继续','繼續','是','好','确定','確定','确认','確認','明白','我知道了'
     ]),
+    reconnect: new Set([
+      'reconnect','connect','重新连接','重新連結','重新连接应用','重新連結應用','连接','連接'
+    ]),
     deny: new Set([
       'deny','reject','cancel','no','close','dismiss','not now','later',
       '拒绝','拒絕','取消','否','关闭','關閉','稍后','稍後','不允许','不允許'
@@ -56,11 +59,12 @@
     value.replace(/\s+/g,' ').trim().replace(/[.!。！]+$/u,'').toLocaleLowerCase('en-US') : '';
   const approvalTier = value => {
     const key = approvalKey(value);
-    for (const tier of ['persistent','once','confirm','deny'])
+    for (const tier of ['persistent','once','confirm','reconnect','deny'])
       if (APPROVAL_LABELS[tier].has(key)) return tier;
     return null;
   };
   const APPROVAL_CONTEXT = /Allow\s+ChatGPT\s+to\s+use|允许\s*ChatGPT\s*使用|授\s*权|permission|authorize|approve/i;
+  const APPROVAL_RECONNECT = /reconnect|connection\s+has\s+expired|重新连接|重新連結|连接.*过期|連接.*過期|过期|過期/i;
   const keys = new WeakMap(), mediaRevisions = new WeakMap();
   let mediaNodes = new Map(), mediaSequence = 0;
   let keySequence = 0;
@@ -377,23 +381,27 @@
     const buttons = [...card.querySelectorAll('button')].filter(button =>
       button.closest(APPROVAL) === card && visible(button) && !button.disabled &&
       !button.matches(':disabled') && attr(button, 'aria-disabled') !== 'true' && !button.hasAttribute('aria-haspopup'));
-    const groups = {persistent:[], once:[], confirm:[], deny:[]};
+    const groups = {persistent:[], once:[], confirm:[], reconnect:[], deny:[]};
     for (const button of buttons) {
       const value = caption(button), tier = approvalTier(value);
       if (tier) groups[tier].push({button, label:value});
     }
     const tier = groups.persistent.length ? 'persistent' : groups.once.length ? 'once' :
       groups.confirm.length ? 'confirm' : null;
-    const context = APPROVAL_CONTEXT.test(textOf(card, node => node.nodeType === Node.TEXT_NODE ||
-      (readable(node) && visible(node))));
+    const cardText = textOf(card, node => node.nodeType === Node.TEXT_NODE ||
+      (readable(node) && visible(node)));
+    const context = APPROVAL_CONTEXT.test(cardText);
+    const reconnect = groups.reconnect.length === 1 && groups.deny.length === 1 &&
+      APPROVAL_RECONNECT.test(cardText);
     const autoEligible = Boolean(tier && groups.deny.length > 0 &&
       (tier !== 'confirm' || context));
-    const clickable = groups.once.length === 1 && groups.deny.length === 1;
+    const clickable = (groups.once.length === 1 || reconnect) && groups.deny.length === 1;
+    const manualAllow = groups.once.length === 1 ? groups.once[0] : reconnect ? groups.reconnect[0] : null;
     return {
-      allow: clickable ? groups.once[0].button : null,
+      allow: clickable ? manualAllow.button : null,
       deny: clickable ? groups.deny[0].button : null,
       labels: buttons.map(button => caption(button)).filter(Boolean),
-      groups, tier, autoEligible
+      groups, tier, autoEligible, reconnect
     };
   }
   function linkedApprovalPanels(card) {

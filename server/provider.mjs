@@ -345,6 +345,14 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
       if(event.answered&&binding.respondingPermissions.get(event.key)===event.answered) {
         binding.permissions.set(event.key,'resolved');
         emit({type:'session.permission_resolved',sessionId:hostId,permissionId:event.key});
+      } else if(event.withdrawn===true) {
+        // The page navigated away or was lost. Dismiss the card, but do not
+        // claim an allow/deny outcome that was never observed.
+        binding.permissions.set(event.key,'resolved');
+        emit({type:'session.permission_resolved',sessionId:hostId,permissionId:event.key});
+        emit({type:'session.notice',sessionId:hostId,notice:{id:'approval-withdrawn:'+event.key,
+          severity:'warning',title:'网页授权框已关闭',
+          description:'页面已离开或失去观察，未记录允许或拒绝；请回 ChatGPT 核对。'}});
       } else {
         // The public host interface defaults an unrecorded resolution to Deny.
         // It cannot truthfully express a withdrawal/unknown external choice.

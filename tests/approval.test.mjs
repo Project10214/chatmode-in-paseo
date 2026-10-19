@@ -151,3 +151,21 @@ test('APPROVAL-5 the global auto switch answers an exact anonymous approval with
   assert.equal(f.broker.snapshot(s.id).approvals[on.key].state, 'resolved');
   assert.equal(events.filter(event => event.type === 'session.permission_resolved').length, 1);
 });
+
+test('APPROVAL-6 losing the page document withdraws an open approval without inventing a decision', async t => {
+  const f = await fixture(t), s = await f.ready();
+  await f.sending(s);
+  await f.view(s, { state: 'standby', approvals: [card] });
+  const current = f.broker.snapshot(s.id);
+  const seen = [];
+  f.broker.subscribe(s.id, event => seen.push(event));
+  await f.broker.observeGap({ sessionId: s.id, observationLease: current.observation.lease,
+    tabId: current.tabId, documentKey: current.documentKey,
+    url: `https://chatgpt.com/c/${current.conversationId}`, reason: 'PAGE_GONE' });
+  const closed = seen.find(event => event.state === 'approval-closed' && event.key === card.key);
+  assert.ok(closed);
+  assert.equal(closed.withdrawn, true);
+  assert.equal(closed.answered, null);
+  assert.equal(f.broker.snapshot(s.id).approvals[card.key].state, 'resolved');
+  assert.equal(f.broker.snapshot(s.id).approvals[card.key].withdrawn, true);
+});
