@@ -221,6 +221,10 @@ export function recordPageView(session,event,commands={},at=Date.now()) {
       const previous=session.approvals[approval.key];
       if(previous?.state==='resolved')continue;
       const value={...approval,state:'open'};
+      // Manual intent and vetoes are durable command facts. A later page
+      // snapshot must not overwrite them with untrusted DOM observations.
+      for(const field of ['manualRequested','manualVeto','autoSuppressed','clickUncertain'])
+        if(previous?.[field]===true)value[field]=true;
       if(JSON.stringify(previous)!==JSON.stringify(value)) {
         session.approvals[approval.key]=value;
         events.push({id:session.id,state:'approval',approval:value});
@@ -236,11 +240,15 @@ export function recordPageView(session,event,commands={},at=Date.now()) {
       }
     }
   }
-  for(const key of Array.isArray(event.view.closedApprovals)?event.view.closedApprovals:[]) {
+  for(const entry of Array.isArray(event.view.closedApprovals)?event.view.closedApprovals:[]) {
+    const replaced=object(entry)&&entry.reason==='superseded';
+    const key=typeof entry==='string'?entry:replaced?entry.key:null;
     if(typeof key!=='string'||!Object.hasOwn(session.approvals,key))continue;
     const approval=session.approvals[key];if(approval.state==='resolved')continue;
     approval.state='resolved';
-    events.push({id:session.id,state:'approval-closed',key,answered:approval.answered??null});
+    if(replaced){approval.withdrawn=true;approval.closeReason='REQUEST_CHANGED';}
+    events.push({id:session.id,state:'approval-closed',key,answered:approval.answered??null,
+      ...(replaced?{withdrawn:true,reason:'REQUEST_CHANGED'}:{})});
   }
   observation.page=page;observation.lastObservedAt=at;
   observation.lastSequence=event.sequence;observation.frameDigest=digest;delete observation.gap;

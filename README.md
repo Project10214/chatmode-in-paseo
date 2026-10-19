@@ -7,11 +7,11 @@
 **中文** · [English](#english-summary) — 在 Paseo 中创建 Chatmode Agent，由本项目的 Chrome 扩展驱动 ChatGPT 网页收发消息，无需 CoS 桌面应用。当前为 **alpha**。欢迎通过 [Issue](https://github.com/Project10214/chatmode-in-paseo/issues) 反馈问题、通过 Pull Request 贡献代码（中英文均可），见[贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [许可证：MIT](LICENSE)。含源自 [Chat On Steroids](https://github.com/totec448-spec/chat-on-steroids)（MIT）的移植代码，见[第三方声明](THIRD_PARTY_NOTICES.md)。
 
 <a id="english-summary"></a>
-**English summary** — Chatmode in Paseo is a [Paseo](https://paseo.sh) plugin plus a Chrome extension that lets a Paseo "Chatmode" agent talk to the ChatGPT web UI directly, without the CoS desktop app. It is **alpha** software. Issues and pull requests in English or Chinese are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and [LICENSE](LICENSE) (MIT). Portions adapted from [Chat On Steroids](https://github.com/totec448-spec/chat-on-steroids) (MIT) are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Requirements: Node.js ≥ 22.6, Chrome and the Paseo daemon on the same machine, Paseo SDK 0.12.0-beta.1 (unreleased candidate). The rest of this README is in Chinese; see [docs/PRODUCT_MANUAL.md](docs/PRODUCT_MANUAL.md) for the product manual and [docs/TESTING.md](docs/TESTING.md) for testing.
+**English summary** — Chatmode in Paseo is a [Paseo](https://paseo.sh) plugin plus a Chrome extension that lets a Paseo "Chatmode" agent talk to the ChatGPT web UI directly, without the CoS desktop app. It is **alpha** software. Issues and pull requests in English or Chinese are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and [LICENSE](LICENSE) (MIT). Portions adapted from [Chat On Steroids](https://github.com/totec448-spec/chat-on-steroids) (MIT) are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Requirements: Node.js ≥ 22.6, Chrome and the Paseo daemon on the same machine, Paseo SDK 0.12.0-beta.2 (current checked version). The rest of this README is in Chinese; see [docs/PRODUCT_MANUAL.md](docs/PRODUCT_MANUAL.md) for the product manual and [docs/TESTING.md](docs/TESTING.md) for testing.
 
 在 Paseo 创建 Chatmode Agent，按网页实际观察选择模型、思考强度和 `@` 应用；本项目的 Chrome 扩展发送消息并回传可见回答。开发机文件和终端操作继续使用 ChatGPT 中已经接入并授权的 MCP。
 
-**状态：alpha。** 版本以 `package.json`（Paseo 插件）和 `extension/manifest.json`（Chrome 扩展）为准，协议为 CIP v5。Node 单元/集成测试与 CI 已通过；浏览器（MV3）回归测试需要本地 Chrome 环境，见[测试与验收指南](docs/TESTING.md)。真实已登录 ChatGPT 账号上的端到端验收尚未全部完成，现状与已知限制见[产品说明书](docs/PRODUCT_MANUAL.md)。
+**状态：alpha。** 版本以 `package.json`（Paseo 插件）和 `extension/manifest.json`（Chrome 扩展）为准，协议为 **CIP v8**。Node、类型、SDK 和离线浏览器测试有独立验证入口；GitHub CI 的浏览器回归配置需在远端运行后才算通过，见[测试与验收指南](docs/TESTING.md)。真实已登录 ChatGPT 账号上的端到端验收尚未全部完成，现状与已知限制见[产品说明书](docs/PRODUCT_MANUAL.md)。
 
 **主要能力：**
 
@@ -21,7 +21,7 @@
 - 图片与文档附件（最多 4 个）**先于正文**粘贴进 ChatGPT 的输入框，与用户粘贴文件走同一条原生路径，不使用任何文件控件；确认每个文件的移除按钮、精确文件名且上传完成后，才写正文并点 Send。未发送的失败只移除插件本次加入的附件与正文（真实账号端到端发送仍待专项验收）。
 - 关闭标签页后，凭已绑定的 Conversation 重开原对话继续；Chrome 扩展更新后自动刷新本插件管理的已绑定标签并唤醒原 Agent（刷新可能打断网页正在执行的步骤）。
 - **明确未发送即作废**：清除插件本次写入且未被用户修改的正文和 `@` 标记，释放临时附件，丢弃本地待发送副本；保留最小消息 ID/指纹防止重放。不删除其他历史、用户修改的草稿或发送结果不明的证据。
-- **绝不自动重发**送达结果不明的消息，也不自动批准工具授权。
+- **绝不自动重发**送达结果不明的消息。网页授权默认由用户处理；设置页可主动开启自动允许（可能选择持久授权），开启前应确认风险；不代表每种授权都可自动完成。
 
 ## 1. 判断：包含哪些东西
 
@@ -29,7 +29,7 @@
 Paseo 界面 / Agent
      ⇅ 原生 Provider 协议 v1（不是 ACP）
 Paseo 插件 + 一个共享 Runtime
-     ⇅ CIP v5 · http://127.0.0.1:17843
+     ⇅ CIP v8 · http://127.0.0.1:17843
 本仓库 Chrome 扩展
      ⇅ 网页操作与观察
 ChatGPT 网页 / 模型 ──已授权 @ 应用──→ 开发主机 MCP
@@ -37,11 +37,11 @@ ChatGPT 网页 / 模型 ──已授权 @ 应用──→ 开发主机 MCP
 
 两个插件都在本仓库：**项目根目录是 Paseo 插件；`extension/` 是 Chrome 插件；`server/` 是共享运行代码。**并发默认 2，可在设置页调整为 1–8；超额按顺序等待，同一会话串行，不会把设置套到其他会话。
 
-本版是**函数级复制、裁剪和适配**，不是整个 CoS runtime 搬迁。12 个模块保留 CoS 的原生编辑、发送、正文回执比较、模型、应用列表、公开消息和图片读取核心；Provider、共享服务、标签页归属和多应用选择仍有本项目适配。应用列表通过原生 `system_hints` 观察流程获取，失去确证时拒绝发送，不猜测工具身份。来源、原函数名和改动见 [移植清单](vendor/cos/README.md)。
+本版是**函数级复制、裁剪和适配**，不是整个 CoS runtime 搬迁。13 个活跃来源模块保留 CoS 的原生编辑、发送、正文回执比较、模型、应用列表、公开消息和图片读取核心；Provider、共享服务、标签页归属和多应用选择仍有本项目适配。应用列表通过原生 `system_hints` 观察流程获取，失去确证时拒绝发送，不猜测工具身份。来源、原函数名和改动见 [移植清单](vendor/cos/README.md)。
 
 创建 Paseo 会话时只保存配置；**首次发送时**才创建独立 ChatGPT 标签页。后续只凭已绑定 Conversation 自动打开原对话，旧消息 ID 仅用于独立去重/追踪而不阻止开页；目录刷新使用单独临时页。
 
-原版 CoS bridge 14、CIP v1/v2/v3/v4 与本版不兼容。**协议与引擎：CIP v5、Provider v1、浏览器/Runtime 引擎 `cos-native-alpha4.3`；插件与扩展的版本以 `package.json`、`extension/manifest.json` 为准。** 已有生产插件不会随源码更新：首次加载新版本应选择安全窗口。**此后 Chrome 扩展的版本更新**将自动刷新本插件管理的已打开对话页面、重建采集脚本并请求激活原 Paseo Agent；升级过程中结果不明的旧消息绝不自动重发。
+原版 CoS bridge 14、CIP v1–v7 与本版不兼容。**协议与引擎：CIP v8、Provider v1、浏览器/Runtime 引擎 `cos-native-alpha4.3`；插件与扩展的版本以 `package.json`、`extension/manifest.json` 为准。** 已有生产插件不会随源码更新：首次加载新版本应选择安全窗口。**此后 Chrome 扩展的版本更新**将自动刷新本插件管理的已打开对话页面、重建采集脚本并请求激活原 Paseo Agent；升级过程中结果不明的旧消息绝不自动重发。
 
 | 位置 | 内容 |
 | --- | --- |
@@ -61,15 +61,15 @@ Chrome 与 **Paseo 后台必须在同一台开发主机**；Paseo 手机端可�
 
 ```sh
 cd /absolute/path/chatmode-in-paseo
+npm ci --ignore-scripts --no-audit --no-fund
 npm run check
 npm run verify:upstream
 npm test
-npm install --ignore-scripts --no-audit --no-fund
 npm run typecheck
 npm run test:sdk
 ```
 
-前三条无需下载依赖；后三条需要先安装上述固定版本的开发依赖，它们只用于类型检查和测试，不参与生产插件加载。各类改动该跑哪些测试，见[测试与验收指南](docs/TESTING.md)。
+从已提交的 `package-lock.json` 安装固定开发依赖。检查、测试和类型校验应使用同一依赖树；依赖只用于开发构建与验收，不参与生产插件加载。各类改动该跑哪些测试，见[测试与验收指南](docs/TESTING.md)。
 
 ### 首次安装
 
@@ -108,17 +108,17 @@ python3 -m pip install playwright==1.57.0
 python3 -m playwright install chromium
 # Linux 已有 /usr/bin/chromium 时无需设置；其他系统使用 Playwright 安装的浏览器：
 export CIP_CHROMIUM="$(python3 -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()')"
-npm run test:dom
-npm run test:attachment-order
-npm run test:failed-send-disposal
-npm run test:browser
-npm run test:flow
-npm run test:native
+python3 tests/public-message-browser.py
+python3 tests/page-content-browser.py
+python3 tests/continuous-actions-browser.py
+python3 tests/attachment-order-browser.py
+python3 tests/failed-send-disposal-browser.py
+CIP_NODE="$(command -v node)" python3 tests/binding-mv3-current.py
 ```
 
 真实联调按[测试与验收指南](docs/TESTING.md)进行：先短消息与第二轮，再做开发机 MCP 只读调用，最后测试两个会话、停止、断线和重启。**排队不是已发送；回答结束不是工程验收；停止网页不等于停止已启动的外部命令。**
 
-模型目录使用移植的 CoS Fiber picker 读取。本版增加 `shellTurnSource` / `entry.turn.items` 及 `turn.items` 的公开文字分支，不搬工具参数、隐藏分析或图片载荷。不可读的菜单/应用 ID 不会被假造；菜单改版、本地化、分页或账号切换可能需要实机适配。多会话不增加账号额度；不自动批准、不轮换账号或重发来规避限制。
+模型目录使用移植的 CoS Fiber picker 读取。本版增加 `shellTurnSource` / `entry.turn.items` 及 `turn.items` 的公开文字分支，不搬工具参数、隐藏分析或图片载荷。不可读的菜单/应用 ID 不会被假造；菜单改版、本地化、分页或账号切换可能需要实机适配。多会话不增加账号额度；网页授权默认手动处理，只有设置页显式开启后才会尝试识别并自动点击允许按钮（可能是持久授权）；不轮换账号或重发来规避限制。
 
 仅允许排除带明确警告的、宿主形状的本机 `paseo` MCP 项，避免它阻塞所有新聊；**这不表示该 MCP 已被导入网页**。其他 Paseo MCP 配置及预先批准规则不支持并报错。开发工具须在 ChatGPT 接入授权；网页模型不会因此自动获得 Paseo 子 Agent 工具。
 

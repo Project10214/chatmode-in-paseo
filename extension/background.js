@@ -21,6 +21,18 @@ async function load() {
     if (!session.catalogBrowserId) await chrome.storage.session.set({ catalogBrowserId });
     config = local.config ?? { endpoint: DEFAULT_ENDPOINT, token: null };
     ledger = local.ledger ?? {}; tabs = session.tabs ?? local.tabs ?? {};
+    // Older builds acknowledged pre-claim failures but retained their full
+    // Send payload. A settled record without a lease can only have passed
+    // /fail-unclaimed; never infer this from a reserved/claimed record.
+    let scrubbed = false;
+    for (const row of Object.values(ledger)) {
+      if (row?.phase === 'acked' && row.command?.kind === 'send' &&
+          !row.lease && !row.discarded) {
+        discardKnownUnsentPayload(row);
+        scrubbed = true;
+      }
+    }
+    if (scrubbed) await saveLedger();
     // Developer-mode "Reload" and Extensions.loadUnpacked can change the
     // manifest version without dispatching onInstalled(reason='update').
     // Persist version + recovery job together BEFORE touching any tabs, so
@@ -66,6 +78,14 @@ function persist(area, value) {
 }
 const saveLedger = () => persist('local', { ledger });
 const saveTabs = async () => { await persist('local', { tabs }); await persist('session', { tabs }); };
+function discardKnownUnsentPayload(row) {
+  if (row.command?.kind !== 'send' || !row.command.payload) return;
+  // The command identity remains as a replay tombstone; only data already
+  // proven not to have reached the page is discarded.
+  delete row.command.payload.text;
+  delete row.command.payload.files;
+  row.discarded = true;
+}
 function bounded(promise, ms, onTimeout) {
   let timeout;
   return Promise.race([promise, new Promise((_, reject) => { timeout = setTimeout(() => { onTimeout?.(); reject(codeError('CONTENT_TIMEOUT')); }, ms); })])
@@ -132,11 +152,32 @@ async function postReceipt(id, row, profile = config) {
   await api('/result', { id, lease: row.lease, result: row.result }, true, profile);
   row.phase = 'acked';
   if (row.command?.kind === 'send' && row.result?.notSent === true) {
-    // Keep the command ID/lease/result tombstone, never a retryable failed body.
-    delete row.command.payload.text;
-    delete row.command.payload.files;
-    row.discarded = true;
+    discardKnownUnsentPayload(row);
   }
+  await saveLedger();
+}
+async function acknowledgeUnclaimed(id, row, profile = config) {
+  if (row.endpoint && row.endpoint !== profile.endpoint) return;
+  // Retry only the server-side cancellation of a never-claimed command;
+  // never run the browser operation again after a worker restart.
+  try {
+    const result = await api('/fail-unclaimed', { id, error: row.prepareError }, true, profile);
+    if (result?.accepted !== true || result.notSent !== true)
+      throw codeError('UNSENT_PROOF_MISSING');
+  } catch (e) {
+    // An uncertain/claimed command is not proof of non-delivery. Bound
+    // retries so an invalidated lease does not hammer a running Runtime.
+    row.retryCount = (row.retryCount ?? 0) + 1;
+    row.nextRetryAt = Date.now() + Math.min(60000, 1000 * (2 ** Math.min(row.retryCount, 6)));
+    await saveLedger();
+    throw e;
+  }
+  row.phase = 'acked';
+  row.result = { error: row.prepareError, notSent: true };
+  delete row.prepareError;
+  delete row.retryCount;
+  delete row.nextRetryAt;
+  discardKnownUnsentPayload(row);
   await saveLedger();
 }
 async function closeArchivedTab(command, claim, profile) {
@@ -262,11 +303,16 @@ async function execute(command) {
       const row = ledger[command.id]; row.result ??= { error: e.code ?? 'COMMAND_UNCONFIRMED' }; row.phase = 'receipt'; await saveLedger();
       try { await postReceipt(command.id, row, profile); } catch {}
     } else {
-      // Nothing was claimed or clicked. Report preparation failure immediately,
-      // rather than strand the host for 90 seconds. A raced claim is refused.
+      // Nothing was claimed or clicked according to the local worker. A
+      // request to /claim might still have reached the server before its
+      // reply was lost: only the server can prove this was never claimed.
       const allowed=['TAB_NOT_OWNED','PAGE_CLOSED','WRONG_PAGE','WRONG_CONVERSATION','TURN_CHANGED','REOPEN_IDENTITY_UNPROVEN','CONTENT_UNAVAILABLE','PAGE_RELOAD_REQUIRED','CONNECTION_CHANGED'];
       const error=allowed.includes(e.code)?e.code:'BROWSER_PREPARE_FAILED';
-      try { await api('/fail-unclaimed',{id:command.id,error},true,profile);ledger[command.id].phase='acked';await saveLedger(); } catch {}
+      const row = ledger[command.id];
+      row.phase = 'unclaimed'; row.prepareError = error;
+      // Persist before the ACK so an MV3 restart can retry only this server
+      // cancellation; it must never repeat Send or any browser action.
+      try { await saveLedger(); await acknowledgeUnclaimed(command.id, row, profile); } catch {}
     }
     // An opening/Send without a receipt is NOT replayed, including after worker suspension.
   } finally {
@@ -604,6 +650,8 @@ async function pump() {
     if(upgradeRecovery?.phase==='discover')return;
     for (const [id, row] of Object.entries(ledger)) {
       if (row.phase === 'receipt') launch(receipts, id, () => postReceipt(id, row, profile));
+      if (row.phase === 'unclaimed' && (!row.nextRetryAt || row.nextRetryAt <= Date.now()))
+        launch(receipts, id, () => acknowledgeUnclaimed(id, row, profile));
       if (row.phase === 'acked' && Date.now() - row.at > 86400000) { delete ledger[id]; await saveLedger(); }
     }
     const { commands } = await api('/commands', undefined, true, profile);
@@ -673,6 +721,19 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         throw codeError('PAGE_IDENTITY_MISMATCH');
       return api('/bind-conversation',{id:message.id,lease:message.lease,
         tabId,documentKey:message.documentKey,url:actual.url});
+    }
+    if (message.type === 'approval-gate') {
+      const row=ledger[message.id],profile=config;
+      if(!row||row.phase!=='claimed'||row.tabId!==tabId||
+          row.documentKey!==message.documentKey||row.lease!==message.lease||
+          row.endpoint!==profile.endpoint||row.command?.kind!=='approval'||
+          managed.documentKey!==message.documentKey||
+          managed.sessionId!==row.command.sessionId)throw codeError('CLAIM_MISMATCH');
+      const actual=await chrome.tabs.get(tabId);
+      if(conversation(actual.url)!==row.command.payload.conversationId ||
+          actual.pendingUrl&&conversation(actual.pendingUrl)!==row.command.payload.conversationId)
+        throw codeError('PAGE_IDENTITY_MISMATCH');
+      return api('/verify-approval',{id:message.id,lease:message.lease},true,profile);
     }
     if (message.type === 'input-chunk') {
       const row=ledger[message.id];

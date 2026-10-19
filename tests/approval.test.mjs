@@ -89,7 +89,7 @@ test('APPROVAL-3 Provider: real confirmation resolves once; unknown external clo
   await f.view(s,{state:'standby',approvals:[other]});
   await f.view(s,{state:'standby',closedApprovals:[other.key]});
   assert.equal(events.filter(event=>event.type==='session.permission_resolved').length,1);
-  assert.ok(events.some(event=>event.type==='session.notice'&&event.notice.id==='approval-closed:'+other.key));
+  assert.ok(events.some(event=>event.type==='session.notice'&&event.notice.id==='approval-withdrawn:'+other.key));
   assert.equal(f.broker.snapshot(s.id).approvals[other.key].answered,undefined);
 
   const third={...card,key:'6f1c2d3e-0000-4000-8000-000000000003'};
@@ -99,8 +99,14 @@ test('APPROVAL-3 Provider: real confirmation resolves once; unknown external clo
   const failedClaim=await f.broker.claim(failed.id,s.tabId,s.documentKey);
   await f.broker.result(failed.id,failedClaim.lease,{error:'APPROVAL_GONE'});
   await until(()=>events.some(event=>event.type==='session.notice'&&event.notice.id==='approval-withdrawn:'+third.key));
-  assert.equal(events.filter(event=>event.type==='session.permission_resolved').length,2);
+  assert.equal(events.filter(event=>event.type==='session.permission_resolved').length,1,
+    'a page-side closure must not synthesize a native Deny');
   assert.equal(f.broker.snapshot(s.id).approvals[third.key].state,'resolved');
+  await connection.send({type:'session.permission',sessionId:'host',permissionId:third.key,
+    response:{behavior:'deny',selectedActionId:'deny'}});
+  await until(()=>events.filter(event=>event.type==='session.permission_resolved').length===2);
+  assert.equal(f.broker.queued().filter(c=>c.kind==='approval').length,0,
+    'explicitly dismissing a stale request must not click the website');
   assert.equal(f.broker.snapshot(s.id).approvals[third.key].withdrawn,true);
 });
 
@@ -186,4 +192,213 @@ test('APPROVAL-7 an older persisted negative-only card can still be denied manua
   const claim = await f.broker.claim(command.id, s.tabId, s.documentKey);
   await f.broker.result(command.id, claim.lease, { answered: true, key: old.key, choice: 'deny' });
   assert.deepEqual(await answering, { answered: true, choice: 'deny' });
+});
+
+
+test('APPROVAL-SAFE-1 disabling auto cancels a queued approval and preserves manual Deny',async t=>{
+  const f=await fixture(t),s=await f.ready();await f.sending(s);
+  const request={...card,key:'6f1c2d3e-0000-4000-8000-000000000081',autoEligible:true,autoTier:'persistent'};
+  await f.view(s,{state:'standby',approvals:[request]});
+  await f.broker.setAutoAllowApprovals(true);
+  const automatic=f.broker.answerApproval(s.id,request.key,'allow-auto');automatic.catch(()=>{});
+  const command=await until(()=>f.broker.queued().find(c=>c.kind==='approval'));
+  await f.broker.setAutoAllowApprovals(false);
+  await assert.rejects(automatic,e=>e.code==='AUTO_APPROVAL_DISABLED');
+  await assert.rejects(f.broker.claim(command.id,s.tabId,s.documentKey),e=>e.code==='COMMAND_NOT_CLAIMABLE');
+  assert.equal(f.broker.snapshot(s.id).approvals[request.key].state,'open');
+  const manual=f.broker.answerApproval(s.id,request.key,'deny');manual.catch(()=>{});
+  const next=await until(()=>f.broker.queued().find(c=>c.kind==='approval'));
+  assert.equal(next.payload.choice,'deny');
+  const claim=await f.broker.claim(next.id,s.tabId,s.documentKey);
+  await f.broker.result(next.id,claim.lease,{answered:true,key:request.key,choice:'deny'});
+  assert.equal((await manual).answered,true);
+});
+
+test('APPROVAL-SAFE-2 manual Deny supersedes a queued auto command atomically',async t=>{
+  const f=await fixture(t),s=await f.ready();await f.sending(s);
+  const request={...card,key:'6f1c2d3e-0000-4000-8000-000000000082',autoEligible:true,autoTier:'once'};
+  await f.broker.setAutoAllowApprovals(true);
+  await f.view(s,{state:'standby',approvals:[request]});
+  const automatic=f.broker.answerApproval(s.id,request.key,'allow-auto');automatic.catch(()=>{});
+  const old=await until(()=>f.broker.queued().find(c=>c.kind==='approval'));
+  const manual=f.broker.answerApproval(s.id,request.key,'deny');manual.catch(()=>{});
+  await assert.rejects(automatic,e=>e.code==='APPROVAL_SUPERSEDED');
+  await assert.rejects(f.broker.claim(old.id,s.tabId,s.documentKey),e=>e.code==='COMMAND_NOT_CLAIMABLE');
+  const next=await until(()=>f.broker.queued().find(c=>c.kind==='approval'));
+  assert.equal(next.payload.choice,'deny');
+  assert.equal(f.broker.snapshot(s.id).approvals[request.key].manualRequested,true);
+  const claim=await f.broker.claim(next.id,s.tabId,s.documentKey);
+  assert.equal((await f.broker.verifyApproval(next.id,claim.lease)).allowed,true);
+  await f.broker.result(next.id,claim.lease,{answered:true,key:request.key,choice:'deny'});
+  await manual;
+});
+
+test('APPROVAL-SAFE-3 an already claimed auto command is vetoed, never reported as manual Deny',async t=>{
+  const f=await fixture(t),s=await f.ready();await f.sending(s);
+  const request={...card,key:'6f1c2d3e-0000-4000-8000-000000000083',autoEligible:true,autoTier:'once'};
+  await f.broker.setAutoAllowApprovals(true);
+  await f.view(s,{state:'standby',approvals:[request]});
+  const automatic=f.broker.answerApproval(s.id,request.key,'allow-auto');automatic.catch(()=>{});
+  const command=await until(()=>f.broker.queued().find(c=>c.kind==='approval'));
+  const claim=await f.broker.claim(command.id,s.tabId,s.documentKey);
+  assert.equal((await f.broker.verifyApproval(command.id,claim.lease)).allowed,true);
+  await assert.rejects(f.broker.answerApproval(s.id,request.key,'deny'),e=>e.code==='APPROVAL_IN_FLIGHT');
+  assert.throws(()=>f.broker.verifyApproval(command.id,claim.lease),e=>e.code==='APPROVAL_VETOED');
+  await f.broker.result(command.id,claim.lease,{error:'APPROVAL_VETOED'});
+  await assert.rejects(automatic,e=>e.code==='APPROVAL_VETOED');
+  assert.equal(f.broker.snapshot(s.id).approvals[request.key].state,'open');
+  const manual=f.broker.answerApproval(s.id,request.key,'deny');manual.catch(()=>{});
+  const next=await until(()=>f.broker.queued().find(c=>c.kind==='approval'));
+  assert.equal(next.payload.choice,'deny');
+  const nextClaim=await f.broker.claim(next.id,s.tabId,s.documentKey);
+  await f.broker.result(next.id,nextClaim.lease,{answered:true,key:request.key,choice:'deny'});
+  await manual;
+});
+
+test('APPROVAL-SAFE-4 a claimed auto command is fenced when auto is disabled',async t=>{
+  const f=await fixture(t),s=await f.ready();await f.sending(s);
+  const request={...card,key:'6f1c2d3e-0000-4000-8000-000000000084',autoEligible:true,autoTier:'once'};
+  await f.broker.setAutoAllowApprovals(true);
+  await f.view(s,{state:'standby',approvals:[request]});
+  const automatic=f.broker.answerApproval(s.id,request.key,'allow-auto');automatic.catch(()=>{});
+  const command=await until(()=>f.broker.queued().find(c=>c.kind==='approval'));
+  const claim=await f.broker.claim(command.id,s.tabId,s.documentKey);
+  await f.broker.setAutoAllowApprovals(false);
+  assert.throws(()=>f.broker.verifyApproval(command.id,claim.lease),e=>e.code==='APPROVAL_VETOED');
+  await f.broker.result(command.id,claim.lease,{error:'APPROVAL_VETOED'});
+  await assert.rejects(automatic,e=>e.code==='APPROVAL_VETOED');
+});
+
+
+async function approvalHost(f,s,t,name) {
+  const connection=await createProvider({...f,status:()=>({connected:true})},event=>ProviderEventSchema.parse(event))
+    .connect({versions:[1],capabilities:CAPABILITIES});
+  t.after(()=>connection.close());
+  const events=[];connection.onEvent(event=>events.push(event));
+  await connection.send({type:'session.open',requestId:'open-'+name,sessionId:name,history:'skip',
+    persistence:{version:1,data:{id:s.id}},
+    config:{cwd:'/fixture',env:{},settings:{},mcpServers:{},persist:true,
+      model:'m1',thinkingOption:'standard',providerOptions:{appIds:['asdk_app_a']}}});
+  await until(()=>events.some(event=>event.type==='session.ready'));
+  return {connection,events};
+}
+
+test('APPROVAL-SAFE-5 Provider manual Deny beats its own queued auto Allow with one genuine resolution',async t=>{
+  const f=await fixture(t),s=await f.ready();await f.sending(s);
+  const {connection,events}=await approvalHost(f,s,t,'manual-over-auto');
+  await f.broker.setAutoAllowApprovals(true);
+  const request={...card,key:'6f1c2d3e-0000-4000-8000-000000000085',
+    autoEligible:true,autoTier:'once'};
+  await f.view(s,{state:'standby',approvals:[request]});
+  const old=await until(()=>f.broker.queued().find(c=>c.kind==='approval'));
+  assert.equal(old.payload.choice,'allow-auto');
+  await connection.send({type:'session.permission',sessionId:'manual-over-auto',permissionId:request.key,
+    response:{behavior:'deny',selectedActionId:'deny'}});
+  const manual=await until(()=>f.broker.queued().find(c=>c.kind==='approval'&&c.payload.choice==='deny'));
+  assert.equal(manual.payload.choice,'deny');
+  assert.equal(f.store.read().commands[old.id].error,'APPROVAL_SUPERSEDED');
+  const claim=await f.broker.claim(manual.id,s.tabId,s.documentKey);
+  await f.broker.result(manual.id,claim.lease,{answered:true,key:request.key,choice:'deny'});
+  await until(()=>events.some(event=>event.type==='session.permission_resolved'&&event.permissionId===request.key));
+  assert.equal(events.filter(event=>event.type==='session.permission_resolved').length,1);
+  assert.equal(events.filter(event=>event.type==='session.notice'&&event.notice.id==='auto-approval:'+request.key).length,0,
+    'a canceled auto action cannot announce success after manual rejection');
+});
+
+test('APPROVAL-SAFE-6 superseded page card stays unclickable; explicit local Deny clears only stale Paseo request',async t=>{
+  const f=await fixture(t),s=await f.ready();await f.sending(s);
+  const {connection,events}=await approvalHost(f,s,t,'request-changed');
+  const old={...card,key:'6f1c2d3e-0000-4000-8000-000000000086'};
+  const latest={...card,key:'6f1c2d3e-0000-4000-8000-000000000087',input:'{"new":"details"}'};
+  await f.view(s,{state:'standby',approvals:[old]});
+  await until(()=>events.some(event=>event.type==='session.permission'&&event.request.id===old.key));
+  await f.view(s,{state:'standby',approvals:[latest],
+    closedApprovals:[{key:old.key,reason:'superseded'}]});
+  assert.equal(f.broker.snapshot(s.id).approvals[old.key].state,'resolved');
+  assert.equal(f.broker.snapshot(s.id).approvals[old.key].closeReason,'REQUEST_CHANGED');
+  await until(()=>events.some(event=>event.type==='session.notice'&&event.notice.id==='approval-withdrawn:'+old.key));
+  assert.equal(events.filter(event=>event.type==='session.permission_resolved').length,0);
+  await connection.send({type:'session.permission',sessionId:'request-changed',permissionId:old.key,
+    response:{behavior:'allow',selectedActionId:'allow-once'}});
+  await until(()=>events.some(event=>event.type==='session.notice'&&event.notice.id==='native-permission-answer'));
+  assert.equal(events.filter(event=>event.type==='session.permission_resolved').length,0,
+    'stale Allow can neither operate a changed website request nor claim resolution');
+  await connection.send({type:'session.permission',sessionId:'request-changed',permissionId:old.key,
+    response:{behavior:'deny',selectedActionId:'deny'}});
+  await until(()=>events.filter(event=>event.type==='session.permission_resolved').length===1);
+  assert.equal(f.broker.queued().filter(c=>c.kind==='approval').length,0);
+  assert.equal(f.broker.snapshot(s.id).approvals[latest.key].state,'open',
+    'the new request remains independent and actionable');
+  assert.ok(events.some(event=>event.type==='session.notice'&&event.notice.id==='approval-local-dismiss:'+old.key));
+});
+
+
+test('APPROVAL-SAFE-7 uncertain post-click approval cannot be repeated after a new page-view',async t=>{
+  const f=await fixture(t),s=await f.ready();await f.sending(s);
+  const request={...card,key:'6f1c2d3e-0000-4000-8000-000000000088'};
+  await f.view(s,{state:'standby',approvals:[request]});
+  const started=f.broker.answerApproval(s.id,request.key,'allow-once');started.catch(()=>{});
+  const command=await until(()=>f.broker.queued().find(c=>c.kind==='approval'));
+  const claim=await f.broker.claim(command.id,s.tabId,s.documentKey);
+  await f.broker.result(command.id,claim.lease,{error:'APPROVAL_PARTIAL_UNCONFIRMED'});
+  await assert.rejects(started,e=>e.code==='APPROVAL_PARTIAL_UNCONFIRMED');
+  const state=f.broker.snapshot(s.id).approvals[request.key];
+  assert.equal(state.clickUncertain,true);
+  await f.view(s,{state:'standby',approvals:[request]});
+  assert.equal(f.broker.snapshot(s.id).approvals[request.key].clickUncertain,true);
+  await assert.rejects(f.broker.answerApproval(s.id,request.key,'allow-once'),
+    e=>e.code==='APPROVAL_CLICK_UNCONFIRMED');
+  await assert.rejects(f.broker.answerApproval(s.id,request.key,'allow-auto'),
+    e=>e.code==='APPROVAL_CLICK_UNCONFIRMED');
+  assert.equal(f.broker.queued().filter(c=>c.kind==='approval').length,0);
+});
+
+
+test('APPROVAL-SAFE-8 a claimed auto success after manual Deny cannot be translated into fake native Deny',async t=>{
+  const f=await fixture(t),s=await f.ready();await f.sending(s);
+  const {connection,events}=await approvalHost(f,s,t,'claimed-conflict');
+  await f.broker.setAutoAllowApprovals(true);
+  const request={...card,key:'6f1c2d3e-0000-4000-8000-000000000089',
+    autoEligible:true,autoTier:'persistent'};
+  await f.view(s,{state:'standby',approvals:[request]});
+  const auto=await until(()=>f.broker.queued().find(c=>c.kind==='approval'));
+  assert.equal(auto.payload.choice,'allow-auto');
+  const claim=await f.broker.claim(auto.id,s.tabId,s.documentKey);
+  await connection.send({type:'session.permission',sessionId:'claimed-conflict',
+    permissionId:request.key,response:{behavior:'deny',selectedActionId:'deny'}});
+  await until(()=>events.some(event=>event.type==='session.notice'&&event.notice.id==='native-permission-answer'));
+  await f.broker.result(auto.id,claim.lease,{answered:true,key:request.key,choice:'allow-auto'});
+  await until(()=>events.some(event=>event.type==='session.notice'&&event.notice.id==='approval-conflict:'+request.key));
+  assert.equal(events.filter(event=>event.type==='session.permission_resolved').length,0,
+    'the host must not translate an auto webpage Allow to its cached manual Deny');
+  assert.equal(events.filter(event=>event.type==='session.notice'&&event.notice.id==='auto-approval:'+request.key).at(-1).notice.severity,'warning');
+  await connection.send({type:'session.permission',sessionId:'claimed-conflict',
+    permissionId:request.key,response:{behavior:'deny',selectedActionId:'deny'}});
+  await until(()=>events.filter(event=>event.type==='session.permission_resolved').length===1);
+  assert.equal(f.broker.queued().filter(c=>c.kind==='approval').length,0,
+    'explicit local stale dismissal cannot click the already-allowed webpage');
+});
+
+
+test('APPROVAL-SAFE-9 durable manual veto wins even before the Provider sees a refusal',async t=>{
+  const f=await fixture(t),s=await f.ready();await f.sending(s);
+  const {events}=await approvalHost(f,s,t,'durable-veto');
+  await f.broker.setAutoAllowApprovals(true);
+  const request={...card,key:'6f1c2d3e-0000-4000-8000-000000000091',
+    autoEligible:true,autoTier:'persistent'};
+  await f.view(s,{state:'standby',approvals:[request]});
+  const queued=await until(()=>f.broker.queued().find(c=>c.kind==='approval'&&c.payload.key===request.key));
+  const claim=await f.broker.claim(queued.id,s.tabId,s.documentKey);
+  // This exercises the in-flight gap where the durable Broker veto becomes
+  // visible before an async Provider callback has set manualConflict.
+  await assert.rejects(f.broker.answerApproval(s.id,request.key,'deny'),
+    e=>e.code==='APPROVAL_IN_FLIGHT');
+  assert.equal(f.broker.snapshot(s.id).approvals[request.key].manualVeto,true);
+  await f.broker.result(queued.id,claim.lease,
+    {answered:true,key:request.key,choice:'allow-auto'});
+  await until(()=>events.some(e=>e.type==='session.notice'&&e.notice.id==='approval-conflict:'+request.key));
+  assert.equal(events.filter(e=>e.type==='session.permission_resolved').length,0,
+    'an earlier durable veto cannot be overwritten by a later automatic result');
+  const notice=events.find(e=>e.type==='session.notice'&&e.notice.id==='auto-approval:'+request.key);
+  assert.equal(notice?.notice.severity,'warning');
 });

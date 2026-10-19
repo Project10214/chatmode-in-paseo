@@ -70,6 +70,9 @@
   let keySequence = 0;
   const documentKey = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   const approvalTracking = new Map(), parentObservers = new Map(), confirmedClosed = new Set();
+  // A reused DOM card can change its request in place. Retire its old ID
+  // explicitly; its disappearance must not be mistaken for an Allow/Deny.
+  const supersededApprovals = new Set();
   let approvalPath = location.pathname;
   const attr = (node, name) => node.getAttribute(name);
   const unit = node => attr(node, 'data-chatgpt-search-unit-key') || attr(node, 'data-content-search-unit-key');
@@ -378,9 +381,13 @@
       overlay || pathOf(node, turn || document.body), row.mediaKind || 'text']) };
   }
   function approvalButtons(card) {
-    const buttons = [...card.querySelectorAll('button')].filter(button =>
-      button.closest(APPROVAL) === card && visible(button) && !button.disabled &&
-      !button.matches(':disabled') && attr(button, 'aria-disabled') !== 'true' && !button.hasAttribute('aria-haspopup'));
+    const candidates = [...card.querySelectorAll('button')].filter(button =>
+      button.closest(APPROVAL) === card && visible(button) && !button.hasAttribute('aria-haspopup'));
+    // Disabled state changes during processing do not create a new request.
+    // A changed caption, content or app identity DOES invalidate the old key.
+    const identityLabels=candidates.map(button=>caption(button)).filter(Boolean);
+    const buttons=candidates.filter(button=>!button.disabled&&!button.matches(':disabled')&&
+      attr(button,'aria-disabled')!=='true');
     const groups = {persistent:[], once:[], confirm:[], reconnect:[], deny:[]};
     for (const button of buttons) {
       const value = caption(button), tier = approvalTier(value);
@@ -402,7 +409,7 @@
       allow: clickable ? manualAllow.button : null,
       deny: canDeny ? groups.deny[0].button : null,
       labels: buttons.map(button => caption(button)).filter(Boolean),
-      groups, tier, autoEligible, reconnect, canDeny
+      groups, tier, autoEligible, reconnect, canDeny, identityLabels
     };
   }
   function linkedApprovalPanels(card) {
@@ -441,7 +448,7 @@
   function closedApprovals(scopes) {
     if (approvalPath !== location.pathname) {
       for (const watched of parentObservers.values()) watched.observer.disconnect();
-      parentObservers.clear(); approvalTracking.clear(); confirmedClosed.clear();
+      parentObservers.clear(); approvalTracking.clear(); confirmedClosed.clear();supersededApprovals.clear();
       approvalPath = location.pathname;
       return [];
     }
@@ -491,8 +498,14 @@
         const fields = panels.flatMap(panel => [...panel.querySelectorAll('pre')].filter(visible));
         const input = fields.length === 1 ? publicText(fields[0]) : null;
         const text = [publicText(card), ...panels.filter(panel => !card.contains(panel)).map(publicText)].filter(Boolean).join('\n');
-        const fingerprint = JSON.stringify([conversationId(), text, buttons.labels, input]);
+        const fingerprint = JSON.stringify([conversationId(), text, buttons.identityLabels, input]);
         let saved = keys.get(card);
+        if (saved && saved.fingerprint !== fingerprint) {
+          supersededApprovals.add(saved.key);
+          if(supersededApprovals.size>512)
+            supersededApprovals.delete(supersededApprovals.values().next().value);
+          approvalTracking.delete(saved.key);
+        }
         if (!saved || saved.fingerprint !== fingerprint) {
           saved = { key: `${documentKey}-${++keySequence}`, fingerprint };
           keys.set(card, saved);
@@ -568,7 +581,9 @@
         } catch { issues.push({ code: 'SOURCE_CLASSIFICATION_FAILED', order: row.order }); }
       }
     }
-    return { conversationId: cid, observedAt: Date.now(), items, approvals, closedApprovals: closed, issues };
+    return { conversationId: cid, observedAt: Date.now(), items, approvals,
+      closedApprovals: [...closed,...[...supersededApprovals].map(key=>({key,reason:'superseded'}))],
+      issues };
   }
   function resolveApproval(key, choice) {
     if (choice !== 'allow-once' && choice !== 'deny') return null;

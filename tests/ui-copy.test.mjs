@@ -210,7 +210,7 @@ test('COPY provider notices do not infer page execution, completion or approval 
   // An externally closed card is not a recorded allow/deny decision.
   await f.view(s, { state: 'standby', approvals: [card] });
   await f.view(s, { state: 'standby', approvals: [], closedApprovals: [card.key] });
-  assert.equal(events.at(-1).notice.title, '网页授权框已关闭');
+  assert.equal(events.at(-1).notice.title, '网页授权框已离开或关闭');
   assert.doesNotMatch(events.at(-1).notice.title, /批准|已处理/);
   await p.send({ type: 'session.configure', requestId: 'copy-config', sessionId: 'copy-host', changes: { model: 'nonexistent' } });
   const failed = await until(() => events.find(e => e.type === 'request.failed' && e.requestId === 'copy-config'));

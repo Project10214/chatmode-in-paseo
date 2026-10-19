@@ -153,7 +153,8 @@
         }
         case 'approval': {
           const result = await D.answerApproval({ key: c.payload.key, choice: c.payload.choice,
-            conversationId: c.payload.conversationId, guard });
+            conversationId: c.payload.conversationId, guard,
+            authorizeClick: () => rpc({type:'approval-gate',id:c.id,lease:c.lease,documentKey}) });
           guard();
           await observe();
           return result;

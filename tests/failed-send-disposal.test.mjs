@@ -87,11 +87,14 @@ test('authorized send with unknown receipt keeps reconciliation evidence, not tr
 
 test('acknowledged Chrome failures retain a tombstone, not a replayable body; uncertain results stay intact', async () => {
   const source = await fs.readFile(new URL('../extension/background.js', import.meta.url), 'utf8');
+  const helper = source.indexOf('function discardKnownUnsentPayload(');
+  const helperEnd = source.indexOf('function bounded(', helper);
   const start = source.indexOf('async function postReceipt('), end = source.indexOf('async function execute(', start);
-  assert(start >= 0 && end > start);
+  assert(helper >= 0 && helperEnd > helper && start >= 0 && end > start);
   const context = vm.createContext({ config: { endpoint: 'http://127.0.0.1:17843' },
     api: async () => ({ accepted: true }), saveLedger: async () => {}, structuredClone });
-  vm.runInContext(source.slice(start, end) + '\nglobalThis.postReceipt=postReceipt;', context);
+  vm.runInContext(source.slice(helper, helperEnd) + source.slice(start, end) +
+    '\nglobalThis.postReceipt=postReceipt;', context);
   for (const notSent of [true, false]) {
     const row = { phase: 'receipt', lease: 'lease', command: { kind: 'send', payload: { text: body, files: [{}], turnId: 'turn' } },
       result: { error: 'SEND_NOT_READY', notSent } };
@@ -106,4 +109,38 @@ test('acknowledged Chrome failures retain a tombstone, not a replayable body; un
       assert.equal(row.command.payload.files.length, 1);
     }
   }
+});
+
+test('confirmed pre-claim failure has an idempotent server ACK without another Send',async t=>{
+  const f=await fixture(t),s=await f.ready();
+  await f.broker.prompt(s.id,'unclaimed-id',body);
+  const command=f.broker.queued().find(c=>c.kind==='send');
+  const first=await f.broker.failUnclaimed(command.id,'TAB_NOT_OWNED');
+  assert.equal(first.notSent,true);
+  // Simulate a worker/server crash between durable ACK and file cleanup.
+  const orphaned=await f.broker.inputFiles.stage(command.id,[image]);
+  assert((await f.broker.inputFiles.read(command.id,0,0,orphaned[0])).data);
+  const replay=await f.broker.failUnclaimed(command.id,'TAB_NOT_OWNED');
+  await assert.rejects(f.broker.inputFiles.read(command.id,0,0,orphaned[0]),
+    e=>e.code==='ATTACHMENT_EXPIRED');
+  assert.equal(replay.notSent,true);
+  assert.equal(replay.replay,true);
+  assert(!JSON.stringify(f.store.read()).includes(body));
+  assert.equal(f.broker.queued().filter(c=>c.kind==='send').length,0);
+});
+
+test('expired unclaimed command is still provably unsent but a claimed Send is not',async t=>{
+  const f=await fixture(t),s=await f.ready();
+  await f.broker.prompt(s.id,'expire-before-claim',body);
+  const command=f.broker.queued().find(c=>c.kind==='send');
+  await f.broker.tick(command.deadline+1);
+  const receipt=await f.broker.failUnclaimed(command.id,'PAGE_CLOSED');
+  assert.equal(receipt.notSent,true);
+  assert.equal(receipt.replay,true);
+  const f2=await fixture(t),s2=await f2.ready();
+  await f2.broker.prompt(s2.id,'claim-in-flight',body);
+  const pending=f2.broker.queued().find(c=>c.kind==='send');
+  await f2.broker.claim(pending.id,s2.tabId,s2.documentKey);
+  await assert.rejects(f2.broker.failUnclaimed(pending.id,'PAGE_CLOSED'),
+    e=>e.code==='COMMAND_NOT_CLAIMABLE');
 });

@@ -91,9 +91,18 @@ export class Broker {
   }
   async setAutoAllowApprovals(enabled) {
     invariant(typeof enabled === 'boolean' && !this.closed, 'RUNTIME_CLOSED');
-    await this.store.transaction(d => {
+    const canceled = await this.store.transaction(d => {
       d.runtimeSettings = { ...(d.runtimeSettings ?? {}), autoAllowApprovals: enabled };
-    });
+      if(enabled)return [];
+      const ids=[];
+      for(const c of Object.values(d.commands)) {
+        if(c.kind!=='approval'||c.payload?.choice!=='allow-auto'||!pending(c))continue;
+        if(c.phase==='queued') { c.phase='failed';c.error='AUTO_APPROVAL_DISABLED';ids.push(c.id); }
+        else { c.vetoed=true;c.vetoReason='AUTO_APPROVAL_DISABLED'; }
+      }
+      return ids;
+    }, {control:true});
+    for(const id of canceled)this.settle(id,'AUTO_APPROVAL_DISABLED');
     return { enabled: this.autoAllowApprovals };
   }
   lastNativeMessage(s) {
@@ -190,8 +199,13 @@ export class Broker {
     const allowed=['TAB_NOT_OWNED','PAGE_CLOSED','WRONG_PAGE','WRONG_CONVERSATION','TURN_CHANGED','REOPEN_IDENTITY_UNPROVEN','CONTENT_UNAVAILABLE','PAGE_RELOAD_REQUIRED','CONNECTION_CHANGED','BROWSER_PREPARE_FAILED'];
     invariant(allowed.includes(error),'INVALID_PREPARE_ERROR');
     const result=await this.store.transaction(d=>{
-      const c=d.commands[id];invariant(c&&c.phase==='queued'&&!c.lease,'COMMAND_NOT_CLAIMABLE');
-      invariant(['catalog','open','configure','ensure','send','stop','approval'].includes(c.kind),'CONTROL_ONLY');
+      const c=d.commands[id];
+      invariant(c&&['catalog','open','configure','ensure','send','stop','approval'].includes(c.kind),'CONTROL_ONLY');
+      // An earlier ACK may be lost before Chrome saves its redacted tombstone.
+      // Failed commands without a lease were never claimed, including those
+      // discarded by recovery/timeout. An authorized Send always has a lease.
+      if(c.phase==='failed'&&!c.lease)return {alreadyUnclaimed:true};
+      invariant(c.phase==='queued'&&!c.lease,'COMMAND_NOT_CLAIMABLE');
       c.phase='failed';c.error=error;const s=c.sessionId&&d.sessions[c.sessionId];
       discardUnsent(s,c);
       if(c.kind==='send'&&s?.turn?.id===c.payload.turnId&&!s.turn.authorized&&!s.turn.outcome){
@@ -200,6 +214,12 @@ export class Broker {
       }
       return null;
     });
+    if (result?.alreadyUnclaimed) {
+      // The first ACK may have committed before the temporary file cleanup.
+      // Repeating the cleanup is safe; repeating any browser action is not.
+      if (this.store.read().commands[id]?.discarded) await this.inputFiles.remove(id);
+      return {accepted:true,notSent:true,replay:true};
+    }
     if (this.store.read().commands[id]?.discarded) await this.inputFiles.remove(id);
     this.settle(id,error);if(result)this.emit(result.id,result);return {accepted:true,notSent:true};
   }
@@ -431,11 +451,35 @@ export class Broker {
         // draft/turn and persist its own one-shot command ID.
         invariant(s.tabId===tabId || (proof.reopened===true && s.conversationId),'WRONG_TAB');
       } else invariant(!s || s.tabId === null || s.tabId === tabId, 'WRONG_TAB');
+      if(c.kind==='approval') {
+        const request=s?.approvals?.[c.payload.key];
+        invariant(request?.state==='open'&&!request.answered,'APPROVAL_GONE');
+        invariant(s.observation?.lease===c.payload.observationLease&&
+          s.tabId===tabId&&s.documentKey===documentKey,'PAGE_IDENTITY_MISMATCH');
+        if(c.payload.choice==='allow-auto')
+          invariant(d.runtimeSettings?.autoAllowApprovals===true&&!c.vetoed&&
+            !request.manualVeto&&!request.manualRequested&&!request.autoSuppressed,
+            'AUTO_APPROVAL_DISABLED');
+      }
       invariant(!s || !Object.values(d.commands).some(other=>other.id!==c.id&&other.sessionId&&other.sessionId!==s.id&&pending(other)&&other.tabId===tabId),'TAB_ALREADY_OWNED');
       invariant(!s || !Object.values(d.sessions).some(other => other.id !== s.id && other.tabId === tabId), 'TAB_ALREADY_OWNED');
       c.phase = 'claimed'; c.lease = token(); c.tabId = tabId; c.documentKey = documentKey;
       return { ...c };
     });
+  }
+  verifyApproval(id,lease) {
+    const d=this.store.read(),c=d.commands[id];
+    invariant(c&&c.kind==='approval'&&c.phase==='claimed'&&c.lease===lease&&
+      c.deadline>now(),'APPROVAL_NOT_AUTHORIZED');
+    const s=d.sessions[c.sessionId],request=s?.approvals?.[c.payload.key];
+    invariant(request?.state==='open'&&!request.answered,'APPROVAL_GONE');
+    invariant(s.tabId===c.tabId&&s.documentKey===c.documentKey&&
+      s.observation?.lease===c.payload.observationLease,'PAGE_IDENTITY_MISMATCH');
+    if(c.payload.choice==='allow-auto')
+      invariant(d.runtimeSettings?.autoAllowApprovals===true&&!c.vetoed&&
+        !request.manualRequested&&!request.manualVeto&&!request.autoSuppressed,
+        'APPROVAL_VETOED');
+    return {allowed:true};
   }
   async authorize(id, lease) {
     return this.store.transaction(d => {
@@ -490,6 +534,7 @@ export class Broker {
         if (recoverable && wasAuthorized && (!diagnostic?.guardCode || observedDispatch) &&
             result.notSent !== true && pendingReceipt(c, s, result.bindingUrl))
           return { value: c.result, pending: { id:s.id, turnId:s.turn.id, state:'receipt-pending' } };
+        const wasClaimed=c.phase==='claimed';
         c.phase = 'failed'; c.error = code;
         if (result.notSent === true || !wasAuthorized) discardUnsent(s,c);
         if (c.kind === 'approval' && s) {
@@ -499,6 +544,13 @@ export class Broker {
             request.state = 'resolved'; request.withdrawn = true;
             affected = { id: s.id, state: 'approval-closed', key: request.key,
               answered: null, withdrawn: true, reason: code };
+          } else if(request?.state==='open'&&wasClaimed&&
+            !['APPROVAL_VETOED','APPROVAL_GONE','APPROVAL_NOT_AUTHORIZED',
+              'APPROVAL_UNRECOGNIZED','PAGE_IDENTITY_MISMATCH'].includes(code)){
+            // A claimed approval may have clicked before its final DOM proof
+            // was lost. Do not offer the same button a second time.
+            request.clickUncertain=true;request.autoSuppressed=true;
+            affected={id:s.id,state:'approval-uncertain',key:request.key,reason:code};
           }
         }
         if (c.kind === 'send' && s?.turn?.id === c.payload.turnId && !s.turn.outcome) {
@@ -760,29 +812,52 @@ export class Broker {
     // No Stop is never translated into an authorization Deny.
     return this.wait(decision.commandId);
   }
-  async answerApproval(id,key,choice) {
+  async answerApproval(id,key,choice,{onQueued}={}) {
     invariant(!this.closed,'RUNTIME_CLOSED');
     invariant(APPROVAL_CHOICES.includes(choice),'APPROVAL_INVALID');
-    const commandId=await this.store.transaction(d=>{
+    const decision=await this.store.transaction(d=>{
       const s=d.sessions[id],request=s?.approvals?.[key];
       invariant(s&&request?.state==='open'&&!request.answered&&s.observation&&
         s.tabId!==null&&s.documentKey,'APPROVAL_GONE');
-      // Older persisted cards predate canDeny. Their exact negative caption is
-      // still enough to let the user dismiss/deny a stuck card manually.
+      invariant(!request.clickUncertain,'APPROVAL_CLICK_UNCONFIRMED');
+      // An old persisted negative-only card may still be denied manually.
       const oldNegative = request.clickable===false && Array.isArray(request.labels) &&
         request.labels.filter(label => /^(?:Not now|Later|Deny|Reject|Cancel|No|稍后|稍後|拒绝|拒絕|取消|否)$/i.test(String(label).trim())).length===1;
       invariant(request.clickable!==false ||
         (choice==='deny' && (request.canDeny===true || oldNegative)) ||
         (choice==='allow-auto' && request.autoEligible===true),'APPROVAL_UNRECOGNIZED');
-      invariant(!Object.values(d.commands).some(c=>c.kind==='approval'&&c.sessionId===id&&pending(c)),'APPROVAL_BUSY');
+      if(choice==='allow-auto')
+        invariant(d.runtimeSettings?.autoAllowApprovals===true&&!request.manualRequested&&
+          !request.manualVeto&&!request.autoSuppressed,'AUTO_APPROVAL_DISABLED');
+      const prior=Object.values(d.commands).filter(c=>c.kind==='approval'&&c.sessionId===id&&pending(c));
+      let canceled=[];
+      if(choice!=='allow-auto') {
+        // Manual intent can supersede an auto command only BEFORE the worker
+        // claims it. Once claimed, veto its next click gate; never pretend a
+        // click which may already have happened was undone.
+        const auto=prior.find(c=>c.payload?.choice==='allow-auto'&&c.payload.key===key);
+        if(auto?.phase==='claimed') {
+          auto.vetoed=true;auto.vetoReason='APPROVAL_SUPERSEDED';
+          request.manualVeto=true;
+          return {inflight:true};
+        }
+        if(auto?.phase==='queued') {
+          auto.phase='failed';auto.error='APPROVAL_SUPERSEDED';canceled=[auto.id];
+        }
+        request.manualRequested=true;
+      }
+      invariant(!prior.some(c=>pending(c)),'APPROVAL_BUSY');
       invariant(Object.values(d.commands).filter(pending).length<LIMITS.commands,'QUEUE_FULL');
       const commandId=randomUUID();
       d.commands[commandId]={id:commandId,kind:'approval',sessionId:id,payload:{
         observationLease:s.observation.lease,tabId:s.tabId,documentKey:s.documentKey,
         conversationId:s.conversationId,key,choice},phase:'queued',createdAt:now(),deadline:now()+this.commandTimeout};
-      return commandId;
+      return {commandId,canceled};
     },{control:true});
-    return this.wait(commandId);
+    for(const commandId of decision.canceled??[])this.settle(commandId,'APPROVAL_SUPERSEDED');
+    invariant(!decision.inflight,'APPROVAL_IN_FLIGHT');
+    onQueued?.();
+    return this.wait(decision.commandId);
   }
   async rebindObservation(proof) {
     invariant(object(proof),'INVALID_REQUEST');

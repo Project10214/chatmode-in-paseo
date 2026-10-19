@@ -1,33 +1,52 @@
-# CIP v5：扩展桥接协议
+# CIP v8：Chrome 扩展与本机 Runtime 协议
 
-本协议为本项目专用，**不是 CoS bridge 14，不是 MCP 或 ACP**。Paseo 原生 Provider 接口仍使用其 v1。CIP v5 对应 alpha.4.1 的双向原生轮次与公开思考/工具事件扩展；worker 在接收任务与提交一次性配对码前检查版本。旧 CIP v1/v2/v3/v4 与本开发候选版不兼容，必须成套更新两个插件，并只刷新已经空闲的 ChatGPT 页面。
+适用源码：Paseo 插件 `0.1.0-alpha.4.44`，Chrome 扩展 `0.2.48`（2026-10-19）。
+**唯一版本依据**：`server/protocol.mjs` 的 `PROTOCOL` 与 `extension/background.js` 的 `PROTOCOL`。此协议不是 MCP、ACP 或原版 CoS bridge；Paseo Provider 另采用其原生 v1 接口。旧 CIP v1–v7 不能与 v8 混用。
 
-| 入口 | 调用方与作用 |
+## 通信与身份
+
+```text
+Paseo Agent → Provider → Runtime（127.0.0.1:17843） ↔ Chrome MV3 worker
+                                                   ↔ ChatGPT 标签页
+                                                页面状态、公开来源与授权卡
+```
+
+- `GET /hello` 未配对可读，返回 product、protocol、epoch；`POST /pair` 使用短期一次性配对码及扩展 ID 换取 token。
+- 其余 API 要求 `Authorization: Bearer <token>` 和 `X-CIP-Extension: <id>`；Host 必须是精确 `127.0.0.1:<port>`，浏览器 Origin 必须匹配已配对的扩展。页面脚本不持有 token。
+- Runtime 仅监听回环地址，拒绝超大 JSON（`LIMITS.body` 为 768000 字节）和超额请求；`CIP_STATE_DIR`、`CIP_PORT` 只由本机环境设置。
+- **发送/命令**要求会话、command ID、tabId、documentKey、lease、Conversation 精确匹配。**持续观察**另使用 observationLease、generation 和递增序号；重新绑定时旧 lease 失效。两条路径不可互相授权。
+
+## v8 真实端点
+
+| 端点 | 作用 |
 | --- | --- |
-| GET /hello | 未配对可读，返回 product/protocol/epoch |
-| POST /pair | 短期一次性 code + extensionId 换 token；失败不替换扩展当前配置 |
-| GET /commands | 已配对 worker 读取 queued 命令；Stop 优先 |
-| POST /claim | command id + tabId + documentKey，返回唯一 lease |
-| POST /authorize | send id + lease，持久化授权后允许一次原生点击 |
-| POST /result | id + lease + result；重交回执不重做网页命令 |
-| GET /active | 返回已经送达、仍运行的会话及其原生用户消息锚点 |
-| GET /bindings | 返回已完成轮次但仍保留绑定的会话（conversationId、tab/document、最近已确认用户消息锚点）；不返回凭据或正文 |
-| POST /external-turn | 仅接受配对 worker 已验证的新原生用户 ID，检查前一用户 ID、会话/网页身份与幂等性，原子登记浏览器发起的轮次；**不入 Send 队列** |
-| POST /external-gap | 出现多轮无法安全核对的网页输入时，记录警告并保持绑定；不补发或猜测丢失轮次 |
-| POST /rebind-observation | 对话、turn、lease、原生消息锚点与旧文档证明一致，才允许更新观察文档/标签页；不允许 Send |
-| POST /event | 精确 session/turn/lease/document/tab/native-message 的 snapshot/completed/failed/waiting/binding_lost 及 `native_timeline`；后者仅可投递公开摘要和已验证可见工具调用状态/详情，使用 Paseo 原生 reasoning/tool_call 类型 |
+| `GET /commands` | 取有序、待认领命令；Stop 等控制命令可以独立派发 |
+| `POST /claim` | 按会话和页面身份认领唯一命令租约 |
+| `POST /authorize` | 仅对已认领的一次性 Send 持久授予点击准入，不代表网页已收到 |
+| `POST /result` | 命令回执；相同 id/lease 的重复回执不能再执行网页命令 |
+| `POST /fail-unclaimed` | 拒绝未认领的命令；**只有服务端证明未认领**才可清除本地未发送正文。已失败且无租约的命令允许幂等确认 |
+| `POST /input-chunk` | 已认领附件的限量分块读取，检查文件和文档身份 |
+| `POST /bind-conversation` | 独立保存已授权 Send 产生的真实对话 URL；不伪造发送回执 |
+| `GET /observations` | 已绑定对话的观察描述，包含页面身份和新一代观察租约 |
+| `POST /rebind-observation` | 经过原对话和旧文档证明后更换观察文档与 lease；不触发 Send |
+| `POST /page-view` | 原生可见按钮状态、公开来源、授权卡、来源问题的持续快照；服务端验证序号、身份、重复与修订 |
+| `POST /observation-gap` | 观察暂时不可读，留下问题记录；不能推断网页停止 |
+| `POST /receipt-observation` | 在原 Send 的已绑定对话中对账迟到回执；不能二次点击 Send |
+| `POST /artifact/begin`、`chunk`、`commit`、`unsupported` | 与已验证来源身份绑定的附件传输与不可用回执 |
+| `POST /verify-tab-close` | 归档关闭标签页前重新检查会话及页面归属 |
+| `POST /verify-approval` | 扩展每次点击授权按钮前检查已认领命令的租约、页面、当前自动允许开关、人工撤销；拒绝后不能点击 |
+| `GET /recovery-targets`、`POST /resume-agent` | 扩展升级时只恢复已绑定页面和原 Agent，不产生新轮次 |
 
-除 hello/pair，需 `Authorization: Bearer <token>` 与 `X-CIP-Extension: <id>`。仅监听 127.0.0.1，Host 精确匹配；带 Origin 时只允许已配对的 chrome-extension Origin。页面 content script 不持有 token；观察不是文件或权限操作授权。
+**已废弃**：v5 的 `/active`、`/bindings`、`/external-turn`、`/external-gap`、`/event`。它们不属于 v8 Runtime 路由，不能作为安装或联调指令。
 
-catalog/open/configure/send/stop 为支持的命令。Stop 带精确 turnId 和 nativeMessageId；重复 Stop 复用同一命令，本轮完成后晚到 Stop 不得影响下一轮。
+## 行为约束
 
-`notSent: true` 仅由扩展确认本次原生点击尚未发生时返回；不能根据网络超时猜测。`notApplied: true` 表示配置在任何网页修改前被拒绝。已经认领的配置没有这种证据时，未知结果进入 blocked。发送点击已可能发生却没有回执时不得重发。
+1. **发送只尝试一次。** `queued → claimed → authorized` 并不等于网页送达；需要原生用户消息凭据。发送结果不明时不自动重发。
+2. **明确未发送才能销毁正文。** 浏览器收到 `/fail-unclaimed` 的 `accepted:true, notSent:true` 后，删除 Chrome ledger 中该命令的 `text/files`，保留命令 ID 等防重放记录。回执丢失时只重试取消请求；服务端认领过的命令不能冒充未发送。
+3. **网页状态由可见控件判定。** Stop、Send、Start Voice 的可见/可用状态独立于正文与来源采集；暂时读不到正文不等于轮次完成，已完成来源也不等于外部 MCP 任务结束。
+4. **公开来源持久化。** 服务端保存每个来源的身份与版本，再交付 Paseo 时间线；本地保存不等于宿主已接受。已经交付的非前缀正文修订有明确限制，不能私下拼接冒充原文。
+5. **授权独立于发送。** `approval` 是命令类型，不是开放的远端权限 API。用户可以在 Paseo 显式处理网页权限；设置页提供可选自动允许（包括持久许可），默认关闭。关开关和人工处理会取消尚未认领的自动命令；已认领命令在每次点击前调用 `/verify-approval` 再校验，已发生的点击不能撤销。多按钮同层自动点击必须在每次点击前重新确认当前按钮仍为允许，无法确认则终止后续点击。结果不明时不自动重试同一授权。
+6. **授权内容变更和消失不等于 Deny。** 复用的网页授权卡变更内容后须发出原请求失效通知，新卡使用新 ID。Paseo 当前原生 Provider SDK 对没有用户选择的 `permission_resolved` 默认记为 Deny；桥接不得冒用该事件强行结束旧卡。旧卡会提示已失效、不能再点击网页；用户可显式选择其「拒绝」来**只清理 Paseo 待处理卡**，不再操作 ChatGPT，网页实际结果保持未知。
+6. **没有通用文件、Shell 或 MCP 代理接口。** Runtime 不因读取网页内容执行本机命令；token、聊天正文与本机文件内容不得放入日志。
 
-`binding_lost` 使用后台已经持有的旧绑定报告失联，不伪造一个当前网页 URL。`rebind-observation` 要求重新观察到唯一、匹配的对话和原生消息；只能恢复跟踪，不能重建用户任务或绕过未知发送。
-
-正文上限 64,000 字符；单轮响应聚合上限 256,000 字符，最多 16 个响应片段；历史 1,000 条/会话；保留的会话数不设上限，只受总状态 32MiB 约束。入队前预留回答空间，控制与终局另有 128KiB 预算。超过限制记录错误，不隐瞒截断。
-
-`CIP_STATE_DIR`、`CIP_PORT` 是本机配置，不能由网页修改。token 不应放进 URL、日志或仓库；本机状态文件不加密。
-
-
-alpha.4.1 保留既有 `session.open` 的惰性打开策略：`session.open` 只在 Paseo 层保存会话，不立即产生浏览器 `open` 命令；第一条 prompt 会先产生 `open` 并等待原生配置证明，之后才产生 `send`。准备期间 Stop 取消该控制命令；若已有不明网页副作用则阻断，不继续 Send。
+运行状态保存在 `~/.chatmode-in-paseo/`（可由 `CIP_STATE_DIR` 替换），权限仅限本机用户，**不加密**。存储容量与单轮限制以对应代码常量及测试为准。真正发布前需按 [测试与验收指南](TESTING.md) 做隔离 MV3 与真实账号三端验收。

@@ -1,23 +1,14 @@
-name: Check revised alpha source
+name: Verify Chatmode in Paseo
 on:
   push:
   pull_request:
   workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
   core-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - run: npm run check
-      - run: npm test
-      - run: npm run verify:upstream
-  sdk-typecheck:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -25,8 +16,49 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      # No lockfile could be generated in the delivery environment. Review and commit one
-      # after the first successful install; then switch this command to npm ci.
-      - run: npm install --ignore-scripts --no-audit --no-fund
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run check
+      - run: npm run verify:upstream
+      - run: npm test
       - run: npm run typecheck
       - run: npm run test:sdk
+
+  browser-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install locked Node and browser-test dependencies
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          python -m pip install playwright==1.57.0
+          python -m playwright install --with-deps chromium
+      - name: Pin the runtime binaries for fixture tests
+        shell: bash
+        run: |
+          echo "CIP_NODE=$(command -v node)" >> "$GITHUB_ENV"
+          python - <<'PY' >> "$GITHUB_ENV"
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as pw:
+              print("CIP_CHROMIUM=" + pw.chromium.executable_path)
+          PY
+      - name: Public message and approval DOM regressions (offline)
+        run: |
+          python tests/public-message-browser.py
+          python tests/page-content-browser.py
+          python tests/continuous-actions-browser.py
+      - name: Unsent attachment cleanup regressions (offline)
+        run: |
+          python tests/attachment-order-browser.py
+          python tests/failed-send-disposal-browser.py
+      - name: Real unpacked MV3, isolated ChatGPT fixture (no account)
+        run: python tests/binding-mv3-current.py

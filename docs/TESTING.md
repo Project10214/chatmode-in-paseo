@@ -1,6 +1,6 @@
 # 测试与验收指南
 
-适用于本项目的开发、修复和升级。产品范围与必须守住的行为边界见[产品说明书](PRODUCT_MANUAL.md)，通信协议见 [PROTOCOL.md](PROTOCOL.md)。
+适用于 **CIP v8 / 扩展 0.2.48 / 插件 alpha.4.44** 的开发、修复和升级。产品范围与行为边界见[产品说明书](PRODUCT_MANUAL.md)，端点以 [PROTOCOL.md](PROTOCOL.md) 为准。旧版 v5 路由不再作为现役验收指令。
 
 **原则：测试强度按风险决定，但不得牺牲消息安全和真实验收。** 每一项只报告自己亲自验证到的层级：源码正确 ≠ 离线浏览器通过 ≠ 真实网页登录页成功 ≠ 外部 MCP 实际执行成功。
 
@@ -17,30 +17,31 @@
 ### 常用命令
 
 ```sh
+npm ci --ignore-scripts --no-audit --no-fund # 已提交 package-lock.json
 npm run check             # 语法、JSON、清单与协议版本一致性
-npm test                  # Node 单元与集成测试（安装上述固定开发依赖）
-npm run verify:upstream   # 改动 CoS 移植层时：来源与哈希校验
-npm install --ignore-scripts --no-audit --no-fund   # 安装固定版本的开发依赖
-npm run typecheck         # TypeScript、界面或 Provider 有改动时
-npm run test:sdk          # Provider 事件有改动时：用真实 SDK 校验
-CIP_PASEO_SERVER_PACKAGE=/path/to/server-0.11.4/package npm run test:host-recovery
+npm run verify:upstream   # CoS 来源与哈希校验
+npm test                  # 现役 Node 单元与集成测试
+npm run typecheck         # TypeScript / SDK
+npm run test:sdk          # 真实 Paseo SDK schema
+node --test tests/approval.test.mjs tests/approval-gate-http.test.mjs # 自动允许/手动拒绝并发与授权前服务端门禁
+# 已准备固定 beta.2 原版宿主包时额外运行：
+CIP_PASEO_SERVER_PACKAGE=/path/to/server-0.12.0-beta.2/package npm run test:host-gate
 ```
 
 离线浏览器测试需要 Python、Playwright 和 Chromium（安装方法见 [README](../README.md) 第 3 节）。它们加载内存页面，不登录账号、不发真实消息：
 
 ```sh
-npm run test:dom        # DOM 适配层审计
-npm run test:attachment-order # 先附件后正文；未发送失败只移除本次附件与正文
-npm run test:failed-send-disposal # 未发送失败作废（含 @）、保留用户修改和未知回执
-npm run test:failed-send-persistence # IndexedDB 自动保存模拟 + 新页面恢复；5 个清理/保留场景
-npm run test:composer-diagnostics # 草稿错误只读诊断：节点分类/时序/脱敏，不修改草稿
-npm run test:browser    # 浏览器夹具回归
-npm run test:flow       # Provider 全流程（内存页面 + 模拟 tabs API）
-npm run test:native     # 移植函数行为（夹具页面）
-npm run test:mv3        # Chrome MV3 通信层回归（需要隔离的浏览器环境）
+export CIP_NODE="$(command -v node)"
+python3 tests/public-message-browser.py        # 公开原文，MAIN/ISOLATED
+python3 tests/page-content-browser.py          # DOM 公开来源与授权卡
+python3 tests/continuous-actions-browser.py    # Stop、持续授权按钮复核与网页授权动作
+python3 tests/attachment-order-browser.py      # 先附件后正文
+python3 tests/failed-send-disposal-browser.py  # 未发送清理
+python3 tests/binding-mv3-current.py            # 真 MV3 worker + 本机 Runtime + 隔离页面
+# 其它专项：tests/artifact-browser.py、tests/prose-source-flow-browser.py
 ```
 
-另有 `test:binding`、`test:receipt`、`test:receipt-interaction`、`test:catalog`、`test:apps`、`test:discovery`，以及 `tests/` 中未接入 npm 脚本的 `*.py` 浏览器回归脚本。它们的运行环境相同，可直接用 `python3 tests/<name>.py` 执行。
+浏览器级脚本位于 `tests/*.py`；`tests/legacy/` 收录旧架构研究夹具，不作为 v8 发布门禁。GitHub CI 的 `browser-regression` job 执行上述六类隔离浏览器检查，仍不能代替真实登录账号验收。
 
 `test:failed-send-persistence` 使用临时浏览器 profile 和本地路由，模拟网站的 IndexedDB 自动保存；验证自己的未发送正文与应用清理后不会在新页恢复，用户修改、历史未知草稿和未知回执仍保留。它不是 ChatGPT 闭源保存代码的复刻；真实 B01 的来源追踪与清理验收记录只保存在本地 `docs/internal/`，不随仓库发布。
 
@@ -60,7 +61,7 @@ mkdir -p "$d" && curl -L -o "$d/content.js" \
 
 ### 宿主能力限制诊断（不是修复验收）
 
-`npm run test:host-limitations` 单独执行 `tests/*.diagnostic.mjs` 中的研究实验。它直接向 Broker/宿主注入任意正文改写，或尝试插件卡片等本次未采用的协议；在 Paseo 0.11.4 上仍会失败，不能当作已解决，也不能称为 main 原有失败。这些实验和断言仍可运行，没有删掉或设为 skip。
+`tests/legacy/*.diagnostic.mjs` 是另行保留的宿主限制研究实验，不属于默认 `npm test` 或 CI 门禁。它直接向 Broker/宿主注入任意正文改写，或尝试插件卡片等本次未采用的协议；在 Paseo 0.11.4 上仍会失败，不能当作已解决，也不能称为 main 原有失败。这些实验和断言仍可运行，没有删掉或设为 skip。
 
 默认 `npm test` 执行实际生产路径回归，包括原始消息完成、接收端一次适配、Broker/Provider、历史重开及异常处理；旧流式研究标HISTORICAL，不充当新生产覆盖。原始文本真的改写、宿主最终回报仅取工具后的尾段，仍属于明确记录的限制；默认测试通过不代表这些限制消失。部署前还需要真实账号验收。
 
@@ -74,7 +75,7 @@ mkdir -p "$d" && curl -L -o "$d/content.js" \
 | **T2** | Paseo → ChatGPT | 首轮与第二轮成功、同一 Conversation、每条一次 Send，最终回 idle |
 | **T3** | ChatGPT 网页 → Paseo | 原 Agent 收到用户消息、后续回复与终态；`origin=browser`，Paseo 不二次发送 |
 | **T4** | Stop、关页、恢复 | **仅凭绑定 Conversation 重开原 URL**；消息按独立 ID 去重，结果未知不自动重发；不影响其他 Agent |
-| **T5** | 公开思考与工具 | 真实网页至少 2 个不同 `callId`，Paseo 独立工具卡、名称/状态准确；有公开摘要时正确出现；无私有泄漏 |
+| **T5** | 公开思考与工具 | 同一真实对话中两个不同调用能保存为两个公开来源；Paseo 卡片/状态准确，无私有推理泄漏。宿主原生最终回复的字段另行核对 |
 | **T6** | 错误与并发 | 回执不明、断线、后台限速、双 Agent、换页/重复事件不会误报成功或串会话 |
 | **T7** | UI/图片（改动时） | 消息排版、折叠、图片与回放正确；桌面/移动端可用，不影响其他 Provider |
 | **T8** | Chrome / Paseo 自动唤醒 | Chrome 退出后 Paseo 应启动 Chrome；Paseo 退出但 Chrome 仍在线时，已配对扩展经受限本机入口唤起 Paseo；Chrome 扩展更新应刷新**原插件管理的**已打开对话并自动恢复 Agent 观察（不重发、不串页） |
@@ -99,7 +100,7 @@ mkdir -p "$d" && curl -L -o "$d/content.js" \
 - [ ] A、B 两个不同配置的 Agent 同时生成；停止 A 不影响 B；B 的下一轮不串到 A。
 - [ ] queued / claimed / authorized / receipt 时分别断线；未知结果阻断，重连不得多次点 Send。
 - [ ] 配置与授权等待时改正文、换模型、导航 A→B→A、reload、关闭标签/Provider；保留用户草稿，不串会话。
-- [ ] 授权等待只提示，不自动批准；限额/策略警告停止工作，不换账号、模型或会话来规避。
+- [ ] 默认自动允许关闭时，授权必须人工选择；若主动开启自动允许，另做精确按钮和持久授权范围验收，不将网页卡片消失当作批准。限额/策略警告停止工作，不换账号或重发来规避。
 - [ ] 长回答、缺 final、代码 Copy、多响应片段、状态接近容量上限均有明确处理；每轮仅一个有效终局。
 
 ## 3. 结论只用四个状态

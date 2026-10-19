@@ -7,13 +7,15 @@ import { PROTOCOL } from '../server/protocol.mjs';
 
 const background=await readFile(new URL('../extension/background.js',import.meta.url),'utf8');
 const engine=/'X-CIP-Engine': '([^']+)'/.exec(background)[1];
-async function fixture({oldUrl=null,latestNative='newer-from-web',redirect=false,getError=false,queryError=false,pendingUrl}={}) {
-  const calls=[],tabs=new Map(),local={config:{endpoint:'http://127.0.0.1:17843',token:'test-only'},tabs:{}},session={};
-  let created=0;const pageMessages=[];
+async function fixture({oldUrl=null,latestNative='newer-from-web',redirect=false,getError=false,queryError=false,pendingUrl,
+  kind='ensure',failUnclaimedTimes=0,initialLedger={}}={}) {
+  const calls=[],tabs=new Map(),local={config:{endpoint:'http://127.0.0.1:17843',token:'test-only'},tabs:{},ledger:initialLedger},session={};
+  let created=0, failUnclaimedLeft=failUnclaimedTimes;const pageMessages=[];
   if(oldUrl!==null)tabs.set(71,{id:71,url:oldUrl,...(pendingUrl?{pendingUrl}:{})});
-  const command={id:'ensure-1',kind:'ensure',sessionId:'s1',payload:{
+  const command={id:'ensure-1',kind,sessionId:'s1',payload:{
     tabId:71,conversationId:'bound-conversation',previousNativeMessageId:null,
-    config:{model:'model-test',thinkingOption:null,appIds:[]}}};
+    config:{model:'model-test',thinkingOption:null,appIds:[]},
+    ...(kind==='send'?{turnId:'turn-sensitive',text:'PRIVATE_UNSENT_BODY',files:[{fileName:'private.pdf',size:4}]}:{})}};
   const response=(value)=>({ok:true,text:async()=>JSON.stringify(value)});
   const context=vm.createContext({
     URL,AbortSignal,structuredClone,crypto:webcrypto,setTimeout,clearTimeout,console,
@@ -22,6 +24,10 @@ async function fixture({oldUrl=null,latestNative='newer-from-web',redirect=false
       calls.push({route,body});
       if(route==='/claim')return response({...command,tabId:body.tabId,
         documentKey:body.documentKey,lease:'lease-1',deadline:Date.now()+60000});
+      if(route==='/fail-unclaimed'){
+        if(failUnclaimedLeft-->0)throw new TypeError('Simulated lost ACK');
+        return response({accepted:true,notSent:true});
+      }
       return response({accepted:true});
     },
     chrome:{
@@ -49,9 +55,13 @@ async function fixture({oldUrl=null,latestNative='newer-from-web',redirect=false
     }
   });
   vm.runInContext(background.replace(/\nvoid pump\(\);\s*$/,'')+
-    '\nglobalThis.__test={load,execute,ledger,tabs,wakePaseoIfOffline};',context);
+    '\nglobalThis.__test={load,execute,get ledger(){return ledger},tabs,acknowledgeUnclaimed,wakePaseoIfOffline};',context);
   await context.__test.load();
-  return {command,run:()=>context.__test.execute(command),wake:error=>context.__test.wakePaseoIfOffline(error),calls,get created(){return created;},tabs,pageMessages};
+  return {command,run:()=>context.__test.execute(command),
+    retryUnclaimed:()=>context.__test.acknowledgeUnclaimed(command.id,context.__test.ledger[command.id]),
+    wake:error=>context.__test.wakePaseoIfOffline(error),
+    calls,get created(){return created;},tabs,pageMessages,
+    ledger:context.__test.ledger,local};
 }
 
 test('REOPEN-V1 closed tab + bound Conversation reopens without any old native message ID',async()=>{
@@ -113,4 +123,49 @@ test('REOPEN-V5 only offline transport can wake Paseo, never an auth/protocol er
   assert.equal(native[0].native,'com.foolwork.chatmode_in_paseo_wake');
   assert.equal(JSON.stringify(native[0].payload),JSON.stringify({v:1,action:'wake'}));
   assert.equal(f.calls.filter(x=>x.route==='/authorize'||x.route==='/claim').length,0);
+});
+
+test('UNSENT-CHROME-1 pre-claim failure permanently redacts the Chrome tombstone after ACK',async()=>{
+  const f=await fixture({kind:'send'});
+  await f.run();
+  const row=f.ledger[f.command.id];
+  assert.equal(row.phase,'acked');
+  assert.equal(row.discarded,true);
+  assert.equal(row.result.notSent,true);
+  assert.equal(row.command.payload.turnId,'turn-sensitive','retain the spent command identity');
+  assert(!Object.hasOwn(row.command.payload,'text'));
+  assert(!Object.hasOwn(row.command.payload,'files'));
+  assert(!JSON.stringify(f.local.ledger).includes('PRIVATE_UNSENT_BODY'));
+  assert(!JSON.stringify(f.local.ledger).includes('private.pdf'));
+  assert.equal(f.calls.filter(x=>x.route==='/claim'||x.route==='/authorize').length,0);
+  await f.run();
+  assert.equal(f.calls.filter(x=>x.route==='/fail-unclaimed').length,1,'retained ID cannot replay');
+});
+
+test('UNSENT-CHROME-2 lost unclaimed ACK retries only server cancellation, never Send',async()=>{
+  const f=await fixture({kind:'send',failUnclaimedTimes:1});
+  await f.run();
+  const row=f.ledger[f.command.id];
+  assert.equal(row.phase,'unclaimed');
+  assert.equal(row.prepareError,'TAB_NOT_OWNED');
+  assert.equal(row.command.payload.text,'PRIVATE_UNSENT_BODY','keep evidence until server confirms notSent');
+  assert.equal(f.local.ledger[f.command.id].phase,'unclaimed');
+  await f.retryUnclaimed();
+  assert.equal(row.phase,'acked');
+  assert.equal(row.discarded,true);
+  assert(!JSON.stringify(f.local.ledger).includes('PRIVATE_UNSENT_BODY'));
+  assert.equal(f.calls.filter(x=>x.route==='/fail-unclaimed').length,2);
+  assert.equal(f.calls.filter(x=>x.route==='/claim'||x.route==='/authorize').length,0);
+});
+
+test('UNSENT-CHROME-3 legacy acked unclaimed Send is scrubbed on worker load',async()=>{
+  const legacy={id:'old',kind:'send',sessionId:'s1',payload:{text:'LEGACY_UNSENT_BODY',files:[{fileName:'old.txt'}],turnId:'old-turn'}};
+  const f=await fixture({initialLedger:{old:{phase:'acked',command:legacy,at:Date.now()}}});
+  const row=f.ledger.old;
+  assert.equal(row.phase,'acked');
+  assert.equal(row.command.payload.turnId,'old-turn');
+  assert.equal(row.discarded,true);
+  assert(!JSON.stringify(f.local.ledger).includes('LEGACY_UNSENT_BODY'));
+  assert(!JSON.stringify(f.local.ledger).includes('old.txt'));
+  assert.equal(f.calls.filter(x=>x.route==='/fail-unclaimed').length,0,'already proven ack needs no network');
 });

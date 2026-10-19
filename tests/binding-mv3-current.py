@@ -166,7 +166,13 @@ with tempfile.TemporaryDirectory(prefix='cip-mv3-state-') as directory, \
         wait_receipt('user-2')
         second=finish(sid)
         assert second['conversationId']==first_done['conversationId']
-        assert any('SECOND' in r.get('text','') and 'MV3' in r.get('text','') for r in assistant_rows(second))
+        # The source collector is independent of the page-button terminal.
+        # Wait for eventual persisted content, not an arbitrary poll snapshot;
+        # still fail if the second answer never arrives.
+        end=time.monotonic()+15
+        while not any('SECOND' in r.get('text','') and 'MV3' in r.get('text','') for r in assistant_rows(second)):
+            if time.monotonic()>=end: raise AssertionError({'missing_second_answer':assistant_rows(second),'harness':stderr[-4:]})
+            time.sleep(0.1); second=state()
         assert saves()==2
         checks.append('second Paseo turn reuses the conversation and sends exactly once')
         before_sends=saves()

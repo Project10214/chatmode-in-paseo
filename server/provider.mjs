@@ -319,47 +319,85 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
       binding.permissionSignatures.set(event.approval.key,signature);
       binding.permissions.set(event.approval.key,'open');
       emit({type:'session.permission',sessionId:hostId,request:permissionRequest(event.approval)});
+      const actual=store.read().sessions[binding.id]?.approvals?.[event.approval.key];
       const auto=store.read().runtimeSettings?.autoAllowApprovals===true &&
         event.approval.autoEligible===true && Boolean(event.approval.autoTier) &&
+        !actual?.manualRequested&&!actual?.manualVeto&&!actual?.autoSuppressed&&!actual?.clickUncertain &&
         !binding.autoApprovals?.has(event.approval.key);
       if(auto) {
         binding.autoApprovals ??= new Set();
         binding.autoApprovals.add(event.approval.key);
         binding.respondingPermissions.set(event.approval.key,'allow-auto');
         void broker.answerApproval(binding.id,event.approval.key,'allow-auto').then(()=>{
+          const conflict=Boolean(binding.manualConflict?.has(event.approval.key) ||
+            store.read().sessions[binding.id]?.approvals?.[event.approval.key]?.manualVeto);
           emit({type:'session.notice',sessionId:hostId,notice:{id:'auto-approval:'+event.approval.key,
-            severity:'info',title:'已自动允许网页授权',
-            description:`${event.approval.app??'网页'}${event.approval.tool?' · '+event.approval.tool:''}`}});
+            severity:conflict?'warning':'info',
+            title:conflict?'自动授权与人工选择发生冲突':'已自动允许网页授权',
+            description:conflict?'网页允许可能已经执行，后到的人工选择未确认生效；请核对 ChatGPT 页面。':
+              `${event.approval.app??'网页'}${event.approval.tool?' · '+event.approval.tool:''}`}});
         }).catch(error=>{
-          binding.respondingPermissions.delete(event.approval.key);
+          if(binding.respondingPermissions.get(event.approval.key)==='allow-auto')
+            binding.respondingPermissions.delete(event.approval.key);
           binding.autoApprovals.delete(event.approval.key);
+          const superseded=['APPROVAL_SUPERSEDED','AUTO_APPROVAL_DISABLED'].includes(error?.code);
           emit({type:'session.notice',sessionId:hostId,notice:{id:'auto-approval-failed:'+event.approval.key,
-            severity:'warning',title:'自动允许未完成',
-            description:errorLabel(error?.code??'APPROVAL_UNCONFIRMED')}});
+            severity:superseded?'info':'warning',
+            title:superseded?'自动授权已撤销':'自动允许未完成',
+            description:superseded?'不会再执行已取消的自动授权；可人工选择。':
+              errorLabel(error?.code??'APPROVAL_UNCONFIRMED')}});
         });
       }
       return;
     }
+    if(event.state==='approval-uncertain') {
+      emit({type:'session.notice',sessionId:hostId,notice:{
+        id:'approval-uncertain:'+event.key,severity:'warning',
+        title:'网页授权操作结果未确认',
+        description:'可能已经点击了网页按钮，已阻止对此请求再次点击。请核对 ChatGPT 页面。'
+      }});
+      return;
+    }
     if(event.state==='approval-closed') {
       if(binding.permissions.get(event.key)!=='open')return;
+      if(!capabilities.includes('permission')) {
+        binding.permissions.set(event.key,'resolved');
+        emit({type:'session.notice',sessionId:hostId,notice:{
+          id:'approval-withdrawn:'+event.key,severity:'warning',
+          title:'网页授权提示已失效',
+          description:'当前客户端没有可清理的权限卡；页面操作结果未知，请到 ChatGPT 核对。'
+        }});
+        return;
+      }
+      if(event.answered==='allow-auto'&&
+        (binding.manualConflict?.has(event.key)||
+          store.read().sessions[binding.id]?.approvals?.[event.key]?.manualVeto)) {
+        // Paseo may have cached a user Deny after automatic Allow was already
+        // claimed. Sending permission_resolved here would translate the
+        // webpage Allow into a false Deny. Keep the request stale instead.
+        binding.permissions.set(event.key,'stale');
+        emit({type:'session.notice',sessionId:hostId,notice:{
+          id:'approval-conflict:'+event.key,severity:'warning',
+          title:'自动授权与人工选择未对齐',
+          description:'自动允许可能已在网页生效，但人工选择未确认生效。请先核对网页；旧卡只能显式本地清理。'
+        }});
+        return;
+      }
       if(event.answered&&binding.respondingPermissions.get(event.key)===event.answered) {
         binding.permissions.set(event.key,'resolved');
         emit({type:'session.permission_resolved',sessionId:hostId,permissionId:event.key});
-      } else if(event.withdrawn===true) {
-        // The page navigated away or was lost. Dismiss the card, but do not
-        // claim an allow/deny outcome that was never observed.
-        binding.permissions.set(event.key,'resolved');
-        emit({type:'session.permission_resolved',sessionId:hostId,permissionId:event.key});
-        emit({type:'session.notice',sessionId:hostId,notice:{id:'approval-withdrawn:'+event.key,
-          severity:'warning',title:'网页授权框已关闭',
-          description:'页面已离开或失去观察，未记录允许或拒绝；请回 ChatGPT 核对。'}});
       } else {
-        // The public host interface defaults an unrecorded resolution to Deny.
-        // It cannot truthfully express a withdrawal/unknown external choice.
-        // Report this narrow limitation rather than fabricate a Deny.
-        emit({type:'session.notice',sessionId:hostId,notice:{id:'approval-closed:'+event.key,
-          severity:'warning',title:'网页授权框已关闭',
-          description:'Paseo 未记录此次选择，无法据此标记允许或拒绝。原授权提示可能仍保留，请勿重复操作。'}});
+        // The current Paseo SDK has no neutral "dismiss without Deny" event:
+        // an unpaired permission_resolved is translated into false Deny.
+        // Mark stale locally and keep the native request until the user
+        // explicitly chooses its Deny action to clear it.
+        binding.permissions.set(event.key,'stale');
+        const replaced=event.reason==='REQUEST_CHANGED';
+        emit({type:'session.notice',sessionId:hostId,notice:{
+          id:'approval-withdrawn:'+event.key,severity:'warning',
+          title:replaced?'授权内容已更新，原请求失效':'网页授权框已离开或关闭',
+          description:'网页允许/拒绝结果未知。原 Paseo 卡片不能再操作网页；如需清理该卡片，可点击原卡的「拒绝」（仅本地清理）。'
+        }});
       }
       return;
     }
@@ -488,7 +526,7 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
           const hostId = input.sessionId;
           binding={id:s.id,controller:new AbortController(),unsubscribe:broker.subscribe(s.id,e=>observe(hostId,e)),
             held:new Map(),items:new Map(),permissions:new Map(),permissionSignatures:new Map(),
-            respondingPermissions:new Map(),ready:false,confirmed:false};
+            respondingPermissions:new Map(),manualConflict:new Set(),ready:false,confirmed:false};
           broker.owners.set(s.id, binding); sessions.set(input.sessionId, binding);
           if(typeof observation?.readTimeline==='function') {
             const active=()=>!closed&&!closing&&!broker.closed&&sessions.get(hostId)===binding&&
@@ -553,8 +591,17 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
           binding.delivery?.kick();
           const current=broker.snapshot(s.id),run=current.observation?.run;
           if(run?.active)observe(input.sessionId,{state:'page-running',turnId:run.id});
-          for(const approval of Object.values(current.approvals??{}))
+          for(const approval of Object.values(current.approvals??{})) {
             if(approval.state==='open')observe(input.sessionId,{state:'approval',approval});
+            else if(approval.state==='resolved'&&!approval.answered) {
+              binding.permissions.set(approval.key,'stale');
+              emit({type:'session.notice',sessionId:input.sessionId,notice:{
+                id:'approval-withdrawn:'+approval.key,severity:'warning',
+                title:'网页授权请求已失效',
+                description:'不能确定网页是否允许。旧卡片仅能通过人工「拒绝」清理本地待办，不会点击网页。'
+              }});
+            }
+          }
           if(current.turn?.receiptPending)observe(input.sessionId,{state:'receipt-pending',turnId:current.turn.id});
           requestBarrier(input.sessionId,binding);
         } catch (e) { binding?.delivery?.close(); binding?.unsubscribe(); if (binding && broker.owners.get(binding.id) === binding) broker.owners.delete(binding.id); sessions.delete(input.sessionId); throw e; }
@@ -690,16 +737,33 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
       }
       case 'session.permission': {
         const binding = host(input.sessionId), permissions = (binding.permissions ??= new Map());
-        if (permissions.get(input.permissionId) !== 'open') return;
+        const state=permissions.get(input.permissionId);
+        if(state!=='open'&&state!=='stale')return;
         try {
-          const choice = approvalChoice(input.response);
-          binding.respondingPermissions.set(input.permissionId,choice);
-          await broker.answerApproval(binding.id, input.permissionId, choice);
+          const choice=approvalChoice(input.response);
+          if(state==='stale') {
+            // The user chose Deny on an already-gone page request. This only
+            // clears the old Paseo card; it is NOT an additional webpage click.
+            if(choice!=='deny')throw new BridgeError('APPROVAL_GONE');
+            permissions.set(input.permissionId,'resolved');
+            emit({type:'session.permission_resolved',sessionId:input.sessionId,permissionId:input.permissionId});
+            emit({type:'session.notice',sessionId:input.sessionId,notice:{
+              id:'approval-local-dismiss:'+input.permissionId,severity:'info',
+              title:'已清理旧授权卡',description:'只清理 Paseo 待处理提示，网页选择仍未知。'}});
+            return;
+          }
+          await broker.answerApproval(binding.id,input.permissionId,choice,{
+            onQueued:()=>{
+              binding.respondingPermissions.set(input.permissionId,choice);
+              binding.manualConflict?.delete(input.permissionId);
+            }
+          });
           if (permissions.get(input.permissionId) === 'open') {
             permissions.set(input.permissionId, 'resolved');
             emit({ type: 'session.permission_resolved', sessionId: input.sessionId, permissionId: input.permissionId });
           }
         } catch (e) {
+          if(e?.code==='APPROVAL_IN_FLIGHT')binding.manualConflict?.add(input.permissionId);
           // Nothing was clicked, or the click was not confirmed. The request
           // stays open in Paseo; the page card is still the source of truth.
           emit({ type: 'session.notice', sessionId: input.sessionId, notice: { id: 'native-permission-answer', severity: 'warning',

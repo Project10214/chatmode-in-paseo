@@ -1,56 +1,50 @@
-# 架构与明确边界
+# Chatmode in Paseo 架构与边界（CIP v8）
 
-协议见 [PROTOCOL.md](PROTOCOL.md)；CoS 函数移植的来源与改动见 [vendor/cos/README.md](../vendor/cos/README.md)。
+适用：Paseo 插件 `alpha.4.44`、Chrome 扩展 `0.2.48`。端点与安全校验见 [PROTOCOL.md](PROTOCOL.md)，真实验收入口见 [TESTING.md](TESTING.md)。
 
-## 1. 两条通道，不混用权限
+## 1. 一套 Provider、一套 Runtime、一个 Chrome 扩展
 
-Paseo Server 入口启动一个共享 Runtime。不同 Provider connections 共用连接服务；一个本地会话只能被一个 connection 持有。Chrome 后台持有配对 token、执行记录和标签页绑定，content script 只操作与观察自己的网页。
+```text
+Paseo Agent ↔ Provider（server/provider.mjs）
+                    ↓               ↑
+            Broker / Store（state.json）
+              ├─ 单次 Send 命令、租约、停止、权限动作
+              ├─ 已绑定对话的观察身份及网页控件状态
+              └─ 公开来源账本、投影、交付游标
+                    ↕  CIP v8 · 127.0.0.1:17843
+             Chrome MV3 background
+                    ↕ 隔离脚本 / 公开 MAIN 阅读器
+                ChatGPT 网页 / 已授权 @ 应用
+```
 
-消息通道：Paseo → ProviderInput → Broker 持久队列 → Chrome worker 认领 → 网页 → 原生回执/可见回复 → Broker → ProviderEvent。工具通道另为 ChatGPT → 已授权 `@` 应用 → 对应 MCP 主机。本项目不运行 shell、不发布文件 API、不转发 MCP 凭据。
+- 不启动 CoS 桌面主程序，不代理 Paseo 内置 MCP 凭据。ChatGPT 工具执行走网页已授权的 `@` 应用。
+- Chrome 与本机 Paseo 后台在同一主机；远程 Paseo 客户端只与宿主通信，不直连本机桥接端口。
+- 浏览器 worker 保存扩展配对凭据；网页脚本只观察公开来源、按钮和授权卡。通过 tab、document、Conversation 与 lease 限制归属。
 
-宿主默认的 paseo HTTP 回环 `/mcp/agents` 配置允许被显式排除并显示警告，以免阻塞创建会话；这不意味着导入了该工具。其他 MCP 配置及 toolPolicy 拒绝。网页模型不自动获得 Paseo 内部子 Agent 工具。
+## 2. 发送、持久状态与恢复
 
-## 2. Provider 与设置
+- `session.open` 先保存独立配置，首条真正的 prompt 才打开新对话页；后续使用已绑定 Conversation URL。
+- Send 经 `queued → claimed → authorized → result`，授权点击是一次性的；同 ID 和未知回执不自动重发。页面控件是否运行、已完成正文是否可读，都不能单独证明送达。
+- 已知未发送：Runtime 在事务中记下未认领事实并销毁未发送命令正文；Chrome 在服务端确认 `notSent` 后清除自己的副本、保留最小 ID/状态防重放。应答丢失只重试未认领确认，不执行网页 Send。
+- 在保留对话绑定的情况下，观察通过新的 observationLease 与 generation 重建。旧标签 ID 或相似文本不能认领其他对话。
+- Stop 只点击当前可见且可用的网页 Stop；是否完成由后续可见按钮状态判断，无法证明外部已启动的 MCP 进程被停止。归档仅在安全边界内尝试关闭闲置标签，历史移入 archive 文件。
 
-支持 catalog、session.open、纯文本 prompt、configure、interrupt、close；协商能力仅为 prompt.message、session.configure、session.persistence。目录 DTO 不传非法 null 默认值；真实插件出口使用官方 SDK EventSchema 验证，未运行该 SDK 的离线测试会明确标记。
+## 3. 持续公开内容采集
 
-SettingsScreen 通过 addSettingsScreen 提供正常入口，使用宿主主题和容器。默认模型/思考值反映到 catalog 和缓存键；应用以逐项 toggle 传递。未启动网页时，配置保存为“待应用”并发出 notice；首次发送才打开页面并确认。已绑定网页的配置变更需读回确认。失效选项报错，不替换为另一个模型。
+- `extension/page-content.js`、`public-message-main.js` 等模块收集公开文本、工作过程、工具卡、图片和授权卡。隐藏/private/analysis 来源不应作为公开回答回传。
+- 正文、网页状态与权限各走独立入口，读不到一项不能伪造另一项的完成/失败。来源使用精确身份、版本与排序信息持久保存。
+- `server/source-ledger.mjs` 和 `source-prose.mjs` 保持来源内容与展示投影分离，拒绝把已发布的非前缀修改强行拼接为新正文。
+- Provider 根据宿主接口交付公开来源。**本机持久化与 Provider 已发送，不等于 Paseo 已保存或自动化能读取原生最终回答。**原版宿主在 pending 新轮次期间仍有归轮与事件缓存的限制，详见 [宿主并发交付边界](HOST_CONCURRENT_DELIVERY_GATE.md) 和 [实施记录](FAITHFUL_SYNC_IMPLEMENTATION.md)。
 
-恢复读取 runtime UUID，实际更新 cwd 和用户级说明，并在下一条消息携带新上下文；没有把这些说明伪装成高优先级系统消息。history=replay 只重放本地历史到 Paseo 界面，不重新发送给模型。
+## 4. 权限与数据保护
 
-## 3. 发送、停止和未知结果
+- 手动授权需要来自 Paseo 的明确允许/拒绝选择，同一授权卡及当前页面重新验证后才点击。
+- 设置页另有可选的自动允许开关，**默认关闭**。开启时，当前实现可能选择网页的持久授权；这项策略尚未在本轮审查中收紧，切勿把它解释为「仅允许一次」。
+- 本机 Runtime 仅绑定 `127.0.0.1`，验证 Host、Origin、extensionId、token、消息大小与次数；不对网页提供通用 Shell、文件系统或开放代理权限。
+- `~/.chatmode-in-paseo/` 的本地状态和配对凭据受文件权限保护，但未加密。不要同步到公开仓库或测试日志。
 
-命令为 queued → claimed → authorized(send) → done/failed。会话为 idle → sending → running → idle；停止经过 stopping；不明结果进入 blocked，人工核查后可结束本地跟踪为 abandoned。
+## 5. 已知限制与验收层级
 
-消息 ID 在进入异步动作前保留，Broker 持久记录失败 ID。同 ID不能暗中开新一轮；需要用户显式用新 ID重试。默认至多两个生成中会话；每个会话独立队列，Stop 使用独立派发通道，不等待另一个页面完成。
+Node 测试、SDK schema、离线 Chromium 与 MV3 夹具，只能证明相应模拟场景。真实 ChatGPT 网页、多并发、登录账号切换、后台页面休眠、外部 MCP 实际结果、Paseo 宿主冷启动等仍须分别实机验收。**不要把流水线通过写成正式生产放行。**
 
-点击 Send 前，在授权 await 返回后同步核对文档、导航代次、编辑器实例、原始 HTML、结构化正文、模型、思考、应用、消息基线和按钮；最后核对与点击之间不再 await。只有确认没点过才上报 notSent；清理只触及自己完整未改的草稿。缺回执不重放发送。
-
-Stop 的判断与建立由一个存储事务负责，并绑定 turn ID。重复 Stop 共用命令；完成事件也结算待停请求；旧回执不得终结新轮。停止网页并不表示杀死外部 MCP 创建的进程。已认领配置超时和重启后的不明配置均阻断，不凭旧值继续工作。
-
-## 4. 身份与浏览器恢复
-
-Paseo 会话 ID → runtime UUID → 原生 conversation ID → tabId/documentKey → turnId/native user message ID。事件还需匹配当前 lease。错误文档、标签、轮次不得修改另一个会话。
-
-扩展本地存储保留绑定，但是数字 tabId 不是重启后的授权。重新观察唯一对话及原生用户消息锚点后，可以通过 rebind-observation 更新监控，不创建发送。无法证明时明确报告 binding_lost 并阻断该会话；不是静默丢失，也不是保证所有刷新都能恢复。加载中或虚拟化导致锚点暂时不可读，仍可能保守阻断。
-
-回答快照按消息 ID 更新。可读取原版 `turn.messages`/`allMessages` 时，使用 CoS 的公开文本和 `end_turn=true + finished_successfully` 判断；更晚的未完成回答使旧 final 无效。不能读到该模型时，只降级为既有明确 message-ID 和专用 turn action 的 DOM 路径。完成需要本轮 final 证据和稳定窗口；代码块复制按钮不算。授权等待与缺 final 证据分开提示。只输出可见文本和状态，不虚构工具执行证据或隐藏思考过程。
-
-## 5. 存储与安全
-
-同目录临时文件、fsync、rename 后才发布内存；单文件事务串行，坏状态不会自动重置。新消息预留历史片段和回答最坏 JSON 字节；32MiB 状态中保留 128KiB 控制余量。单轮聚合 256,000 字符、16 片段，超限记录终局错误。额外磁盘满、I/O 失败不在这些逻辑预留保证内，仍需操作系统处理。
-
-HTTP 仅回环监听，检查 Host、Origin、extensionId、token、大小和速率。配对码一次性；重配前先核对 CIP 版本，失败不主动覆盖旧配置。密钥和历史未加密，无法防止已经能读取当前用户目录的恶意本机进程。
-
-扩展没有 cookies、debugger 或全站权限。本项目不提供自动批准、文件执行或任意代理端点。网页结果不负责证明外部 MCP 的实际改动。
-
-## 6. 未完成的实机范围
-
-完整 SDK 类型解析、Paseo 安装和设置界面；真实 ChatGPT 菜单、应用与最终状态；Chrome MV3 暂停/恢复及导航竞态；账号切换和分页目录；实际远程 MCP 的只读验证；高并发与大历史性能。
-
-未移植完整 CoS Fiber、Goal/Loop、Compact & Resume、工具审批代理、丰富工具日志、原生子 Agent 调度；不将这些列为本版已实现。存储仍写整份状态；已归档会话移到 `archive/YYYY-MM-DD.jsonl`，`state.json` 只留索引，尚无删除 UI。离线测试不是生产负载测试或“分布式恰好一次”证明。
-
-
-## 7. CoS 函数移植边界
-
-十二个活跃模块位于 extension/upstream（逐个来源见 vendor/cos/provenance.json）；本机服务端仍是原有 Paseo 适配 Runtime。CIP v3 将旧扩展隔离，原版 CoS 主程序不会启动。MAIN 世界仅提供已提交状态的只读公开投影，isolated 世界控制原生 UI；页内消息不持有配对 token。来源清单不等于整个 CoS 功能或兼容性的继承。
+旧版 CIP v5 的 `/event`、`/active`、`/bindings`、`/external-turn` 等入口已经移除；不要再据旧架构图实现新适配层。CoS 移植函数及版权来源见 [vendor/cos/README.md](../vendor/cos/README.md)。

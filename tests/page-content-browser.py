@@ -122,8 +122,12 @@ with sync_playwright() as pw:
         page.evaluate("document.querySelector('#allow').disabled=false")
         new_key = page.evaluate('CIP_PAGE_CONTENT.read().approvals[0].key')
         page.evaluate("document.querySelector('#approval [role=alert]').textContent='Changed native request'")
+        changed=page.evaluate('CIP_PAGE_CONTENT.read()')
+        check(any(entry == {'key':new_key,'reason':'superseded'} for entry in changed['closedApprovals'])
+              and changed['approvals'][0]['key']!=new_key,
+              'the previous native request key is explicitly retired on in-place card mutation')
         check(page.evaluate("key => CIP_PAGE_CONTENT.resolveApproval(key,'allow-once') === null", new_key), 'changed card contents revoke old key even when DOM reused')
-        new_key = page.evaluate('CIP_PAGE_CONTENT.read().approvals[0].key')
+        new_key = changed['approvals'][0]['key']
         page.evaluate("document.querySelector('#approval').hidden=true")
         check(page.evaluate('CIP_PAGE_CONTENT.read().approvals.length') == 0
               and page.evaluate("key => CIP_PAGE_CONTENT.resolveApproval(key,'deny') === null", new_key), 'only currently visible approvals, no hidden pending-card guesses')

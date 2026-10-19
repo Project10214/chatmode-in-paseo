@@ -156,7 +156,7 @@ test('R19: an open approval and an externally closed card produce distinct notic
   await f.view(s, { state: 'standby', approvals: [card] });
   await until(() => events.some(e => e.notice?.title === '请在网页处理授权'));
   await f.view(s, { state: 'standby', approvals: [], closedApprovals: [card.key] });
-  const closed = await until(() => events.find(e => e.notice?.title === '网页授权框已关闭'));
+  const closed = await until(() => events.find(e => e.notice?.title === '网页授权提示已失效'));
   const open = events.find(e => e.notice?.title === '请在网页处理授权');
   assert.notEqual(open.notice.id, closed.notice.id);
   assert.doesNotMatch(closed.notice.title, /批准|已处理/);

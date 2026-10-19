@@ -719,6 +719,13 @@
       fail('APPROVAL_UNSUPPORTED');
     const content = globalThis.CIP_PAGE_CONTENT;
     if (typeof content?.resolveApproval !== 'function') fail('APPROVAL_UNAVAILABLE');
+    async function clickGate() {
+      if(typeof options.authorizeClick!=='function')fail('APPROVAL_GATE_REQUIRED');
+      guard();
+      const proof=await options.authorizeClick();
+      if(proof?.allowed!==true)fail('APPROVAL_NOT_AUTHORIZED');
+      guard();
+    }
     if (choice === 'allow-auto') {
       if (typeof content.resolveApprovalAuto !== 'function') fail('APPROVAL_UNAVAILABLE');
       let plan = content.resolveApprovalAuto(key);
@@ -728,10 +735,26 @@
       guard();
       let clicked = 0;
       for (const button of plan.buttons) {
-        if (!card.isConnected || !button.isConnected || button.closest('[data-codex-approval-surface="true"]') !== card ||
-            !actionable(button)) break;
+        // Never reuse a prior tier/element after the page has processed a
+        // previous click. React may have repurposed "Allow" into "Deny".
+        const current=content.resolveApprovalAuto(key);
+        if (!card.isConnected || !button.isConnected ||
+            button.closest('[data-codex-approval-surface="true"]') !== card ||
+            !actionable(button) || !current ||
+            current.tier!==plan.tier || !current.buttons.includes(button))
+          fail(clicked?'APPROVAL_PARTIAL_UNCONFIRMED':'APPROVAL_GONE');
+        try { await clickGate(); }
+        catch(error) {
+          if(clicked)fail('APPROVAL_PARTIAL_UNCONFIRMED');
+          throw error;
+        }
+        const latest=content.resolveApprovalAuto(key);
+        if(!latest||latest.tier!==plan.tier||!latest.buttons.includes(button)||
+           !actionable(button)||button.closest('[data-codex-approval-surface="true"]')!==card)
+          fail(clicked?'APPROVAL_PARTIAL_UNCONFIRMED':'APPROVAL_GONE');
+        guard();
         const displayedRequest = card.innerText;
-        button.click(); // Auto policy only: exact classified tier, all current matches.
+        button.click(); // Reclassified and authorized immediately before each click.
         clicked++;
         await until(() => {
           if (!card.isConnected) return true;
@@ -751,6 +774,9 @@
     if (!card || !actionable(button)) fail('APPROVAL_GONE');
     guard();
     if (content.resolveApproval(key, choice) !== button || !actionable(button)) fail('APPROVAL_GONE');
+    await clickGate();
+    if(content.resolveApproval(key,choice)!==button||!actionable(button))fail('APPROVAL_GONE');
+    guard();
     const displayedRequest = card.innerText;
     // The visible button often includes a kbd/arrow glyph (Reconnect ↵).
     // Strip UI punctuation before deciding that navigation is intentional.

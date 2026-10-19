@@ -47,7 +47,7 @@ with sync_playwright() as pw:
             card.innerHTML='<div role="alert">Allow ChatGPT to use fixture-tool?</div><button data-choice="deny">Deny</button><button data-choice="allow">Allow once</button>';
             messages.append(card);for(const button of card.querySelectorAll('button'))button.onclick=()=>{actionClicks[button.dataset.choice]++;card.remove();};
             return card;};
-          window.approvalOptions=(choice='allow-once')=>({key:CIP_PAGE_CONTENT.read().approvals[0].key,choice,conversationId:cid,guard:commandGuard});
+          window.approvalOptions=(choice='allow-once')=>({key:CIP_PAGE_CONTENT.read().approvals[0].key,choice,conversationId:cid,guard:commandGuard,authorizeClick:async()=>({allowed:true})});
           window.addAutoApproval=(labels=['Allow once','Allow','Deny'])=>{const card=document.createElement('div');card.dataset.codexApprovalSurface='true';
             card.innerHTML='<div role="alert">Allow ChatGPT to use fixture-tool?</div>'+labels.map((label,i)=>`<button data-choice="${i}">${label}</button>`).join('');
             messages.append(card);for(const button of card.querySelectorAll('button'))button.onclick=()=>{actionClicks['auto-'+button.dataset.choice]=(actionClicks['auto-'+button.dataset.choice]||0)+1;button.disabled=true;
@@ -134,6 +134,42 @@ with sync_playwright() as pw:
               and page.evaluate("actionClicks['auto-0']")==1 and page.evaluate("actionClicks['auto-1']")==1
               and (page.evaluate("actionClicks['auto-2']") or 0)==0,
               'auto approval clicks every persistent allow candidate, never Deny')
+        page.close()
+
+        page = fresh()
+        page.evaluate("addAutoApproval(['Always allow','Trust this app','Deny'])")
+        page.evaluate("""() => {
+          const first=messages.querySelector('[data-choice="0"]'),second=messages.querySelector('[data-choice="1"]');
+          first.onclick=()=>{
+            actionClicks['auto-0']=(actionClicks['auto-0']||0)+1;
+            first.disabled=true; second.textContent='Deny';
+          };
+        }""")
+        result = page.evaluate("tryAction(()=>CIP_DOM.answerApproval(approvalOptions('allow-auto')))")
+        check(not result['ok'] and page.evaluate("actionClicks['auto-0']")==1 and
+              not page.evaluate("actionClicks['auto-1']||0") and
+              page.evaluate("messages.querySelector('[data-choice=\\\"1\\\"]').textContent")=='Deny',
+              'after the first auto click, a changed next button is never clicked as if it were Allow')
+        page.close()
+
+        page = fresh()
+        page.evaluate("addAutoApproval(['Always allow','Trust this app','Deny'])")
+        page.evaluate("""() => {
+          let checks=0;
+          window.stagedApproval=()=>{
+            const value=approvalOptions('allow-auto');
+            value.authorizeClick=async()=>{
+              if(++checks>1)throw Object.assign(Error('vetoed'),{code:'APPROVAL_VETOED'});
+              return {allowed:true};
+            };
+            return value;
+          };
+        }""")
+        result=page.evaluate("tryAction(()=>CIP_DOM.answerApproval(stagedApproval()))")
+        check(not result['ok'] and result['code']=='APPROVAL_PARTIAL_UNCONFIRMED' and
+              page.evaluate("actionClicks['auto-0']||0")==1 and
+              page.evaluate("actionClicks['auto-1']||0")==0,
+              'auto toggle/veto between candidate buttons stops the second click and records partial uncertainty')
         page.close()
 
         page = fresh()
