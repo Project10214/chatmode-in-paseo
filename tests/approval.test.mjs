@@ -25,6 +25,9 @@ test('APPROVAL-1 the page report is strict; the Paseo request shows the exact co
   assert.equal(truncated.input, undefined);
   assert.equal(approvalChoice({ behavior: 'allow' }), 'allow-once');
   assert.equal(approvalChoice({ behavior: 'deny' }), 'deny');
+  const denyOnly = permissionRequest(approvalEvent({ ...card, clickable: false, canDeny: true,
+    labels: ['Not now'], denyLabel: 'Not now' }));
+  assert.deepEqual(denyOnly.actions.map(a => [a.id, a.behavior]), [['deny', 'deny']]);
   assert.throws(() => approvalChoice({ behavior: 'allow', selectedActionId: 'always' }), /APPROVAL_UNSUPPORTED/);
   assert.throws(() => approvalChoice({ behavior: 'allow', updatedPermissions: [{ rule: 'x' }] }), /APPROVAL_UNSUPPORTED/);
 });
@@ -95,9 +98,10 @@ test('APPROVAL-3 Provider: real confirmation resolves once; unknown external clo
   const failed=await until(()=>f.broker.queued().find(c=>c.kind==='approval'));
   const failedClaim=await f.broker.claim(failed.id,s.tabId,s.documentKey);
   await f.broker.result(failed.id,failedClaim.lease,{error:'APPROVAL_GONE'});
-  await until(()=>events.some(event=>event.type==='session.notice'&&event.notice.id==='native-permission-answer'));
-  assert.equal(events.filter(event=>event.type==='session.permission_resolved').length,1);
-  assert.equal(f.broker.snapshot(s.id).approvals[third.key].state,'open');
+  await until(()=>events.some(event=>event.type==='session.notice'&&event.notice.id==='approval-withdrawn:'+third.key));
+  assert.equal(events.filter(event=>event.type==='session.permission_resolved').length,2);
+  assert.equal(f.broker.snapshot(s.id).approvals[third.key].state,'resolved');
+  assert.equal(f.broker.snapshot(s.id).approvals[third.key].withdrawn,true);
 });
 
 test('APPROVAL-4 an unrecognized card still becomes a Paseo request that points to the page, and is never answered from Paseo', async t => {

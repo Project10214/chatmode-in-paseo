@@ -55,7 +55,7 @@ with sync_playwright() as pw:
             return card;};
           window.addReconnectApproval=()=>{const card=document.createElement('div');card.dataset.codexApprovalSurface='true';
             card.innerHTML='<div role="alert">presure</div><div>Reconnect presure</div><div>Your presure connection has expired.</div>'+
-              '<button data-choice="deny">Not now</button><button data-choice="allow">Reconnect</button>';
+              '<button data-choice="deny">Not now</button><button data-choice="allow">Reconnect <kbd>↵</kbd></button>';
             messages.append(card);for(const button of card.querySelectorAll('button'))button.onclick=()=>{actionClicks[button.dataset.choice]++;button.disabled=true;card.remove();};
             return card;};
           const actualNow=Date.now;window.actionClock=0;Date.now=()=>actualNow()+actionClock;
@@ -151,6 +151,14 @@ with sync_playwright() as pw:
         check(result['ok'] and result['value']['choice']=='allow-once'
               and page.evaluate('actionClicks.allow')==1 and page.evaluate('actionClicks.deny')==0,
               'reconnect cards expose the exact Reconnect button as a manual allow action')
+        page.close()
+
+        page = fresh()
+        page.evaluate("addReconnectApproval()")
+        result = page.evaluate("tryAction(()=>CIP_DOM.answerApproval(approvalOptions('deny')))")
+        check(result['ok'] and result['value']['choice']=='deny'
+              and page.evaluate('actionClicks.deny')==1 and page.evaluate('actionClicks.allow')==0,
+              'reconnect cards expose the exact Not now deny action')
         page.close()
 
         page = fresh()

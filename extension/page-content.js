@@ -395,13 +395,14 @@
       APPROVAL_RECONNECT.test(cardText);
     const autoEligible = Boolean(tier && groups.deny.length > 0 &&
       (tier !== 'confirm' || context));
-    const clickable = (groups.once.length === 1 || reconnect) && groups.deny.length === 1;
+    const canDeny = groups.deny.length === 1;
+    const clickable = (groups.once.length === 1 || reconnect) && canDeny;
     const manualAllow = groups.once.length === 1 ? groups.once[0] : reconnect ? groups.reconnect[0] : null;
     return {
       allow: clickable ? manualAllow.button : null,
-      deny: clickable ? groups.deny[0].button : null,
+      deny: canDeny ? groups.deny[0].button : null,
       labels: buttons.map(button => caption(button)).filter(Boolean),
-      groups, tier, autoEligible, reconnect
+      groups, tier, autoEligible, reconnect, canDeny
     };
   }
   function linkedApprovalPanels(card) {
@@ -499,8 +500,9 @@
         const clickable = Boolean(buttons.allow && buttons.deny), app = approvalApp(card);
         trackApproval(saved.key, card, root);
         result.push({ key: saved.key, text, app, tool: null, input, clickable, labels: buttons.labels,
-          autoEligible: buttons.autoEligible, autoTier: buttons.tier,
-          ...(clickable ? { allowLabel: caption(buttons.allow), denyLabel: caption(buttons.deny) } : {}) });
+          autoEligible: buttons.autoEligible, autoTier: buttons.tier, canDeny: buttons.canDeny,
+          ...(clickable ? { allowLabel: caption(buttons.allow) } : {}),
+          ...(buttons.canDeny ? { denyLabel: caption(buttons.deny) } : {}) });
         if (!clickable) issues.push({ code: 'APPROVAL_ACTIONS_UNRECOGNIZED', key: saved.key });
         // Preserve out-of-contract source values rather than truncate/rename
         // them to satisfy approvalEvent. Integration must surface these issues.
@@ -572,11 +574,13 @@
     if (choice !== 'allow-once' && choice !== 'deny') return null;
     const issues = [], scopes = roots(issues);
     const requests = approvalsIn(scopes, issues);
-    if (!requests.some(request => request.key === key && request.clickable)) return null;
+    if (!requests.some(request => request.key === key &&
+        (choice === 'deny' ? request.canDeny : request.clickable))) return null;
     for (const root of scopes) for (const card of root.querySelectorAll(APPROVAL)) {
       if (keys.get(card)?.key !== key || !visible(card)) continue;
       const buttons = approvalButtons(card);
-      if (buttons.allow && buttons.deny) return choice === 'deny' ? buttons.deny : buttons.allow;
+      if (choice === 'deny' && buttons.deny) return buttons.deny;
+      if (buttons.allow && buttons.deny) return buttons.allow;
     }
     return null;
   }

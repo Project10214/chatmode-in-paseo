@@ -16,14 +16,15 @@ export function approvalEvent(value) {
     invariant(Object.keys(value).every(k => ['state', 'key'].includes(k)), 'APPROVAL_INVALID');
     return { state: 'closed', key: value.key };
   }
-  invariant(Object.keys(value).every(k => ['state', 'key', 'app', 'tool', 'input', 'clickable', 'allowLabel', 'denyLabel', 'labels', 'text', 'autoEligible', 'autoTier'].includes(k)), 'APPROVAL_INVALID');
+  invariant(Object.keys(value).every(k => ['state', 'key', 'app', 'tool', 'input', 'clickable', 'canDeny', 'allowLabel', 'denyLabel', 'labels', 'text', 'autoEligible', 'autoTier'].includes(k)), 'APPROVAL_INVALID');
   // Button captions as the page shows them (UI text only); shown on the
   // Paseo actions so the user sees exactly which page button is clicked.
   const caption = v => typeof v === 'string' && v.length > 0 && v.length <= 40 && !/[\n\u0000]/.test(v);
   const clickable = value.clickable === undefined ? true : value.clickable;
   invariant(typeof clickable === 'boolean', 'APPROVAL_INVALID');
+  invariant(value.canDeny === undefined || typeof value.canDeny === 'boolean', 'APPROVAL_INVALID');
   invariant(clickable ? (value.allowLabel === undefined || caption(value.allowLabel)) && (value.denyLabel === undefined || caption(value.denyLabel))
-    : value.allowLabel === undefined && value.denyLabel === undefined, 'APPROVAL_INVALID');
+    : value.allowLabel === undefined && (value.denyLabel === undefined || value.canDeny === true), 'APPROVAL_INVALID');
   invariant(value.labels === undefined || (Array.isArray(value.labels) && value.labels.length <= 16 && value.labels.every(caption)), 'APPROVAL_INVALID');
   invariant(value.autoEligible === undefined || typeof value.autoEligible === 'boolean', 'APPROVAL_INVALID');
   invariant(value.autoTier === undefined || ['persistent','once','confirm',null].includes(value.autoTier), 'APPROVAL_INVALID');
@@ -32,7 +33,8 @@ export function approvalEvent(value) {
   invariant(value.tool === null || (typeof value.tool === 'string' && TOOL.test(value.tool)), 'APPROVAL_INVALID');
   invariant(value.input === null || (typeof value.input === 'string' && value.input.length <= 4096 &&
     value.input.isWellFormed() && !value.input.includes('\u0000')), 'APPROVAL_INVALID');
-  return { state: 'open', key: value.key, app: value.app, tool: value.tool, input: value.input, clickable,
+  const canDeny = value.canDeny === true || clickable;
+  return { state: 'open', key: value.key, app: value.app, tool: value.tool, input: value.input, clickable, canDeny,
     ...(value.allowLabel ? { allowLabel: value.allowLabel } : {}), ...(value.denyLabel ? { denyLabel: value.denyLabel } : {}),
     autoEligible: value.autoEligible === true,
     ...(value.autoTier ? { autoTier: value.autoTier } : {}),
@@ -53,6 +55,7 @@ export function permissionRequest(approval) {
     ? { type: 'shell', command, ...(typeof args.cwd === 'string' && args.cwd.length <= 1024 ? { cwd: args.cwd } : {}) }
     : { type: 'plain_text', label: name, text: approval.text ?? approval.input ?? '网页未提供调用详情。' };
   const clickable = approval.clickable !== false;
+  const canDeny = approval.canDeny === true || clickable;
   const page = label => label ? `（${label}）` : '';
   return {
     id: approval.key, name, kind: 'tool',
@@ -63,8 +66,8 @@ export function permissionRequest(approval) {
     ...(args ? { input: args } : {}),
     detail,
     actions: [
-      { id: 'allow-once', label: '允许' + page(approval.allowLabel), behavior: 'allow', variant: 'primary' },
-      { id: 'deny', label: '拒绝' + page(approval.denyLabel), behavior: 'deny', variant: 'danger' }
+      ...(clickable ? [{ id: 'allow-once', label: '允许' + page(approval.allowLabel), behavior: 'allow', variant: 'primary' }] : []),
+      ...(canDeny ? [{ id: 'deny', label: '拒绝' + page(approval.denyLabel), behavior: 'deny', variant: 'danger' }] : [])
     ]
   };
 }

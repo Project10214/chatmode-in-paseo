@@ -492,6 +492,15 @@ export class Broker {
           return { value: c.result, pending: { id:s.id, turnId:s.turn.id, state:'receipt-pending' } };
         c.phase = 'failed'; c.error = code;
         if (result.notSent === true || !wasAuthorized) discardUnsent(s,c);
+        if (c.kind === 'approval' && s) {
+          const request = s.approvals?.[c.payload.key];
+          const stale = ['APPROVAL_GONE','CONTENT_UNAVAILABLE','PAGE_GONE','NAVIGATION_CHANGED','WRONG_CONVERSATION','DOCUMENT_CHANGED'];
+          if (request?.state === 'open' && stale.includes(code)) {
+            request.state = 'resolved'; request.withdrawn = true;
+            affected = { id: s.id, state: 'approval-closed', key: request.key,
+              answered: null, withdrawn: true, reason: code };
+          }
+        }
         if (c.kind === 'send' && s?.turn?.id === c.payload.turnId && !s.turn.outcome) {
           // A failed receipt may still carry this authorized document's exact
           // conversation URL. Bind it without ever accepting it as a receipt.
@@ -759,6 +768,7 @@ export class Broker {
       invariant(s&&request?.state==='open'&&!request.answered&&s.observation&&
         s.tabId!==null&&s.documentKey,'APPROVAL_GONE');
       invariant(request.clickable!==false ||
+        (choice==='deny' && request.canDeny===true) ||
         (choice==='allow-auto' && request.autoEligible===true),'APPROVAL_UNRECOGNIZED');
       invariant(!Object.values(d.commands).some(c=>c.kind==='approval'&&c.sessionId===id&&pending(c)),'APPROVAL_BUSY');
       invariant(Object.values(d.commands).filter(pending).length<LIMITS.commands,'QUEUE_FULL');

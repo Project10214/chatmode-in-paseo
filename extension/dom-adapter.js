@@ -752,7 +752,10 @@
     guard();
     if (content.resolveApproval(key, choice) !== button || !actionable(button)) fail('APPROVAL_GONE');
     const displayedRequest = card.innerText;
-    const reconnect = /^(?:Reconnect|Connect|重新连接|重新連結|连接|連接)$/i.test(label(button));
+    // The visible button often includes a kbd/arrow glyph (Reconnect ↵).
+    // Strip UI punctuation before deciding that navigation is intentional.
+    const actionLabel = label(button).replace(/[^\p{L}\p{N}\s·_.-]/gu, ' ').replace(/\s+/g, ' ').trim();
+    const reconnect = /^(?:Reconnect|Connect|重新连接|重新連結|连接|連接)$/i.test(actionLabel);
     button.click(); // Never called by read(), receipt reconciliation or Stop.
     // Reconnect intentionally leaves the ChatGPT document for OAuth. Waiting
     // for a post-click DOM guard would turn a successful click into

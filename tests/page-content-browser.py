@@ -211,6 +211,13 @@ with sync_playwright() as pw:
         check(reconnect['clickable'] is True and reconnect['autoEligible'] is False
               and reconnect['allowLabel'] == 'Reconnect' and reconnect['denyLabel'] == 'Not now',
               'reconnect cards are manually actionable but never auto-approved')
+        snapshot = load('<main><div data-codex-approval-surface="true"><div role="alert">app</div>'+
+          '<div>Reconnect app</div><div>Your app connection has expired.</div>'+
+          '<button>Not now</button></div></main>')
+        only_negative=snapshot['approvals'][0]
+        check(only_negative['clickable'] is False and only_negative['canDeny'] is True
+              and only_negative['denyLabel'] == 'Not now',
+              'a reconnect card without Reconnect still exposes its exact Not now deny action')
         snapshot = load('<main><div data-codex-approval-surface="true"><button>Sure</button><button>Deny</button></div></main>')
         check(snapshot['approvals'][0]['autoEligible'] is False, 'unknown labels are not auto-eligible')
         snapshot = load('<main><div data-codex-approval-surface="true"><button>Always allow</button><button>Deny</button></div></main>')
