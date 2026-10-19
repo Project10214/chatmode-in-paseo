@@ -44,6 +44,18 @@
     return /\/(?:c|conversation)\/([^/?#]+)/.exec(location.pathname)?.[1] || null;
   }
   function excluded(node) { return Boolean(node.closest(EXCLUDE)); }
+  // ChatGPT's DIL renderer leaves freshly streamed words at opacity:0 until
+  // the reveal animation runs. A never-painted tab never runs it, so public
+  // assistant text is laid out but lost to the generic opacity rule. Allow
+  // only the word-level span, inside a native assistant message, and never in
+  // a Work disclosure/private region.
+  function revealWord(node, panels) {
+    if (!node?.matches?.('[data-d-text-flow="word"],[data-d-stream-word]')) return false;
+    if (!node.closest('[data-markdown-text-style="assistant-message"],[data-message-author-role="assistant"]')) return false;
+    const owner = node.closest(IDENTITY);
+    if (!owner || !nativeIds(owner).length || workOf(node, panels)) return false;
+    return true;
+  }
   function readable(node, panels = new Set()) {
     if (!node?.isConnected || excluded(node)) return false;
     const cid = conversationId();
@@ -53,7 +65,7 @@
       const style = getComputedStyle(at);
       if (!panels.has(at) && (at.hidden || at.hasAttribute('inert') || attr(at, 'aria-hidden') === 'true' ||
           style.display === 'none' || style.contentVisibility === 'hidden' || style.clip !== 'auto' ||
-          ['hidden', 'collapse'].includes(style.visibility) || style.opacity === '0')) return false;
+          ['hidden', 'collapse'].includes(style.visibility) || (style.opacity === '0' && !(at === node && revealWord(node, panels))))) return false;
       if (!panels.has(at) && /hidden|clip/.test(`${style.overflowX} ${style.overflowY}`)) {
         const box = at.getBoundingClientRect();
         if (box.width === 0 || box.height === 0) return false;

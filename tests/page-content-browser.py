@@ -214,6 +214,17 @@ with sync_playwright() as pw:
         check(native(snapshot, 'recap-id')['kind'] == 'reasoning', 'keyed shell wrapper preserves public tertiary recap classification')
         snapshot = load('<main><div style="height:0;overflow:hidden">PRIVATE_CLIPPED</div><div style="opacity:0">PRIVATE_TRANSPARENT</div><div style="content-visibility:hidden">PRIVATE_SKIPPED_RENDER</div><p>Public retained</p></main>')
         check([row['text'] for row in snapshot['items']] == ['Public retained'], 'clipped, transparent and content-visibility hidden text excluded')
+        snapshot = load('''<main><div data-chatgpt-search-unit-key="reveal-turn:2:assistant" data-chatgpt-search-message-ids="reveal-answer">
+          <div data-markdown-text-style="assistant-message"><p><span data-d-text-flow="word" data-d-stream-word style="opacity:0">Reveal answer</span></p></div></div>
+          <div style="opacity:0">PRIVATE_TRANSPARENT</div></main>''')
+        check(native(snapshot, 'reveal-answer')['text'] == 'Reveal answer'
+              and 'PRIVATE_TRANSPARENT' not in json.dumps(snapshot), 'a streaming reveal word is readable only inside a native assistant message; unrelated opacity:0 stays excluded')
+        snapshot = load('''<main><button aria-controls="reveal-work" aria-expanded="true">Work</button>
+          <div id="reveal-work"><div data-chatgpt-search-unit-key="reveal-work:1:assistant" data-chatgpt-search-message-ids="reveal-work-id">
+          <div data-markdown-text-style="assistant-message"><p><span data-d-text-flow="word" style="opacity:0">PRIVATE_REVEAL_WORK</span></p></div></div></div>
+          <p>Public retained</p></main>''')
+        check(not any(row.get('nativeMessageId') == 'reveal-work-id' for row in snapshot['items'])
+              and 'PRIVATE_REVEAL_WORK' not in json.dumps(snapshot), 'reveal exception never reaches a Work disclosure')
         snapshot = load('<main><form><div role="alert">Form error without editor</div><button>Retry</button></form></main>')
         check([row['text'] for row in snapshot['items']] == ['Form error without editor'], 'non-composer form error is not lost to a form whitelist')
         snapshot = load('<main><div data-item-type="future-artifact-v9">Unknown source payload</div></main>')
