@@ -767,8 +767,12 @@ export class Broker {
       const s=d.sessions[id],request=s?.approvals?.[key];
       invariant(s&&request?.state==='open'&&!request.answered&&s.observation&&
         s.tabId!==null&&s.documentKey,'APPROVAL_GONE');
+      // Older persisted cards predate canDeny. Their exact negative caption is
+      // still enough to let the user dismiss/deny a stuck card manually.
+      const oldNegative = request.clickable===false && Array.isArray(request.labels) &&
+        request.labels.filter(label => /^(?:Not now|Later|Deny|Reject|Cancel|No|稍后|稍後|拒绝|拒絕|取消|否)$/i.test(String(label).trim())).length===1;
       invariant(request.clickable!==false ||
-        (choice==='deny' && request.canDeny===true) ||
+        (choice==='deny' && (request.canDeny===true || oldNegative)) ||
         (choice==='allow-auto' && request.autoEligible===true),'APPROVAL_UNRECOGNIZED');
       invariant(!Object.values(d.commands).some(c=>c.kind==='approval'&&c.sessionId===id&&pending(c)),'APPROVAL_BUSY');
       invariant(Object.values(d.commands).filter(pending).length<LIMITS.commands,'QUEUE_FULL');

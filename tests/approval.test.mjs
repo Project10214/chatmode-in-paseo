@@ -173,3 +173,17 @@ test('APPROVAL-6 losing the page document withdraws an open approval without inv
   assert.equal(f.broker.snapshot(s.id).approvals[card.key].state, 'resolved');
   assert.equal(f.broker.snapshot(s.id).approvals[card.key].withdrawn, true);
 });
+
+test('APPROVAL-7 an older persisted negative-only card can still be denied manually', async t => {
+  const f = await fixture(t), s = await f.ready();
+  await f.sending(s);
+  const old = { state: 'open', key: '6f1c2d3e-0000-4000-8000-000000000012', app: 'app',
+    tool: null, input: null, clickable: false, labels: ['Not now'] };
+  await f.view(s, { state: 'standby', approvals: [old] });
+  const answering = f.broker.answerApproval(s.id, old.key, 'deny'); answering.catch(() => {});
+  const command = await until(() => f.broker.queued().find(c => c.kind === 'approval'));
+  assert.equal(command.payload.choice, 'deny');
+  const claim = await f.broker.claim(command.id, s.tabId, s.documentKey);
+  await f.broker.result(command.id, claim.lease, { answered: true, key: old.key, choice: 'deny' });
+  assert.deepEqual(await answering, { answered: true, choice: 'deny' });
+});
