@@ -29,6 +29,12 @@ export class Store {
         data.commands && !Array.isArray(data.commands) && (!data.archiveIndex ||
         (typeof data.archiveIndex === 'object' && !Array.isArray(data.archiveIndex))), 'STATE_INVALID');
       this.data = { ...data, archiveIndex: data.archiveIndex ?? {} };
+      // The previous runtime kept a future selection in pendingConfig. Adopt
+      // that as the local desired selection without touching old Send payloads.
+      for (const session of Object.values(this.data.sessions)) {
+        if (session.pendingConfig) session.config = session.pendingConfig;
+        delete session.pendingConfig;
+      }
     } catch (e) { if (e.code !== 'ENOENT') throw e; }
     return this;
   }

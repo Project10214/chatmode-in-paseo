@@ -228,9 +228,16 @@
     row.node.click(); dismiss(); await until(() => selected(kind) === id);
   }
   // CoS reads the page's system_hints response at document_start, not an @ popup.
+  let appliedModel=null, verifiedApps=null;
   const appCatalog = globalThis.CIP_createAppCatalog({ fail,
     activate: guard => globalThis.CIP_activateAppDiscovery({ composer, authored, chips, insert, guard, fail }) });
-  async function appChoices(guard = () => {}) { return appCatalog.read(guard); }
+  async function appChoices(guard = () => {}, refresh = false) {
+    guard();
+    if (verifiedApps && !refresh) return verifiedApps;
+    const apps = await appCatalog.read(guard); guard();
+    verifiedApps = apps;
+    return apps;
+  }
   let ownedApps = null;
   // Reloaded Chrome documents can restore app-only composer marks without
   // retaining CIP's in-memory ownership. Track real user edits separately
@@ -258,13 +265,15 @@
   async function setApps(ids, guard = () => {}, ready = null) {
     guard(); const box = composer();
     if (authored(box)) throw draftError('apps-before-discovery', box, ready);
-    // Selected apps require THIS document's complete native evidence. Selecting
-    // zero apps grants nothing and must not depend on an unrelated hint request.
-    const available = ids.length ? await appChoices(guard) : []; guard();
+    // The catalog can be reused within this document for identical tool
+    // choices. Each Send still creates/verifies its own native @ marks.
+    const wanted = [...ids].sort();
+    const changed = !!ownedApps && JSON.stringify(ownedApps.ids) !== JSON.stringify(wanted);
+    const available = ids.length ? await appChoices(guard, changed) : []; guard();
     if (composer() !== box || !box.isConnected || authored(box))
       throw draftError('apps-after-discovery', composer(), ready ?? composerSample(box));
     if (!ids.every(id => available.some(app => app.id === id))) fail('APP_UNAVAILABLE');
-    const wanted = [...ids].sort(), selected = chips().map(c => c.id).sort();
+    const selected = chips().map(c => c.id).sort();
     if (selected.some(id => !id)) fail('APP_ID_UNPROVEN');
     if (selected.some(id => !wanted.includes(id))) {
       // Only an untouched, text-free native editor may lose a restored mark
@@ -291,8 +300,22 @@
     if (JSON.stringify(chips().map(c => c.id).sort()) !== JSON.stringify(wanted)) fail('APPS_NOT_CONFIRMED');
     ownedApps = { ids: wanted, editEpoch: editorTouchEpoch };
   }
-  function effectiveConfig() { return { model: selected('model'), thinkingOption: selected('thinking'), appIds: chips().map(x => x.id).sort() }; }
+  function invalidateModelMatch() {
+    appliedModel=null; verifiedApps=null; ownedApps=null;
+  }
+  function rememberModelMatch(config) {
+    if(config?.model) appliedModel={model:config.model,thinkingOption:config.thinkingOption,route:location.pathname};
+  }
+  function effectiveConfig() {
+    const previous=appliedModel?.route===location.pathname ? appliedModel : null;
+    return { model:previous?.model??selected('model'),
+      thinkingOption:previous?.thinkingOption??selected('thinking'),
+      appIds: chips().map(x => x.id).sort() };
+  }
   const sameConfig = (a, b) => a.model === b.model && a.thinkingOption === (b.thinkingOption ?? null) && JSON.stringify(a.appIds) === JSON.stringify([...b.appIds].sort());
+  async function preparePage(guard = () => {}) {
+    await atStage('composer', () => waitForComposer(guard)); guard();
+  }
   async function configure(config, guard = () => {}, deadline = null) {
     let ready;
     try {
@@ -318,8 +341,15 @@
       if (authored(composer())) throw draftError('configure-start', composer(), ready);
     } catch (e) { e.notApplied = true; throw e; }
     const stillCurrent = () => { try { guard(); return true; } catch { return false; } };
-    if (!await atStage('chat-surface', () => C.prepareChatModelSurface(stillCurrent))) throw errorStage(Object.assign(new Error('CHAT_SURFACE_UNCONFIRMED'), {code:'CHAT_SURFACE_UNCONFIRMED'}), 'chat-surface');
-    if (nativeShape()) {
+    const matched=appliedModel?.route===location.pathname &&
+      appliedModel.model===config.model && appliedModel.thinkingOption===config.thinkingOption;
+    if (!matched) {
+      appliedModel=null;
+      if (!await atStage('chat-surface', () => C.prepareChatModelSurface(stillCurrent))) throw errorStage(Object.assign(new Error('CHAT_SURFACE_UNCONFIRMED'), {code:'CHAT_SURFACE_UNCONFIRMED'}), 'chat-surface');
+    }
+    if (matched) {
+      guard(); // Same document, same Paseo selection; no model-picker action.
+    } else if (nativeShape()) {
       nativeMode = true;
       // The intelligence picker mounts after the composer. A single read can
       // race that mount and report "model unavailable" on a healthy page.
@@ -344,6 +374,7 @@
     // A null request means use the observed native default; report it rather than invent one.
     if (config.thinkingOption === null && effective.thinkingOption !== null) fail('THINKING_DEFAULT_UNSPECIFIED');
     if (effective.model !== config.model || effective.thinkingOption !== config.thinkingOption) fail('CONFIG_NOT_CONFIRMED');
+    rememberModelMatch(config);
     return effective;
   }
   async function catalog(guard = () => {}) {
@@ -468,7 +499,11 @@
     };
     const startUrl = location.href, startPath = location.pathname;
     try {
-      guard(); const config = await configure(command.payload.config, guard, command.deadline); guard();
+      guard();
+      const reusedModel=appliedModel?.route===location.pathname &&
+        appliedModel.model===command.payload.config.model &&
+        appliedModel.thinkingOption===command.payload.config.thinkingOption;
+      const config = await configure(command.payload.config, guard, command.deadline); guard();
       await refreshTranscript(); guard();
       before = new Set(messages().map(x => x.id));
       const box = composer();
@@ -550,7 +585,7 @@
           try {
             guard(); if (!stillReady()) return false;
             await authorize(); guard();
-            if (nativeMode) await refreshModelProof();
+            if (nativeMode && !reusedModel) await refreshModelProof();
             // Optional proof; if ChatGPT's transport shape is unknown, the
             // existing exact-DOM receipt remains the only success path.
             try { networkProof=await globalThis.CIP_COS_SEND_RECEIPT?.arm(norm(command.payload.text),config.appIds)??null; }
@@ -798,5 +833,5 @@
     guard();
     return { answered: true, key, choice };
   }
-  globalThis.CIP_DOM = { upstream: Object.freeze({ engine: 'CoS native send/picker/controls', commit: 'ccd23b66cecf2f684fa3e12ca190297be02842cf' }), conversationId: C.conversationId, refreshTranscript, probePendingReceipt, effectiveConfig, catalog, configure, send, stop, answerApproval, messages, composer, authored, norm };
+  globalThis.CIP_DOM = { preparePage, invalidateModelMatch, rememberModelMatch, upstream: Object.freeze({ engine: 'CoS native send/picker/controls', commit: 'ccd23b66cecf2f684fa3e12ca190297be02842cf' }), conversationId: C.conversationId, refreshTranscript, probePendingReceipt, effectiveConfig, catalog, configure, send, stop, answerApproval, messages, composer, authored, norm };
 })();

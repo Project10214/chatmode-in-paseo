@@ -105,7 +105,7 @@ test('Chrome recovery queues only a NEW prompt until previous native turn comple
   assert.equal(f.broker.snapshot(sid).turn.clientMessageId,'old-client-message');
   await f.view(sid,{state:'standby',items:[sourceItem('old-answer','old result',{nativeMessageId:'native-old-answer'})]});
   const ensure=await until(()=>f.broker.queued().find(c=>c.kind==='ensure'));
-  const before=f.broker.snapshot(sid),url='https://chatgpt.com/c/'+before.conversationId;
+  const before=f.broker.snapshot(sid),url=before.conversationId ? 'https://chatgpt.com/c/'+before.conversationId : 'https://chatgpt.com/';
   const claimed=await f.broker.claim(ensure.id,before.tabId,before.documentKey,{url});
   await f.broker.result(ensure.id,claimed.lease,{config:before.config,tabId:before.tabId,url});
   const next=await until(()=>f.broker.queued().find(c=>c.kind==='send'));
@@ -146,10 +146,13 @@ test('provider rejects non-implemented input operations at admission', async t =
 test('closing a connection prevents queued work from opening tabs afterwards', async t => {
   const f = await context(t); await f.connection.close(); await assert.rejects(f.connection.send({ type: 'catalog', requestId: 'late' }), /CONNECTION_CLOSED/); assert.equal(f.broker.queued().length, 0);
 });
-test('model changes choose that models own default, not an old thinking value', async t => {
-  const f = await context(t); await f.open(); await f.connection.send({ type: 'session.configure', requestId: 'config2', sessionId: 'host-one', changes: { model: 'm2' } });
-  const c = await f.answerCommand('configure'); assert.equal(c.payload.config.model, 'm2'); assert.equal(c.payload.config.thinkingOption, null);
+test('model changes save locally, using the new model default without touching Chrome', async t => {
+  const f = await context(t); const sid=await f.open();
+  await f.connection.send({ type: 'session.configure', requestId: 'config2', sessionId: 'host-one', changes: { model: 'm2' } });
   await until(() => f.events.find(e => e.type === 'request.completed' && e.requestId === 'config2'));
+  const local=f.broker.snapshot(sid).config;
+  assert.equal(local.model,'m2');assert.equal(local.thinkingOption,null);
+  assert.equal(f.broker.queued().length,0);
 });
 
 test('Paseo session.configure switches native tool with one select without extra settings steps',async t=>{
@@ -161,9 +164,9 @@ test('Paseo session.configure switches native tool with one select without extra
   ]){
     await f.connection.send({type:'session.configure',requestId:key,sessionId:'host-one',
       changes:{settings:{'app:quick':value}}});
-    const command=await f.answerCommand('configure');
-    assert.deepEqual(command.payload.config.appIds,expect);
     await until(()=>f.events.some(e=>e.type==='request.completed'&&e.requestId===key));
+    assert.deepEqual(f.broker.snapshot(f.events.find(e=>e.type==='session.opened'&&e.sessionId==='host-one').persistence.data.id).config.appIds,expect);
+    assert.equal(f.broker.queued().length,0);
     const latest=f.events.filter(e=>e.type==='session.config').at(-1).config;
     assert.equal(latest.settings.length,1);
     assert.equal(latest.settings[0].type,'select');
@@ -175,9 +178,8 @@ test('single tool quick select affects only this session and rejects old multi-a
   assert.deepEqual(f.broker.snapshot(two).config.appIds,['asdk_app_a']);
   await f.connection.send({type:'session.configure',requestId:'only-first',sessionId:'host-one',
     changes:{settings:{'app:quick':'app:asdk_app_b'}}});
-  const change=await f.answerCommand('configure');
-  assert.deepEqual(change.payload.config.appIds,['asdk_app_b']);
   await until(()=>f.events.some(e=>e.type==='request.completed'&&e.requestId==='only-first'));
+  assert.equal(f.broker.queued().length,0);
   assert.deepEqual(f.broker.snapshot(one).config.appIds,['asdk_app_b']);
   assert.deepEqual(f.broker.snapshot(two).config.appIds,['asdk_app_a']);
   const options=f.events.filter(e=>e.type==='session.config'&&e.sessionId==='host-one').at(-1).config.settings[0].options;
@@ -211,16 +213,14 @@ test('closing while session is opening prevents late queued opening', async t =>
   assert.equal(f.broker.queued().length, 0);
   assert.equal(f.broker.queued().filter(c => c.kind === 'send').length, 0);
 });
-test('closing after configuration was claimed fences uncertain browser effects', async t => {
+test('closing after local configuration preserves new desired model without browser effects', async t => {
   const f = await context(t); const sid = await f.open();
   await f.connection.send({ type: 'session.configure', requestId: 'configure-pending', sessionId: 'host-one', changes: { model: 'm2' } });
-  const c = await until(() => f.broker.queued().find(c => c.kind === 'configure'));
-  const claim = await f.broker.claim(c.id, f.broker.snapshot(sid).tabId, 'configured-doc');
+  await until(() => f.events.some(e=>e.type==='request.completed'&&e.requestId==='configure-pending'));
   await f.connection.close();
-  await until(() => f.broker.snapshot(sid).status === 'blocked');
-  await f.broker.result(c.id, claim.lease, { config: c.payload.config, tabId: claim.tabId, url: 'https://chatgpt.com/' });
-  assert.equal(f.broker.snapshot(sid).config.model, 'm1');
-  assert.equal(f.broker.snapshot(sid).error, 'CONTROL_UNCONFIRMED');
+  assert.equal(f.broker.snapshot(sid).config.model,'m2');
+  assert.equal(f.broker.snapshot(sid).status,'idle');
+  assert.equal(f.broker.queued().filter(c=>c.kind==='configure').length,0);
 });
 
 test('a temporarily unreadable binding preserves its link on restore; only standby releases a new prompt',async t=>{
@@ -360,20 +360,21 @@ test('content arriving while a prompt is prepared is delivered once after that p
   assert.equal(late().length, 1, 'exactly once');
   assert.equal(f.broker.queued().filter(c => c.kind === 'send').length, 0, 'no Send');
 });
-test('a prompt sent while the composer model is still being applied waits for it instead of failing CONFIGURATION_BUSY', async t => {
+test('immediate prompt after local model change freezes new settings and skips configure command', async t => {
   const f = await context(t), sid = await f.open();
   f.runtime.chromeWake = async () => {};
-  // The real configure queues its browser command and holds the session lock.
   await f.connection.send({ type: 'session.configure', requestId: 'cfg', sessionId: 'host-one', changes: { model: 'm1', thinkingOption: 'extended' } });
-  await until(() => f.broker.queued().find(c => c.kind === 'configure'));
   await f.connection.send({ type: 'session.prompt', sessionId: 'host-one', prompt: {
     clientMessageId: 'after-config', delivery: 'auto', input: { type: 'message', content: [{ type: 'text', text: 'next' }] } } });
-  await new Promise(r => setTimeout(r, 100));
-  assert.equal(f.events.some(e => e.type === 'session.prompt_result'), false, 'the prompt waits while configuration runs');
-  await f.answerCommand('configure');
-  await until(() => f.events.some(e => e.type === 'request.completed' && e.requestId === 'cfg'));
-  // The prompt continues to its own page check instead of failing busy.
-  await until(() => f.broker.queued().find(c => c.kind === 'ensure'));
-  assert.equal(f.events.some(e => e.type === 'session.prompt_result' && e.result.type === 'failed'), false);
-  await f.broker.interrupt(sid).catch(() => {});
+  await until(() => f.events.some(e=>e.type==='request.completed'&&e.requestId==='cfg'));
+  const reserved=await until(()=>f.broker.snapshot(sid).prompts['after-config']?.reservedConfig);
+  assert.equal(reserved.thinkingOption,'extended');
+  assert.equal(f.broker.queued().filter(c=>c.kind==='configure').length,0);
+  const ensure=await until(()=>f.broker.queued().find(c=>c.kind==='ensure'));
+  const before=f.broker.snapshot(sid),url=before.conversationId ? 'https://chatgpt.com/c/'+before.conversationId : 'https://chatgpt.com/';
+  const claim=await f.broker.claim(ensure.id,before.tabId,before.documentKey,{url});
+  await f.broker.result(ensure.id,claim.lease,{tabId:before.tabId,url});
+  const send=await until(()=>f.broker.queued().find(c=>c.kind==='send'));
+  assert.equal(send.payload.config.thinkingOption,'extended');
+  await f.broker.interrupt(sid).catch(()=>{});
 });

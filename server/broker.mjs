@@ -140,6 +140,41 @@ export class Broker {
       return {pending:Boolean(s.pendingConfig),config};
     },{control:true});
   }
+  // Paseo owns desired configuration; a running turn uses its frozen payload.
+  async saveSelection(id, selection) {
+    return this.store.transaction(d => {
+      const s = d.sessions[id]; invariant(s && !s.archiveIntent, 'SESSION_UNKNOWN');
+      s.config = validateSelection(selection, d.catalog);
+      delete s.pendingConfig;
+      return s.config;
+    }, { control: true });
+  }
+  // Persist each message's selected model before waiting for Chrome or slots.
+  async reservePrompt(id, clientMessageId, sourceFingerprint) {
+    identifier(clientMessageId);
+    invariant(typeof sourceFingerprint === 'string' && /^[a-f0-9]{64}$/.test(sourceFingerprint), 'INVALID_ID');
+    return this.store.transaction(d => {
+      const s = d.sessions[id]; invariant(s && !s.archiveIntent, 'SESSION_UNKNOWN');
+      const prior = s.prompts[clientMessageId];
+      if (prior) {
+        invariant(prior.reservationFingerprint === sourceFingerprint &&
+          !prior.rejected && !prior.turnId, 'MESSAGE_ID_CONFLICT');
+        return { config: prior.reservedConfig };
+      }
+      const config = structuredClone(s.config);
+      s.prompts[clientMessageId] = { reservationFingerprint: sourceFingerprint, reservedConfig: config };
+      return { config };
+    }, { control: true });
+  }
+  async abandonPromptReservation(id, clientMessageId, reason) {
+    return this.store.transaction(d => {
+      const prior = d.sessions[id]?.prompts?.[clientMessageId];
+      if (!prior || !prior.reservedConfig || prior.turnId || prior.rejected) return false;
+      prior.rejected = reason;
+      delete prior.reservedConfig;
+      return true;
+    }, { control: true });
+  }
   async ensurePage(id, { signal } = {}) {
     invariant(!this.locks.has(id), 'CONFIGURATION_BUSY'); this.locks.add(id);
     try {
@@ -154,7 +189,7 @@ export class Broker {
         (s.turn.receivedAt||s.turn.origin==='browser');
       const previousNativeMessageId=s.turn?.outcome==='failed'&&!s.turn?.notSent&&!confirmedStopAnchor
         ?null:lastVerifiedNativeMessageId;
-      await this.call('ensure',id,{config:s.config,conversationId:s.conversationId,tabId:s.tabId,previousDocumentKey:s.documentKey,previousNativeMessageId},{signal});
+      await this.call('ensure',id,{conversationId:s.conversationId,tabId:s.tabId,previousDocumentKey:s.documentKey,previousNativeMessageId},{signal});
       return this.snapshot(id);
     } finally { this.locks.delete(id); }
   }
@@ -500,7 +535,7 @@ export class Broker {
       if(c.phase==='done' && c.result?.receiptPending && result.receipt===true &&
          s?.turn?.receiptPending && s.turn.id===c.payload.turnId &&
          s.turn.lease===lease && s.tabId===c.tabId && s.documentKey===c.documentKey){
-        invariant(sameSelection(result.config,s.config),'RECEIPT_UNCONFIRMED');
+        invariant(sameSelection(result.config,c.payload.config),'RECEIPT_UNCONFIRMED');
         invariant(conversationId(result.url)===s.conversationId,'WRONG_CONVERSATION');
         const nativeId=verifyNativeId(result.nativeMessageId);
         s.turn.receiptPending=false;s.turn.nativeMessageId=nativeId;rememberUserReceipt(s,nativeId);
@@ -582,7 +617,7 @@ export class Broker {
         d.catalog = validateCatalog(result.catalog);
         c.result = { catalog: d.catalog };
       } else if (c.kind === 'open' || c.kind === 'configure' || c.kind === 'ensure') {
-        invariant(s && sameSelection(result.config, c.payload.config), 'CONFIG_NOT_CONFIRMED');
+        invariant(s && (!c.payload.config || sameSelection(result.config, c.payload.config)), 'CONFIG_NOT_CONFIRMED');
         invariant(result.tabId === c.tabId, 'WRONG_TAB');
         if(c.kind==='ensure') {
           // Ensure confirms the Conversation and configuration, not the
@@ -590,15 +625,14 @@ export class Broker {
           // independent reconciliation rather than adopting unobserved turns.
         }
         if(s.tabId!==c.tabId||s.documentKey!==c.documentKey)resetObservationDocument(s,c.tabId,c.documentKey);
-        s.config = result.config;
-        if (s.pendingConfig && sameSelection(s.pendingConfig,s.config)) delete s.pendingConfig;
+        // A browser control receipt must not overwrite a newer Paseo choice.
         if (s.conversationId) invariant(conversationId(result.url) === s.conversationId, 'WRONG_CONVERSATION');
-        c.result = { config: s.config, tabId: s.tabId };
+        c.result = { tabId: s.tabId };
       } else if (c.kind === 'send') {
         invariant(c.phase === 'authorized' && s && s.turn.id === c.payload.turnId && !s.turn.notSent, 'SEND_NOT_AUTHORIZED');
         const conversation = conversationId(result.url);
         invariant(conversation && (!s.conversationId || s.conversationId === conversation), 'WRONG_CONVERSATION');
-        invariant(result.receipt === true && sameSelection(result.config, s.config), 'RECEIPT_UNCONFIRMED');
+        invariant(result.receipt === true && sameSelection(result.config, c.payload.config), 'RECEIPT_UNCONFIRMED');
         const nativeMessageId = verifyNativeId(result.nativeMessageId);
         s.conversationId = conversation; s.tabId = c.tabId; s.documentKey = c.documentKey; rememberUserReceipt(s,nativeMessageId);
         if (c.payload.contextRevision === s.contextRevision) s.contextPending = false;
@@ -608,7 +642,7 @@ export class Broker {
         // The page can prove its text receipt independently from whether
         // the selected @ app was serialized in the exact ChatGPT POST.
         // Never treat a DOM-only chip or unknown transport as tool access.
-        const appNetworkEvidence=!s.config.appIds.length?'none':
+        const appNetworkEvidence=!c.payload.config.appIds.length?'none':
           ['included','omitted'].includes(result.appNetworkEvidence)
             ?result.appNetworkEvidence:'unverified';
         c.result = { receipt: true, conversationId: conversation, nativeMessageId, appNetworkEvidence };
@@ -670,7 +704,15 @@ export class Broker {
       return this.snapshot(id);
     } finally { this.locks.delete(id); }
   }
-  async prompt(id, clientMessageId, value, { signal, attachments = [] } = {}) {
+  async openPage(id, {signal} = {}) {
+    invariant(!this.locks.has(id), 'CONFIGURATION_BUSY'); this.locks.add(id);
+    try {
+      const s = this.snapshot(id); invariant(s.status === 'idle' && s.tabId === null, 'SESSION_BUSY');
+      await this.call('open', id, {conversationId:s.conversationId,tabId:null}, {signal});
+      return this.snapshot(id);
+    } finally { this.locks.delete(id); }
+  }
+  async prompt(id, clientMessageId, value, { signal, attachments = [], reservationFingerprint } = {}) {
     identifier(clientMessageId); text(value, LIMITS.text, attachments.length > 0);
     invariant(!this.closed, 'RUNTIME_CLOSED');
     const turnId = randomUUID(), commandId = randomUUID();
@@ -679,14 +721,19 @@ export class Broker {
     try {
       result = await this.store.transaction(d => {
       const s = d.sessions[id]; invariant(s, 'SESSION_UNKNOWN');
-      const fingerprint = digest({ value, config: s.config, files });
       const prior = Object.hasOwn(s.prompts, clientMessageId) ? s.prompts[clientMessageId] : null;
-      if (prior) { invariant(prior.fingerprint === fingerprint, 'MESSAGE_ID_CONFLICT'); if (prior.rejected) return { rejected: prior.rejected }; return { turnId: prior.turnId, replay: true, outcome: prior.outcome }; }
+      const config = prior?.reservedConfig ?? prior?.config ?? s.config;
+      const fingerprint = digest({ value, config, files });
+      if (prior) {
+        if (prior.reservedConfig) invariant(prior.reservationFingerprint === reservationFingerprint, 'MESSAGE_ID_CONFLICT');
+        else { invariant(prior.fingerprint === fingerprint, 'MESSAGE_ID_CONFLICT');
+          if (prior.rejected) return { rejected: prior.rejected };
+          return { turnId: prior.turnId, replay: true, outcome: prior.outcome }; }
+      }
       try {
       invariant(!signal?.aborted, 'SEND_CANCELLED');
       invariant(!this.locks.has(id), 'CONFIGURATION_BUSY');
       invariant(s.status === 'idle' && s.tabId !== null, s.status === 'blocked' ? 'DELIVERY_UNCONFIRMED' : 'SESSION_BUSY');
-      invariant(!s.pendingConfig,'CONFIGURATION_PENDING');
       invariant(this.slots.has(id) || this.slots.activeIds().size < this.maxConcurrent, 'CONCURRENCY_LIMIT');
       // Durable state bytes, not a count of captured history fragments, bound storage.
       invariant(Object.values(d.commands).filter(pending).length < LIMITS.commands, 'QUEUE_FULL');
@@ -695,13 +742,13 @@ export class Broker {
       const fullText = text(prefix + value, LIMITS.text, files.length>0);
       s.error = null;
       s.status = 'sending'; s.turn = { id: turnId, clientMessageId, commandId, createdAt: now(), text: value, authorized: false, outcome: null, historyStart: s.history.length + 1 };
-      s.prompts[clientMessageId] = { fingerprint, turnId, outcome: null };
+      s.prompts[clientMessageId] = { fingerprint, config, ...(prior?.reservationFingerprint ? {reservationFingerprint:prior.reservationFingerprint}:{}), turnId, outcome: null };
       s.history.push({ type: 'user_message', id: `user:${turnId}`, text: value, clientMessageId });
-      d.commands[commandId] = { id: commandId, kind: 'send', sessionId: id, payload: { turnId, text: fullText, ...(files.length?{files}:{}), contextRevision: s.contextRevision, config: s.config, conversationId: s.conversationId, tabId: s.tabId }, phase: 'queued', createdAt: now(), deadline: now() + this.commandTimeout + (files.length ? uploadAllowance(files) : 0) };
+      d.commands[commandId] = { id: commandId, kind: 'send', sessionId: id, payload: { turnId, text: fullText, ...(files.length?{files}:{}), contextRevision: s.contextRevision, config, conversationId: s.conversationId, tabId: s.tabId }, phase: 'queued', createdAt: now(), deadline: now() + this.commandTimeout + (files.length ? uploadAllowance(files) : 0) };
       return { turnId, replay: false };
       } catch (e) {
         // Preserve failed admission identity too; retrying requires a NEW clientMessageId.
-        s.prompts[clientMessageId] = { fingerprint, rejected: e.code ?? 'ADMISSION_FAILED', outcome: 'failed' };
+        s.prompts[clientMessageId] = { fingerprint, config, ...(prior?.reservationFingerprint ? {reservationFingerprint:prior.reservationFingerprint}:{}), rejected: e.code ?? 'ADMISSION_FAILED', outcome: 'failed' };
         return { rejected: e.code ?? 'ADMISSION_FAILED' };
       }
     });

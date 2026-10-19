@@ -21,9 +21,9 @@
   const moved = () => {
     navigationEpoch++;
     const currentRoute = conversationRoute();
-    if (currentRoute !== lastRoute) { routeEpoch++; lastRoute = currentRoute; }
+    if (currentRoute !== lastRoute) { routeEpoch++; lastRoute = currentRoute; globalThis.CIP_DOM?.invalidateModelMatch?.(); }
     const currentPathname = location.pathname;
-    if (currentPathname !== lastPathname) { pathEpoch++; lastPathname = currentPathname; }
+    if (currentPathname !== lastPathname) { pathEpoch++; lastPathname = currentPathname; globalThis.CIP_DOM?.invalidateModelMatch?.(); }
     // A -> B -> A must revoke observation even if it happens between polls.
     if (monitor && conversation() !== monitor.conversationId) revokeObservation(monitor);
   };
@@ -35,7 +35,7 @@
   const conversation = conversationRoute;
   const pageIdentity = () => {
     if (monitor && conversation() !== monitor.conversationId) revokeObservation(monitor);
-    return { engine: 'cos-native-alpha4.3', protocol: 8, documentKey, url: location.href,
+    return { engine: 'cos-native-alpha4.3', protocol: 9, documentKey, url: location.href,
       observationRevoked: monitor?.routeRevoked === true };
   };
   const fail = code => { throw Object.assign(new Error(code), { code }); };
@@ -117,19 +117,27 @@
       commands.set(c.id, true);
       switch (c.kind) {
         case 'catalog': return { catalog: await D.catalog(guard) };
-        case 'open': case 'configure': return { config: await D.configure(c.payload.config, guard, c.deadline), url: location.href, tabId: c.tabId };
+        case 'open': {
+          await D.preparePage(guard);
+          return { url: location.href, tabId: c.tabId };
+        }
+        // Retain only for older in-flight control commands during upgrades.
+        case 'configure': return { config: await D.configure(c.payload.config, guard, c.deadline), url: location.href, tabId: c.tabId };
         case 'ensure': {
-          const config=await D.configure(c.payload.config,guard,c.deadline);await D.refreshTranscript();guard();
+          await D.preparePage(guard);await D.refreshTranscript();guard();
           const nativeMessageId=D.messages().filter(row=>row.role==='user').at(-1)?.id??null;
           // This may be a later webpage-origin turn. Continuing a bound
           // Conversation must not depend on the old native user ID.
-          return {config,url:location.href,tabId:c.tabId,nativeMessageId};
+          return {url:location.href,tabId:c.tabId,nativeMessageId};
         }
         case 'send': {
           try {
             const result=await D.send(c, async () => { guard(); return rpc({ type: 'authorize', id: c.id, lease: c.lease, documentKey }); }, guard, request => rpc({...request,documentKey}));
             if(result?.receipt===true && typeof result.nativeMessageId==='string' &&
                 conversation() && !revoked){
+              // First Send may change '/' into '/c/<id>' within this document.
+              // Keep its confirmed model on the new route for the next turn.
+              D.rememberModelMatch?.(c.payload.config);
               lateSendReceipts.set(c.payload.turnId,{
                 nativeMessageId:result.nativeMessageId,conversationId:conversation(),
                 documentKey,pathEpoch

@@ -60,5 +60,7 @@ jobs:
         run: |
           python tests/attachment-order-browser.py
           python tests/failed-send-disposal-browser.py
+      - name: Configure-on-send native picker reuse (offline)
+        run: python tests/config-at-send-browser.py
       - name: Real unpacked MV3, isolated ChatGPT fixture (no account)
         run: python tests/binding-mv3-current.py

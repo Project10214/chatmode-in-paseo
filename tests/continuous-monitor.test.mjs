@@ -8,7 +8,7 @@ test('MON-01 identity is synchronous URL/document proof, independent of every co
   const identity = await f.identity();
   assert.equal(identity.ok, true);
   assert.deepEqual(identity.value, { documentKey: f.session().documentKey, url: URL_A,
-    engine: 'cos-native-alpha4.3', protocol: 8, observationRevoked: false });
+    engine: 'cos-native-alpha4.3', protocol: 9, observationRevoked: false });
   assert.equal(f.state.sourceReads, 0); assert.equal(f.state.controlReads, 0);
   assertObserverOnly(f);
 });
@@ -283,7 +283,7 @@ test('MON-22 catalog/configure/ensure and archive-idle probes retain command saf
   assert.equal(f.state.catalogued, 1);
   f.navigate('chat-a');
   for (const kind of ['configure', 'ensure']) assert.equal((await f.send(f.command(kind))).ok, true);
-  assert.equal(f.state.configured, 2);
+  assert.equal(f.state.configured, 1, 'Ensure only checks the page and does not apply a model');
   f.state.state = 'standby'; await f.monitor();
   assert.equal((await f.message({ type: 'archive-idle' })).value.idle, true);
   f.state.draft = 'unsent draft'; assert.equal((await f.message({ type: 'archive-idle' })).value.idle, false);

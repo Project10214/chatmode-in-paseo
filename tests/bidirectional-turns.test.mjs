@@ -16,22 +16,19 @@ const config={cwd:'/fixture',env:{},settings:{},mcpServers:{},persist:true,
   model:'m1',thinkingOption:'standard',providerOptions:{appIds:['asdk_app_a']}};
 const url=s=>`https://chatgpt.com/c/chat-${s.tabId}`;
 
-test('TURN-C: running turn configuration is durable but only applied after the native run ends',async t=>{
+test('TURN-C: running turn keeps its frozen tools when local selection changes',async t=>{
   const f=await fixture(t),s=await f.ready();
-  await f.sending(s,'active','text');
+  const old=await f.sending(s,'active','text');
   const desired={...s.config,appIds:[]};
-  await f.broker.stageConfiguration(s.id,desired);
-  assert.deepEqual(f.broker.snapshot(s.id).config.appIds,['asdk_app_a']);
-  assert.deepEqual(f.broker.snapshot(s.id).pendingConfig.appIds,[]);
-  await f.view(f.broker.snapshot(s.id),{state:'standby'});
-  await assert.rejects(f.broker.prompt(s.id,'should-not-send','text'),/CONFIGURATION_PENDING/);
-  const apply=f.broker.configure(s.id,desired);apply.catch(()=>{});
-  const command=await until(()=>f.broker.queued().find(x=>x.kind==='configure'&&x.sessionId===s.id));
-  const claimed=await f.broker.claim(command.id,s.tabId,s.documentKey);
-  await f.broker.result(command.id,claimed.lease,{config:desired,tabId:s.tabId,url:url(s)});
-  await apply;
+  await f.broker.saveSelection(s.id,desired);
   assert.deepEqual(f.broker.snapshot(s.id).config.appIds,[]);
-  assert.equal(f.broker.snapshot(s.id).pendingConfig,undefined);
+  assert.deepEqual(f.store.read().commands[old.claim.id].payload.config.appIds,['asdk_app_a']);
+  assert.equal(f.broker.queued().filter(c=>c.kind==='configure').length,0);
+  await f.view(f.broker.snapshot(s.id),{state:'standby'});
+  const newer=await f.broker.prompt(s.id,'after-change','text');
+  assert.ok(newer.turnId);
+  const next=f.broker.queued().find(c=>c.kind==='send');
+  assert.deepEqual(next.payload.config.appIds,[]);
 });
 
 test('TURN-D: native Paseo settings accept an active turn with next-turn tool selection',async t=>{
@@ -45,8 +42,9 @@ test('TURN-D: native Paseo settings accept an active turn with next-turn tool se
   await until(()=>events.find(x=>x.type==='session.ready'));
   await conn.send({type:'session.configure',requestId:'change-apps',sessionId:'paseo',changes:{settings:{'app:quick':'none'}}});
   await until(()=>events.find(x=>x.type==='request.completed'&&x.requestId==='change-apps'));
-  assert.deepEqual(f.broker.snapshot(s.id).pendingConfig.appIds,[]);
-  assert.deepEqual(f.broker.snapshot(s.id).config.appIds,['asdk_app_a']);
+  assert.deepEqual(f.broker.snapshot(s.id).config.appIds,[]);
+  assert.equal(f.broker.snapshot(s.id).pendingConfig,undefined);
+  assert.equal(f.broker.queued().filter(c=>c.kind==='configure').length,0);
   assert.equal(events.filter(x=>x.type==='session.config').at(-1).config.settings[0].value,'none');
   await f.view(f.broker.snapshot(s.id),{state:'standby'});
   assert.equal(f.broker.snapshot(s.id).status,'idle');
@@ -72,13 +70,13 @@ test('TURN-E: host wake uses the existing Agent commands path, never an outbound
   assert.equal(commands,2);
 });
 
-test('TURN-G: switching pending tools back to active settings clears the deferred change',async t=>{
+test('TURN-G: multiple settings changes during running turn keep only the latest desired config',async t=>{
   const f=await fixture(t),s=await f.ready();await f.sending(s,'running','text');
-  await f.broker.stageConfiguration(s.id,{...s.config,appIds:[]});
-  assert.deepEqual(f.broker.snapshot(s.id).pendingConfig.appIds,[]);
-  const cleared=await f.broker.stageConfiguration(s.id,s.config);
-  assert.equal(cleared.pending,false);
-  assert.equal(f.broker.snapshot(s.id).pendingConfig,undefined);
+  await f.broker.saveSelection(s.id,{...s.config,appIds:[]});
+  assert.deepEqual(f.broker.snapshot(s.id).config.appIds,[]);
+  await f.broker.saveSelection(s.id,s.config);
+  assert.deepEqual(f.broker.snapshot(s.id).config.appIds,['asdk_app_a']);
+  assert.equal(f.broker.queued().filter(c=>c.kind==='configure').length,0);
   await f.view(f.broker.snapshot(s.id),{state:'standby'});
   const newTurn=await f.broker.prompt(s.id,'following','new');
   assert.ok(newTurn.turnId);

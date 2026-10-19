@@ -20,6 +20,7 @@ function pageFixture(t,behavior,{initialRoute='/c/bound',boundId='bound'}={}){
   };
   const D={
     conversationId:()=>/^\/c\/([A-Za-z0-9-]+)(?:\/|$)/.exec(route)?.[1]??null,
+    preparePage:async guard=>{await behavior({location,emit,guard,phase:'configure'});guard();},
     configure:async(cfg,guard)=>{await behavior({location,emit,guard,phase:'configure'});return cfg;},
     send:async(command,authorize,guard)=>{
       await behavior({location,emit,guard,phase:'send'});

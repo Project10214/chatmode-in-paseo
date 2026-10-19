@@ -1,6 +1,6 @@
 # Chatmode in Paseo｜产品说明书
 
-更新：2026-10-19；本说明针对 **Paseo 插件 0.1.0-alpha.4.44、Chrome 扩展 0.2.48、CIP v8**。版本以 `package.json`、`extension/manifest.json` 和 `server/protocol.mjs` 为准。它仍属于 alpha，不是正式验收声明。
+更新：2026-10-19；本说明针对 **Paseo 插件 0.1.0-alpha.4.45、Chrome 扩展 0.2.49、CIP v9**。版本以 `package.json`、`extension/manifest.json` 和 `server/protocol.mjs` 为准。它仍属于 alpha，不是正式验收声明。
 
 ## 1. 产品定位
 
@@ -25,7 +25,7 @@ Chrome 与 Paseo 后台需在同一电脑；手机上的 Paseo 可以连接该�
 
 ## 3. 新版核心设计
 
-| 功能 | v8 当前行为 |
+| 功能 | v9 当前行为 |
 | --- | --- |
 | 一次性发送与回执 | 精确 command/lease/页面身份；结果未知绝不自动重新点击 Send |
 | 已知未发送清理 | 删除未发送的网页草稿和可确认的本地临时副本，留下 ID 防重放；无服务端证明时保留证据 |
@@ -50,4 +50,4 @@ Chrome 与 Paseo 后台需在同一电脑；手机上的 Paseo 可以连接该�
 
 `npm test`、`npm run typecheck`、`npm run test:sdk` 和隔离 Chrome/MV3 回归只能证明各自执行过的路径。**真实已登录账号 + Chrome + Paseo 宿主的收发、工具权限、Stop、媒体、断线、归档和恢复仍需要独立验收**；版本号更新或 CI 全绿不是替代。
 
-升级运行中的插件之前，须等待安全窗口，备份退出后的 `CIP_STATE_DIR`，成套替换 Paseo 与 Chrome，核对 Runtime `/hello` 的 protocol、扩展实际加载版本与原 Agent 观察身份。不要清理活锁或强制重放结果未知的消息。详细步骤和测试命令见 [README](../README.md)、[测试与验收指南](TESTING.md) 与 [CIP v8 协议](PROTOCOL.md)。
+升级运行中的插件之前，须等待安全窗口，备份退出后的 `CIP_STATE_DIR`，成套替换 Paseo 与 Chrome，核对 Runtime `/hello` 的 protocol、扩展实际加载版本与原 Agent 观察身份。不要清理活锁或强制重放结果未知的消息。详细步骤和测试命令见 [README](../README.md)、[测试与验收指南](TESTING.md) 与 [CIP v9 协议](PROTOCOL.md)。

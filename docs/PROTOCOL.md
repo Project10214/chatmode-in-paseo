@@ -1,7 +1,7 @@
-# CIP v8：Chrome 扩展与本机 Runtime 协议
+# CIP v9：Chrome 扩展与本机 Runtime 协议
 
-适用源码：Paseo 插件 `0.1.0-alpha.4.44`，Chrome 扩展 `0.2.48`（2026-10-19）。
-**唯一版本依据**：`server/protocol.mjs` 的 `PROTOCOL` 与 `extension/background.js` 的 `PROTOCOL`。此协议不是 MCP、ACP 或原版 CoS bridge；Paseo Provider 另采用其原生 v1 接口。旧 CIP v1–v7 不能与 v8 混用。
+适用源码：Paseo 插件 `0.1.0-alpha.4.45`，Chrome 扩展 `0.2.49`（2026-10-19）。
+**唯一版本依据**：`server/protocol.mjs` 的 `PROTOCOL` 与 `extension/background.js` 的 `PROTOCOL`。此协议不是 MCP、ACP 或原版 CoS bridge；Paseo Provider 另采用其原生 v1 接口。旧 CIP v1–v8 不能与 v9 混用。
 
 ## 通信与身份
 
@@ -16,7 +16,7 @@ Paseo Agent → Provider → Runtime（127.0.0.1:17843） ↔ Chrome MV3 worker
 - Runtime 仅监听回环地址，拒绝超大 JSON（`LIMITS.body` 为 768000 字节）和超额请求；`CIP_STATE_DIR`、`CIP_PORT` 只由本机环境设置。
 - **发送/命令**要求会话、command ID、tabId、documentKey、lease、Conversation 精确匹配。**持续观察**另使用 observationLease、generation 和递增序号；重新绑定时旧 lease 失效。两条路径不可互相授权。
 
-## v8 真实端点
+## v9 真实端点
 
 | 端点 | 作用 |
 | --- | --- |
@@ -37,7 +37,7 @@ Paseo Agent → Provider → Runtime（127.0.0.1:17843） ↔ Chrome MV3 worker
 | `POST /verify-approval` | 扩展每次点击授权按钮前检查已认领命令的租约、页面、当前自动允许开关、人工撤销；拒绝后不能点击 |
 | `GET /recovery-targets`、`POST /resume-agent` | 扩展升级时只恢复已绑定页面和原 Agent，不产生新轮次 |
 
-**已废弃**：v5 的 `/active`、`/bindings`、`/external-turn`、`/external-gap`、`/event`。它们不属于 v8 Runtime 路由，不能作为安装或联调指令。
+**已废弃**：v5 的 `/active`、`/bindings`、`/external-turn`、`/external-gap`、`/event`。它们不属于 v9 Runtime 路由，不能作为安装或联调指令。
 
 ## 行为约束
 

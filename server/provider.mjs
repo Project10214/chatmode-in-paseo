@@ -1,4 +1,4 @@
-import { BridgeError, invariant, validateSelection, sameSelection } from './protocol.mjs';
+import { BridgeError, invariant, validateSelection } from './protocol.mjs';
 import { createHash } from 'node:crypto';
 import { catalogService } from './catalog.mjs';
 import { createChromeWake } from './chrome-wake.mjs';
@@ -64,7 +64,7 @@ export function hostMcpNotice(servers = {}) {
     description: '请使用 ChatGPT 已授权应用。' } : null;
 }
 export function configState(session, catalog, defaults = {}) {
-  const effective=session.pendingConfig??session.config;
+  const effective=session.config;
   const chosen=effective.appIds, saved=defaults.appIds??[];
   const same=(a,b)=>a.length===b.length&&a.every(id=>b.includes(id));
   const selected=chosen.length===0?'none'
@@ -153,7 +153,7 @@ export function activityText(data) {
 const BARRIER_RETRY_MS=5000;
 function createConnection(runtime,capabilities,validateEvent,observation=null) {
   const {broker,store}=runtime;
-  const listeners=new Set(),sessions=new Map(),opening=new Set(),promptResults=new Map();
+  const listeners=new Set(),sessions=new Map(),opening=new Set(),promptResults=new Map(),admissions=new Map();
   const startedTurns=new Set(),endedTurns=new Set();
   const controller=new AbortController();
   let closed=false,closing=false;
@@ -181,6 +181,14 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
     return forwarded;
   };
   const host=id=>{const binding=sessions.get(id);invariant(binding,'SESSION_UNKNOWN');return binding;};
+  // Only the local acceptance transaction is serialized, not the long-running
+  // browser Send. Configure can proceed while an earlier turn is generating.
+  const admit=(id,work)=>{
+    const previous=admissions.get(id)??Promise.resolve();
+    const next=previous.then(work,work);
+    admissions.set(id,next.catch(()=>{}));
+    return next;
+  };
   // Continuous page observation emits many DOM-local process/media sources for
   // one Work panel. Present them as one compact activity card per turn instead
   // of hundreds of page-source cards. The source ledger remains untouched.
@@ -564,14 +572,11 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
           if(input.persistence && !s.conversationId)
             await store.transaction(d=>{d.sessions[s.id].tabId=null;d.sessions[s.id].documentKey=null;});
           const resumingActive=['sending','running','stopping'].includes(s.status);
+          await broker.saveSelection(s.id,selection);
           if(resumingActive){
-            if(!sameSelection(selection,s.pendingConfig??s.config))
-              await broker.stageConfiguration(s.id,selection);
-            // Delay any new context until the next user prompt; never mutate
-            // a turn whose native browser operation is still active.
+            // Only the current turn's immutable command matters to its receipt.
             binding.pendingContext={cwd:input.config.cwd,systemPrompt:input.config.systemPrompt??''};
           } else {
-            await broker.deferConfigure(s.id, selection);
             invariant(!closed && !closing, 'CONNECTION_CLOSED');
             await broker.updateContext(s.id, { cwd: input.config.cwd, systemPrompt: input.config.systemPrompt ?? '' });
           }
@@ -626,8 +631,8 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
         binding.confirmed = true;
         const {text:value,attachments}=promptContent(input.prompt);
         invariant(!attachments.some(p=>p.type==='image')||capabilities.includes('prompt.image'),'CAPABILITY_NOT_NEGOTIATED');
-        // Its own failure is reported on that request; the prompt then checks the page itself.
-        if (binding.configuring) await binding.configuring.catch(() => {});
+        // Freeze the model/tool choice before Chrome wake or any prior-turn wait.
+        await admit(input.sessionId,()=>broker.reservePrompt(id,input.prompt.clientMessageId,fingerprint));
         invariant(!binding.preparing, 'SESSION_BUSY');
         const preparing = new AbortController(); binding.preparing = preparing;
         binding.deferred ??= new Map();
@@ -667,20 +672,12 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
           // Do this BEFORE queuing any Send, so a failed OS wake is not a
           // failed/duplicate ChatGPT message.
           await (runtime.chromeWake ?? wakeChrome)({status:()=>runtime.status(),signal});
-          const pending=broker.snapshot(id).pendingConfig;
-          if(pending){
-            await broker.configure(id,pending,{signal});
-            configEvent(input.sessionId,id);
-          }
-          if (broker.snapshot(id).tabId === null) {
-            await broker.configure(id, broker.snapshot(id).config, { signal });
-            invariant(!signal.aborted, 'SEND_CANCELLED');
-            configEvent(input.sessionId, id);
-            emit({ type: 'session.notice', sessionId: input.sessionId, notice: { id: 'native-config-pending', severity: 'info',
-              title: '网页配置已核验', dismissed: true } });
-          } else await broker.ensurePage(id, { signal });
+          // Page preparation only checks identity. Model/apps are applied
+          // inside the single Send command, never on settings changes.
+          if (broker.snapshot(id).tabId === null) await broker.openPage(id, { signal });
+          else await broker.ensurePage(id, { signal });
           invariant(!signal.aborted && !closed && !closing, 'SEND_CANCELLED');
-          result = await broker.prompt(id, input.prompt.clientMessageId, value, { signal, attachments });
+          result = await broker.prompt(id, input.prompt.clientMessageId, value, { signal, attachments, reservationFingerprint:fingerprint });
           // The user's own message is already durably admitted. Echo it now so
           // the Paseo timeline does not wait for the native click/receipt; the
           // later prompt_result and turn events still gate host execution.
@@ -710,29 +707,17 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
       }
       case 'session.configure': {
         invariant(capabilities.includes('session.configure'), 'CAPABILITY_NOT_NEGOTIATED');
-        const binding = host(input.sessionId); const { id } = binding; const old = broker.snapshot(id); const change = input.changes;
+        const binding = host(input.sessionId); const { id } = binding; const change = input.changes;
         invariant(change.mode == null, 'MODE_UNSUPPORTED');
-        const desired=old.pendingConfig??old.config;
-        const selection = selectionFrom({ model: change.model ?? desired.model,
-          thinkingOption: change.thinkingOption === undefined ? (change.model && change.model !== desired.model ? undefined : desired.thinkingOption) : change.thinkingOption,
-          settings: change.settings ?? {}, providerOptions: { appIds: desired.appIds } }, store.read().catalog, store.read().defaults);
-        invariant(!binding.preparing, 'SESSION_BUSY');
-        if(['sending','running','stopping'].includes(old.status)){
-          await broker.stageConfiguration(id,selection);
-          emit({type:'session.notice',sessionId:input.sessionId,notice:{id:'deferred-config',severity:'info',
-            title:'新配置已保存，下轮发送前应用'}});
-        }else if(old.tabId===null) await broker.deferConfigure(id, selection);
-        else {
-          // A prompt sent right after this (Paseo applies the composer's
-          // model first) waits for it instead of failing CONFIGURATION_BUSY.
-          const work=(async()=>{
-            const signal=AbortSignal.any([controller.signal,binding.controller.signal]);
-            await (runtime.chromeWake ?? wakeChrome)({status:()=>runtime.status(),signal});
-            await broker.configure(id, selection, { signal });
-          })();
-          binding.configuring=work;
-          try { await work; } finally { if(binding.configuring===work) binding.configuring=null; }
-        }
+        await admit(input.sessionId,async()=>{
+          const desired=broker.snapshot(id).config;
+          const selection=selectionFrom({ model: change.model ?? desired.model,
+            thinkingOption: change.thinkingOption === undefined ? (change.model && change.model !== desired.model ? undefined : desired.thinkingOption) : change.thinkingOption,
+            settings: change.settings ?? {}, providerOptions: { appIds: desired.appIds } },store.read().catalog,store.read().defaults);
+          await broker.saveSelection(id,selection);
+        });
+        emit({type:'session.notice',sessionId:input.sessionId,notice:{id:'deferred-config',severity:'info',
+          title:'配置已保存，下条消息发送时应用'}});
         configEvent(input.sessionId, id); emit({ type: 'request.completed', requestId: input.requestId }); return;
       }
       case 'session.permission': {
@@ -811,10 +796,11 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
       invariant(!closed && !closing, 'CONNECTION_CLOSED');
       // Do not await a browser roundtrip here: acceptance is separate from lifecycle events.
       invariant(['catalog', 'session.open', 'session.prompt', 'session.configure', 'session.interrupt', 'session.permission', 'session.archive', 'session.unarchive', 'session.close'].includes(input.type), 'CAPABILITY_UNSUPPORTED');
-      queueMicrotask(() => dispatch(input).catch(e => {
+      queueMicrotask(() => dispatch(input).catch(async e => {
         if (input.type === 'session.prompt') {
+          const binding=sessions.get(input.sessionId);
+          if(binding)await broker.abandonPromptReservation(binding.id,input.prompt.clientMessageId,e.code??'BRIDGE_FAILURE').catch(()=>{});
           disposition(input.sessionId, input.prompt.clientMessageId, { type: 'failed', error: errorOf(e) });
-          const binding = sessions.get(input.sessionId);
           if (!binding?.preparing) releaseDeferred(input.sessionId, binding, true);
         }
         else if ('requestId' in input) emit({ type: 'request.failed', requestId: input.requestId, error: errorOf(e) });

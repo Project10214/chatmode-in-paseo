@@ -11,7 +11,7 @@
 
 在 Paseo 创建 Chatmode Agent，按网页实际观察选择模型、思考强度和 `@` 应用；本项目的 Chrome 扩展发送消息并回传可见回答。开发机文件和终端操作继续使用 ChatGPT 中已经接入并授权的 MCP。
 
-**状态：alpha。** 版本以 `package.json`（Paseo 插件）和 `extension/manifest.json`（Chrome 扩展）为准，协议为 **CIP v8**。Node、类型、SDK 和离线浏览器测试有独立验证入口；GitHub CI 的浏览器回归配置需在远端运行后才算通过，见[测试与验收指南](docs/TESTING.md)。真实已登录 ChatGPT 账号上的端到端验收尚未全部完成，现状与已知限制见[产品说明书](docs/PRODUCT_MANUAL.md)。
+**状态：alpha。** 版本以 `package.json`（Paseo 插件）和 `extension/manifest.json`（Chrome 扩展）为准，协议为 **CIP v9**。Node、类型、SDK 和离线浏览器测试有独立验证入口；GitHub CI 的浏览器回归配置需在远端运行后才算通过，见[测试与验收指南](docs/TESTING.md)。真实已登录 ChatGPT 账号上的端到端验收尚未全部完成，现状与已知限制见[产品说明书](docs/PRODUCT_MANUAL.md)。
 
 **主要能力：**
 
@@ -29,7 +29,7 @@
 Paseo 界面 / Agent
      ⇅ 原生 Provider 协议 v1（不是 ACP）
 Paseo 插件 + 一个共享 Runtime
-     ⇅ CIP v8 · http://127.0.0.1:17843
+     ⇅ CIP v9 · http://127.0.0.1:17843
 本仓库 Chrome 扩展
      ⇅ 网页操作与观察
 ChatGPT 网页 / 模型 ──已授权 @ 应用──→ 开发主机 MCP
@@ -41,7 +41,7 @@ ChatGPT 网页 / 模型 ──已授权 @ 应用──→ 开发主机 MCP
 
 创建 Paseo 会话时只保存配置；**首次发送时**才创建独立 ChatGPT 标签页。后续只凭已绑定 Conversation 自动打开原对话，旧消息 ID 仅用于独立去重/追踪而不阻止开页；目录刷新使用单独临时页。
 
-原版 CoS bridge 14、CIP v1–v7 与本版不兼容。**协议与引擎：CIP v8、Provider v1、浏览器/Runtime 引擎 `cos-native-alpha4.3`；插件与扩展的版本以 `package.json`、`extension/manifest.json` 为准。** 已有生产插件不会随源码更新：首次加载新版本应选择安全窗口。**此后 Chrome 扩展的版本更新**将自动刷新本插件管理的已打开对话页面、重建采集脚本并请求激活原 Paseo Agent；升级过程中结果不明的旧消息绝不自动重发。
+原版 CoS bridge 14、CIP v1–v8 与本版不兼容。**协议与引擎：CIP v9、Provider v1、浏览器/Runtime 引擎 `cos-native-alpha4.3`；插件与扩展的版本以 `package.json`、`extension/manifest.json` 为准。** 已有生产插件不会随源码更新：首次加载新版本应选择安全窗口。**此后 Chrome 扩展的版本更新**将自动刷新本插件管理的已打开对话页面、重建采集脚本并请求激活原 Paseo Agent；升级过程中结果不明的旧消息绝不自动重发。
 
 | 位置 | 内容 |
 | --- | --- |

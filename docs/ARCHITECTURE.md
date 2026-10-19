@@ -1,6 +1,6 @@
-# Chatmode in Paseo 架构与边界（CIP v8）
+# Chatmode in Paseo 架构与边界（CIP v9）
 
-适用：Paseo 插件 `alpha.4.44`、Chrome 扩展 `0.2.48`。端点与安全校验见 [PROTOCOL.md](PROTOCOL.md)，真实验收入口见 [TESTING.md](TESTING.md)。
+适用：Paseo 插件 `alpha.4.45`、Chrome 扩展 `0.2.49`。端点与安全校验见 [PROTOCOL.md](PROTOCOL.md)，真实验收入口见 [TESTING.md](TESTING.md)。
 
 ## 1. 一套 Provider、一套 Runtime、一个 Chrome 扩展
 
@@ -11,7 +11,7 @@ Paseo Agent ↔ Provider（server/provider.mjs）
               ├─ 单次 Send 命令、租约、停止、权限动作
               ├─ 已绑定对话的观察身份及网页控件状态
               └─ 公开来源账本、投影、交付游标
-                    ↕  CIP v8 · 127.0.0.1:17843
+                    ↕  CIP v9 · 127.0.0.1:17843
              Chrome MV3 background
                     ↕ 隔离脚本 / 公开 MAIN 阅读器
                 ChatGPT 网页 / 已授权 @ 应用

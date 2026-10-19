@@ -38,6 +38,7 @@ function page(t) {
     state: () => { throw new Error('legacy native state must not be sampled'); },
     refreshTranscript: async () => { state.transcriptReads++; if (state.transcriptThrows) throw new Error('transcript unavailable'); },
     messages: () => { state.messagesReads++; if (state.transcriptThrows) throw new Error('native messages unavailable'); return []; },
+    preparePage: async guard => { state.transcriptReads++; guard(); },
     configure: async (config, guard) => { state.configured++; guard(); return config; },
     catalog: async guard => { state.catalogued++; guard(); return { models: [] }; },
     authored: () => state.draft, approvalPending: () => state.pendingApproval,

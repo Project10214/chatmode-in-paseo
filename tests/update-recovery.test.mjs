@@ -289,7 +289,7 @@ test('UPDATE15 late onInstalled(update) after version-change fallback never doub
   assert.equal(f.requests.filter(x=>x.name==='/resume-agent').length,1);
 });
 
-test('UPDATE16 protocol-7 runtime cannot authorize a protocol-8 refresh, wake or Send',async()=>{
+test('UPDATE16 protocol-7 runtime cannot authorize a protocol-9 refresh, wake or Send',async()=>{
   const f=await worker({oldProtocol:true});
   await f.start('update');await f.pump();
   assert.deepEqual(f.reloads,[]);

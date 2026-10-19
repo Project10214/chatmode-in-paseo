@@ -1,4 +1,4 @@
-export const PROTOCOL = 8; // Bound-conversation page views; button state and typed sources are independent.
+export const PROTOCOL = 9; // Identity-only page preparation; Send owns model and tool configuration.
 export const PRODUCT = 'chatmode-in-paseo';
 export const LIMITS = Object.freeze({ text: 64000, answer: 256000, body: 768000, apps: 32, models: 100, commands: 64, history: 1000, turnFragments: 16 });
 export class BridgeError extends Error {

@@ -53,7 +53,11 @@ test('I05 preparing A does not block independent B; configuration cannot race fi
  const f=await ctx(t);await f.open('a');await f.open('b');await f.c.send(prompt('a'));await f.c.send(prompt('b'));
  await until(()=>f.broker.queued().filter(c=>c.kind==='open').length===2);
  await f.c.send({type:'session.configure',sessionId:'a',requestId:'race',changes:{model:'m2'}});
- const rejected=await until(()=>f.events.find(e=>e.type==='request.failed'&&e.requestId==='race'));assert.equal(rejected.error.code,'SESSION_BUSY');
+ await until(()=>f.events.some(e=>e.type==='request.completed'&&e.requestId==='race'));
+ const a=f.events.find(e=>e.type==='session.opened'&&e.sessionId==='a').persistence.data.id;
+ assert.equal(f.broker.snapshot(a).config.model,'m2');
+ assert.equal(f.broker.snapshot(a).prompts.p1.reservedConfig.model,'m1');
+ assert.equal(f.broker.queued().filter(c=>c.kind==='configure').length,0);
  await f.c.send({type:'session.interrupt',sessionId:'a',requestId:'stopA'});
  await until(()=>f.broker.queued().length===1);assert.equal(f.broker.queued()[0].sessionId,f.events.find(e=>e.type==='session.opened'&&e.sessionId==='b').persistence.data.id);
 });

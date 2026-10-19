@@ -1,4 +1,4 @@
-const PROTOCOL = 8, DEFAULT_ENDPOINT = 'http://127.0.0.1:17843';
+const PROTOCOL = 9, DEFAULT_ENDPOINT = 'http://127.0.0.1:17843';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 let pumpFlight = null, timer = null, loaded = null, lastOnlineAt = 0, pairingIntent = 0;
 let config, ledger, tabs, catalogBrowserId, upgradeRecovery=null, updateEventPending=false, versionRecoveryInitiated=false;

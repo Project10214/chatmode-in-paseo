@@ -28,7 +28,7 @@ async function worker(t, options = {}) {
   });
   const ephemeral = {}, calls = [], messages = [], events = {}, created = [], reloads = [];
   const state = {
-    observations: [], commands: [], targets: [], helloProtocol: 8,
+    observations: [], commands: [], targets: [], helloProtocol: 9,
     tabs: new Map((options.pageTabs ?? [{ id: 71, url: URL_A }]).map(tab => [tab.id, structuredClone(tab)])),
     identities: new Map(), pageState: 'standby', monitorOk: true,
     receipt: { ok: false, error: 'TRANSCRIPT_UNCONFIRMED' },
@@ -36,7 +36,7 @@ async function worker(t, options = {}) {
     noRecoveryInventory: false, clock: { now: 100000 }, ...options.state,
   };
   for (const [id, tab] of state.tabs) state.identities.set(id, {
-    engine: ENGINE, protocol: 8, documentKey: id === 71 ? 'document-a' : `document-${id}`, url: tab.url,
+    engine: ENGINE, protocol: 9, documentKey: id === 71 ? 'document-a' : `document-${id}`, url: tab.url,
   });
   for (const id of options.missingIdentities ?? []) state.identities.delete(id);
   let listener, nextTabId = 72, epoch = 1;
@@ -113,7 +113,7 @@ async function worker(t, options = {}) {
           while (state.tabs.has(nextTabId)) nextTabId++;
           const tab = { id: nextTabId++, url, active, status: 'complete' };
           created.push(structuredClone(tab)); state.tabs.set(tab.id, tab);
-          state.identities.set(tab.id, { engine: ENGINE, protocol: 8, documentKey: `new-document-${tab.id}`, url });
+          state.identities.set(tab.id, { engine: ENGINE, protocol: 9, documentKey: `new-document-${tab.id}`, url });
           return structuredClone(tab);
         },
         reload: async id => {
@@ -377,7 +377,7 @@ test('CONT-11 unreadable identity gap survives worker restart, gap delivery retr
   await restarted.watch(); await restarted.watch();
   assert.equal(restarted.byRoute('/observation-gap').length, 2);
   assert.equal(restarted.byRoute('/observation-gap')[1].body.reason, 'identity_unavailable');
-  restarted.state.identities.set(71, { engine: ENGINE, protocol: 8, documentKey: 'document-a', url: URL_A, observationError: 'BODY_UNREADABLE' });
+  restarted.state.identities.set(71, { engine: ENGINE, protocol: 9, documentKey: 'document-a', url: URL_A, observationError: 'BODY_UNREADABLE' });
   await restarted.watch();
   assert.equal(restarted.byMessage('monitor').length, 1);
   assert.deepEqual(restarted.local.bindingWaits, {});
