@@ -127,14 +127,50 @@ test('CPROV-01 formal assistant identity is stable across Work expansion; proces
   assert.equal(formalItems().length, 1, 'expanding Work must not re-emit the formal answer');
   assert.equal(formalItems()[0].item.text, 'formal answer');
   assert.equal(byItemId(p.events, 'page:work-tool')[0].item.type, 'tool_call');
-  const progress=byItemId(p.events,'page:work-progress')[0].item;
-  assert.equal(progress.type,'plugin');
-  assert.equal(progress.kind,'page-source');
-  assert.equal(progress.data.source.text,'visible commentary');
-  assert.equal(progress.data.source.lane,'process');
+  // Anonymous Work commentary has no native tool identity; it is presented as
+  // one compact activity card, never as a second page-source card.
+  assert.equal(byItemId(p.events,'page:work-progress').length,0);
+  const activity=p.events.filter(event=>event.type==='timeline.item'&&
+    event.item.kind==='native-activity').at(-1).item;
+  assert.equal(activity.type,'plugin');
+  assert.equal(activity.kind,'native-activity');
+  assert.ok(activity.data.steps.some(step=>step.label==='visible commentary'));
   assert.notEqual(formalItems()[0].item.id, 'page:work-tool');
-  assert.notEqual(formalItems()[0].item.id, 'page:work-progress');
+  assert.notEqual(formalItems()[0].item.id, activity.id);
   assert.ok(sent.result.turnId);
+  p.assertNoInvalid();
+});
+
+test('CPROV-12 anonymous Work rows coalesce into one compact activity card', async t => {
+  const p = await context(t);
+  const { session, sent } = await p.active();
+  const id = session.id;
+
+  await p.observe(session, { state: 'running', items: [
+    source('work-a', 'Searched 10 websites', { lane: 'process', kind: 'message' }),
+    source('work-b', 'Searched 10 websites', { lane: 'process', kind: 'message' }),
+    source('work-c', 'Initial verdict: validate this as a PoC', { lane: 'process', kind: 'message' }),
+    source('final-answer', 'final answer', { nativeMessageId: 'final-answer' })
+  ] });
+  assert.equal(byItemId(p.events, 'page:work-a').length, 0);
+  assert.equal(byItemId(p.events, 'page:work-b').length, 0);
+  await until(() => p.events.some(event => event.type === 'timeline.item' &&
+    event.item.kind === 'native-activity' && event.item.data.steps.length === 2));
+  const activity = p.events.filter(event => event.type === 'timeline.item' &&
+    event.item.kind === 'native-activity').at(-1).item;
+  assert.equal(activity.type, 'plugin');
+  assert.equal(activity.data.steps.length, 2);
+  assert.deepEqual(activity.data.steps.map(step => step.label),
+    ['Searched 10 websites', 'Initial verdict: validate this as a PoC']);
+  assert.equal(byItemId(p.events, 'page:final-answer')[0].item.type, 'assistant_message');
+
+  await p.observe(p.current(id), { state: 'standby' });
+  await until(() => p.events.some(event => event.type === 'timeline.item' &&
+    event.item.id === activity.id && event.item.data.phase === 'completed'));
+  const completed = p.events.filter(event => event.type === 'timeline.item' &&
+    event.item.id === activity.id).at(-1).item;
+  assert.equal(completed.data.steps.length, 2);
+  assert.ok(completed.data.steps.every(step => step.done));
   p.assertNoInvalid();
 });
 

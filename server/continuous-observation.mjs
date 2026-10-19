@@ -95,7 +95,12 @@ function stateItem(session,page,issues=[]) {
   return {type:'plugin',pluginId:'chatmode-in-paseo',id:'page-state:'+session.id,
     kind:'page-state',version:1,data:{state:page.state,controls:page.controls,
       observedAt:page.observedAt,readable:page.readable,
-      issues:issues.map(issue=>({code:typeof issue?.code==='string'?issue.code:'PAGE_CAPTURE_ISSUE'}))}};
+      // The same diagnostic can be repeated by every DOM-local source in one
+      // frame. The page-state card is a summary, so keep one row per code.
+      issues:[...new Map(issues.map(issue=>{
+        const code=typeof issue?.code==='string'?issue.code:'PAGE_CAPTURE_ISSUE';
+        return [code,{code}];
+      })).values()]}};
 }
 function projectSources(session,result,commands,run,events,issues) {
   const changes=new Map(result.changes.map(change=>[change.item.id,change]));

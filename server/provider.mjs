@@ -181,11 +181,76 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
     return forwarded;
   };
   const host=id=>{const binding=sessions.get(id);invariant(binding,'SESSION_UNKNOWN');return binding;};
+  // Continuous page observation emits many DOM-local process/media sources for
+  // one Work panel. Present them as one compact activity card per turn instead
+  // of hundreds of page-source cards. The source ledger remains untouched.
+  const WORK_STEP_LIMIT=12;
+  const workLabel=value=>typeof value==='string'?value.replace(/\s+/g,' ').trim().slice(0,160):'';
+  const workKind=source=>source?.kind==='image'?'image':
+    /image|图片|图像/i.test(source?.text??'')?'image':
+    /search|搜索|浏览/i.test(source?.text??'')?'search':
+    /exec|code|运行|下载/i.test(source?.text??'')?'exec':'tool';
+  const workPhase=source=>{
+    if(source?.kind==='image')return 'image';
+    if(source?.kind==='reasoning'||/thinking|思考|分析/i.test(source?.text??''))return 'thinking';
+    if(/search|搜索|浏览/i.test(source?.text??''))return 'search';
+    if(/exec|code|运行|下载/i.test(source?.text??''))return 'exec';
+    return 'tool';
+  };
+  function workActivity(binding,key){
+    if(!binding.work)binding.work=new Map();
+    let activity=binding.work.get(key);
+    if(!activity){activity={type:'plugin',id:'activity:'+key,pluginId:'chatmode-in-paseo',
+      kind:'native-activity',version:1,data:{turnId:key,phase:'working',nativeStatus:null,steps:[]}};
+      binding.work.set(key,activity);}
+    return activity;
+  }
+  function addWorkStep(binding,source){
+    const key=typeof source.userMessageId==='string'&&source.userMessageId?source.userMessageId:'page';
+    const activity=workActivity(binding,key),data=activity.data;
+    const snapshot=broker.snapshot(binding.id);
+    const active=Boolean(snapshot.observation?.run?.active)||snapshot.status==='running';
+    const label=workLabel(source.text);
+    if(source.kind==='image'&&!source.nativeMessageId){
+      const existing=data.steps.find(step=>step.kind==='image');
+      const count=existing?(Number(/(\d+)/.exec(existing.label)?.[1])||1)+1:1;
+      const step={kind:'image',label:`网页图片（${count} 张）`,done:!active};
+      if(existing)Object.assign(existing,step);else data.steps.push(step);
+    } else if(label){
+      const existing=data.steps.find(step=>step.label===label);
+      if(!existing){
+        if(data.steps.length<WORK_STEP_LIMIT-1)data.steps.push({kind:workKind(source),label,done:!active});
+        else {
+          const overflow=data.steps.find(step=>step.label.startsWith('其余 '));
+          const count=overflow?(Number(/(\d+)/.exec(overflow.label)?.[1])||0)+1:1;
+          const summary={kind:'tool',label:`其余 ${count} 步已省略`,done:!active};
+          if(overflow)Object.assign(overflow,summary);else data.steps.push(summary);
+        }
+      } else existing.done=!active;
+    }
+    data.phase=active?workPhase(source):'completed';
+    data.nativeStatus=active?'in_progress':'complete';
+    if(!active)for(const step of data.steps)step.done=true;
+    return activity;
+  }
   const keyFor=event=>event.item?'item:'+event.item.id:event.state==='approval'?'approval:'+event.approval.key:
     event.state==='approval-closed'?'approval-close:'+event.key:event.state+':'+(event.turnId??'conversation');
   const hold=(queue,event)=>queue.set(keyFor(event),event);
   const emitItem=(hostId,item)=>{
     const binding=sessions.get(hostId);if(!binding)return;
+    // Anonymous Work rows have no exact native tool identity. Keep their raw
+    // source in the ledger, but show one compact activity card per turn.
+    if(item.type==='plugin'&&item.kind==='page-source'&&item.data?.source){
+      const source=item.data.source;
+      const anonymousProcess=source.lane==='process'&&source.nativeMessageId==null&&source.role!=='user';
+      const anonymousPageImage=source.role==='page'&&source.kind==='image'&&source.nativeMessageId==null;
+      if(anonymousProcess||anonymousPageImage){
+        const activity=addWorkStep(binding,source);
+        // addWorkStep mutates the retained activity; emit a snapshot so the
+        // binding.items comparison sees the new steps and updates the card.
+        return emitItem(hostId,structuredClone(activity));
+      }
+    }
     const before=binding.items.get(item.id);
     if(before&&JSON.stringify(before)===JSON.stringify(item))return;
     if(item.type==='assistant_message'&&binding.delivery){
@@ -231,7 +296,15 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
       if(run?.active&&run.id===event.turnId)announce(hostId,event.turnId);
       return;
     }
-    if(event.state==='page-standby') {end(hostId,event.turnId,'completed');binding.delivery?.kick();return;}
+    if(event.state==='page-standby') {
+      if(binding.work)for(const activity of binding.work.values()){
+        if(activity.data.phase==='completed')continue;
+        activity.data.phase='completed';activity.data.nativeStatus='complete';
+        for(const step of activity.data.steps)step.done=true;
+        emitItem(hostId,structuredClone(activity));
+      }
+      end(hostId,event.turnId,'completed');binding.delivery?.kick();return;
+    }
     if(event.state==='approval') {
       if(!capabilities.includes('permission')) {
         // Without permission UI this card is a notice; track it so an external
