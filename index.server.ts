@@ -7,7 +7,7 @@ import { settingsSnapshot } from './server/diagnostics.mjs';
 import { createProvider } from './server/provider.mjs';
 import { createWakeCoordinator } from './server/wake.mjs';
 import { createHostObservation } from './server/host-observation.mjs';
-import { snapshot, saveDefaults, saveConcurrency, pair, abandon } from './shared/rpc.js';
+import { snapshot, saveDefaults, saveConcurrency, saveAutoAllow, pair, abandon } from './shared/rpc.js';
 import { readImage } from './shared/images.js';
 import { readArtifact } from './shared/artifacts.js';
 
@@ -41,6 +41,7 @@ export default function contribute(server: PluginServerContext) {
   });
   server.handle(snapshot, async ({ refresh }, context) => { wake.adopt(context.paseo); return settingsSnapshot(await ready, refresh); });
   server.handle(saveConcurrency, async ({ maxConcurrent }) => (await ready).broker.setConcurrency(maxConcurrent));
+  server.handle(saveAutoAllow, async ({ enabled }) => (await ready).broker.setAutoAllowApprovals(enabled));
   server.handle(readImage, async input => { const { broker } = await ready; return broker.media.read(broker, input); });
   server.handle(readArtifact, async input => (await ready).broker.artifactTransfer.read(input));
   server.handle(saveDefaults, async selection => (await ready).broker.defaults(selection));

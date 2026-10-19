@@ -14,7 +14,7 @@ function unspentReservations(data) {
     return sum + Math.max(0, TURN_RESERVE_BYTES - spent);
   }, 0);
 }
-export const initialState = () => ({ version: 1, sessions: {}, archiveIndex: {}, commands: {}, catalog: null, defaults: { appIds: [] } });
+export const initialState = () => ({ version: 1, sessions: {}, archiveIndex: {}, commands: {}, catalog: null, defaults: { appIds: [] }, runtimeSettings: {} });
 
 /** Serialized, crash-safe state. Archive rows are durable before master records leave. */
 export class Store {

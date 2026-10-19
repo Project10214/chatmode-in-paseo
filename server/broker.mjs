@@ -83,10 +83,18 @@ export class Broker {
     this.slots = new SlotQueue(this); concurrencyValue(this.maxConcurrent);
   }
   get maxConcurrent() { return this.store.read().runtimeSettings?.maxConcurrent ?? this.defaultConcurrency; }
+  get autoAllowApprovals() { return this.store.read().runtimeSettings?.autoAllowApprovals === true; }
   async setConcurrency(value) {
     concurrencyValue(value); invariant(!this.closed, 'RUNTIME_CLOSED');
     await this.store.transaction(d => { d.runtimeSettings = { ...(d.runtimeSettings ?? {}), maxConcurrent: value }; });
     this.slots.pump(); return { maxConcurrent: this.maxConcurrent };
+  }
+  async setAutoAllowApprovals(enabled) {
+    invariant(typeof enabled === 'boolean' && !this.closed, 'RUNTIME_CLOSED');
+    await this.store.transaction(d => {
+      d.runtimeSettings = { ...(d.runtimeSettings ?? {}), autoAllowApprovals: enabled };
+    });
+    return { enabled: this.autoAllowApprovals };
   }
   lastNativeMessage(s) {
     if (s.lastNativeMessageId) return s.lastNativeMessageId;
@@ -750,7 +758,8 @@ export class Broker {
       const s=d.sessions[id],request=s?.approvals?.[key];
       invariant(s&&request?.state==='open'&&!request.answered&&s.observation&&
         s.tabId!==null&&s.documentKey,'APPROVAL_GONE');
-      invariant(request.clickable!==false,'APPROVAL_UNRECOGNIZED');
+      invariant(request.clickable!==false ||
+        (choice==='allow-auto' && request.autoEligible===true),'APPROVAL_UNRECOGNIZED');
       invariant(!Object.values(d.commands).some(c=>c.kind==='approval'&&c.sessionId===id&&pending(c)),'APPROVAL_BUSY');
       invariant(Object.values(d.commands).filter(pending).length<LIMITS.commands,'QUEUE_FULL');
       const commandId=randomUUID();

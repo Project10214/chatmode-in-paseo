@@ -715,10 +715,37 @@
   async function answerApproval(options) {
     const guard = actionGuard(options); guard();
     const { key, choice } = options;
-    if (typeof key !== 'string' || !key || !['allow-once', 'deny'].includes(choice))
+    if (typeof key !== 'string' || !key || !['allow-once', 'deny', 'allow-auto'].includes(choice))
       fail('APPROVAL_UNSUPPORTED');
     const content = globalThis.CIP_PAGE_CONTENT;
     if (typeof content?.resolveApproval !== 'function') fail('APPROVAL_UNAVAILABLE');
+    if (choice === 'allow-auto') {
+      if (typeof content.resolveApprovalAuto !== 'function') fail('APPROVAL_UNAVAILABLE');
+      let plan = content.resolveApprovalAuto(key);
+      if (!plan?.buttons?.length) fail('APPROVAL_GONE');
+      const card = plan.buttons[0]?.closest('[data-codex-approval-surface="true"]');
+      if (!card) fail('APPROVAL_GONE');
+      guard();
+      let clicked = 0;
+      for (const button of plan.buttons) {
+        if (!card.isConnected || !button.isConnected || button.closest('[data-codex-approval-surface="true"]') !== card ||
+            !actionable(button)) break;
+        const displayedRequest = card.innerText;
+        button.click(); // Auto policy only: exact classified tier, all current matches.
+        clicked++;
+        await until(() => {
+          if (!card.isConnected) return true;
+          if (card.innerText !== displayedRequest) return true;
+          if (button.disabled || button.matches(':disabled') ||
+              button.getAttribute('aria-disabled') === 'true') return true;
+          return !button.isConnected || button.closest('[data-codex-approval-surface="true"]') !== card;
+        }, 5000, 'APPROVAL_UNCONFIRMED', guard);
+        guard();
+        if (!card.isConnected) break;
+      }
+      if (!clicked) fail('APPROVAL_GONE');
+      return { answered: true, key, choice, tier: plan.tier, clicked };
+    }
     const button = content.resolveApproval(key, choice);
     const card = button?.closest('[data-codex-approval-surface="true"]');
     if (!card || !actionable(button)) fail('APPROVAL_GONE');

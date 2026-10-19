@@ -3,7 +3,7 @@ import { View, Text, Pressable, Switch } from 'react-native';
 import { useRpc, type PluginSurfaceProps } from '@getpaseo/plugin/client';
 import { Icon, TextInput, copyText } from '@getpaseo/plugin/client/react-native';
 import type { RpcOutput } from '@getpaseo/plugin';
-import { snapshot, saveDefaults, saveConcurrency, pair, abandon } from '../shared/rpc.js';
+import { snapshot, saveDefaults, saveConcurrency, saveAutoAllow, pair, abandon } from '../shared/rpc.js';
 
 type State = RpcOutput<typeof snapshot>;
 const ERROR_LABELS: Record<string,string> = {
@@ -18,9 +18,10 @@ const ERROR_LABELS: Record<string,string> = {
 };
 const effortLabel:Record<string,string>={low:'轻量',medium:'适中',high:'深入',xhigh:'最高',standard:'标准',extended:'延长'};
 export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
-  const read=useRpc(snapshot),save=useRpc(saveDefaults),setLimit=useRpc(saveConcurrency),makePair=useRpc(pair),endTracking=useRpc(abandon);
+  const read=useRpc(snapshot),save=useRpc(saveDefaults),setLimit=useRpc(saveConcurrency),setAutoAllow=useRpc(saveAutoAllow),makePair=useRpc(pair),endTracking=useRpc(abandon);
   const [limit,setLimitValue]=useState<number|null>(null),[limitNotice,setLimitNotice]=useState('');
   async function persistLimit(){setBusy(true);mutationEpoch.current++;try{const saved=await setLimit({maxConcurrent:limit??state?.capacity?.limit??2});mutationEpoch.current++;if(mounted.current){setLimitValue(null);setState(s=>s?{...s,capacity:{limit:saved.maxConcurrent,active:s.capacity?.active??0,waiting:s.capacity?.waiting??0}}:s);setLimitNotice('已保存并生效，不中断已占用名额的轮次。');}}catch{mutationEpoch.current++;if(mounted.current)setLimitNotice('保存未确认，所选上限已保留，请检查连接。');}finally{if(mounted.current)setBusy(false);}}
+  async function persistAuto(enabled:boolean){setBusy(true);setNotice('');mutationEpoch.current++;try{const saved=await setAutoAllow({enabled});mutationEpoch.current++;if(mounted.current){setState(s=>s?{...s,autoAllow:saved.enabled}:s);setNotice(saved.enabled?'已开启自动允许。':'已关闭自动允许。');}}catch{mutationEpoch.current++;if(mounted.current)setNotice('保存未确认，请检查连接。');}finally{if(mounted.current)setBusy(false);}}
   const [state,setState]=useState<State|null>(null),[model,setModel]=useState(''),[thinking,setThinking]=useState<string|null>(null),[apps,setApps]=useState<string[]>([]);
   const [busy,setBusy]=useState(false),[changed,setChanged]=useState(false),[notice,setNotice]=useState(''),[error,setError]=useState(''),[query,setQuery]=useState('');
   const [pairing,setPairing]=useState<RpcOutput<typeof pair>|null>(null),[pairOpen,setPairOpen]=useState(false),[diagnostics,setDiagnostics]=useState(false),[confirmAbandon,setConfirmAbandon]=useState<string|null>(null);
@@ -94,6 +95,17 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
       <Text style={{color:c.foregroundMuted,fontSize:12,lineHeight:19}}>对话中的「工具」菜单可切换应用。本页可设置多应用默认组合，仅用于新建 Agent，不新增授权。</Text>
       <View style={{gap:10,backgroundColor:c.surface2,padding:14,borderRadius:10}}><Text style={{color:c.foreground,fontSize:13}}>{selectedModel?.label??'尚未选择模型'} · {thinking?(effortLabel[thinking]??thinking):'默认强度'} · {apps.length} 个应用{changed?' · 未保存':''}</Text>{button(busy?'正在处理…':'保存默认配置',()=>void persist(),{primary:true,icon:'Check',disabled:busy||!!state?.refreshing||!connected||!state?.catalog||!model})}{changed&&button('撤销修改',()=>{if(state){dirty.current=false;setChanged(false);defaults(state);setNotice('未保存的修改已撤销。');}},{icon:'Undo2'})}</View>
       {!!notice&&<Text accessibilityLiveRegion="polite" selectable style={{color:c.foreground,fontSize:13,lineHeight:20}}>{notice}</Text>}
+    </>)}
+    {section('04','网页授权自动允许','仅处理精确识别的一次性/持久允许按钮；未知或歧义仍回退手动。',<>
+      <View style={{flexDirection:'row',alignItems:'center',gap:12}}>
+        <View style={{flex:1,gap:3}}>
+          <Text style={{color:c.foreground,fontSize:13,fontWeight:'600'}}>自动允许网页授权</Text>
+          <Text style={{color:c.foregroundMuted,fontSize:12,lineHeight:18}}>开启后，识别到的持久允许优先，其次一次性允许；同一层有多个就全部点击。</Text>
+        </View>
+        <Switch accessibilityLabel="自动允许网页授权" disabled={busy||!state} value={state?.autoAllow??false} onValueChange={v=>void persistAuto(v)} />
+      </View>
+      <Text style={{color:c.statusWarning,fontSize:12,lineHeight:19}}>持久授权会改变 ChatGPT 账户的权限，Paseo 没有撤销入口。只有确认网页按钮文案后才会点击；未知文案、禁用按钮或没有拒绝按钮时不自动处理。</Text>
+      {!!notice&&<Text accessibilityLiveRegion="polite" style={{color:c.foreground,fontSize:13}}>{notice}</Text>}
     </>)}
     <Pressable accessibilityRole="button" accessibilityState={{expanded:diagnostics}} onPress={()=>setDiagnostics(v=>!v)} style={{minHeight:44,flexDirection:'row',alignItems:'center',gap:8}}><Icon name={diagnostics?'ChevronDown':'ChevronRight'} size={16} color={c.foregroundMuted}/><Text style={{color:c.foregroundMuted,fontSize:13}}>诊断与异常记录{state?.blocked.length?` · ${state.blocked.length}`:''}</Text></Pressable>
     {diagnostics&&<View style={{padding:16,gap:14,borderWidth:1,borderColor:c.border,borderRadius:12}}><Text selectable style={{color:c.foregroundMuted,fontSize:12,lineHeight:19}}>最近列表更新：{state?.lastCatalogAttempt?({queued:'排队中',claimed:'读取中',authorized:'处理中',done:'已完成',failed:'失败'}[state.lastCatalogAttempt.phase]??state.lastCatalogAttempt.phase):'尚无记录'}{state?.lastCatalogAttempt?.error?` · ${state.lastCatalogAttempt.error}`:''}</Text><Text style={{color:c.foregroundMuted,fontSize:12,lineHeight:19}}>结束本地跟踪不会停止网页任务或删除历史。请先确认网页任务已结束，并在 Paseo 关闭对应 Agent。</Text>{state?.blocked.map(s=><View key={s.id} style={{gap:8}}><Text selectable style={{color:c.foregroundMuted,fontSize:12}}>{s.id} · {s.error}</Text>{button(confirmAbandon===s.id?'确认结束本地跟踪':'结束本地跟踪',()=>{if(confirmAbandon!==s.id){setConfirmAbandon(s.id);return;}setBusy(true);endTracking({sessionId:s.id,confirmed:true}).then(()=>{setConfirmAbandon(null);return reader.current({refresh:false});}).then(apply).catch(()=>setNotice('结束跟踪失败，请确认已在 Paseo 关闭对应 Agent。')).finally(()=>setBusy(false));},{danger:true,icon:'Unplug'})}</View>)}</View>}

@@ -319,6 +319,25 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
       binding.permissionSignatures.set(event.approval.key,signature);
       binding.permissions.set(event.approval.key,'open');
       emit({type:'session.permission',sessionId:hostId,request:permissionRequest(event.approval)});
+      const auto=store.read().runtimeSettings?.autoAllowApprovals===true &&
+        event.approval.autoEligible===true && Boolean(event.approval.autoTier) &&
+        !binding.autoApprovals?.has(event.approval.key);
+      if(auto) {
+        binding.autoApprovals ??= new Set();
+        binding.autoApprovals.add(event.approval.key);
+        binding.respondingPermissions.set(event.approval.key,'allow-auto');
+        void broker.answerApproval(binding.id,event.approval.key,'allow-auto').then(()=>{
+          emit({type:'session.notice',sessionId:hostId,notice:{id:'auto-approval:'+event.approval.key,
+            severity:'info',title:'已自动允许网页授权',
+            description:`${event.approval.app??'网页'}${event.approval.tool?' · '+event.approval.tool:''}`}});
+        }).catch(error=>{
+          binding.respondingPermissions.delete(event.approval.key);
+          binding.autoApprovals.delete(event.approval.key);
+          emit({type:'session.notice',sessionId:hostId,notice:{id:'auto-approval-failed:'+event.approval.key,
+            severity:'warning',title:'自动允许未完成',
+            description:errorLabel(error?.code??'APPROVAL_UNCONFIRMED')}});
+        });
+      }
       return;
     }
     if(event.state==='approval-closed') {

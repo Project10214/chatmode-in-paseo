@@ -116,3 +116,38 @@ test('APPROVAL-4 an unrecognized card still becomes a Paseo request that points 
   await assert.rejects(f.broker.answerApproval(s.id, odd.key, 'allow-once'), /APPROVAL_UNRECOGNIZED/);
   assert.equal(f.broker.queued().filter(c => c.kind === 'approval').length, 0, 'nothing queued for the page');
 });
+
+test('APPROVAL-5 the global auto switch answers an exact anonymous approval without a Paseo click', async t => {
+  const f = await fixture(t), s = await f.ready();
+  await f.sending(s);
+  const connection = await createProvider({ ...f, status: () => ({ connected: true }) }, event => ProviderEventSchema.parse(event))
+    .connect({ versions: [1], capabilities: CAPABILITIES });
+  t.after(() => connection.close());
+  const events = [];
+  connection.onEvent(event => events.push(event));
+  await connection.send({ type: 'session.open', requestId: 'auto-open', sessionId: 'auto-host', history: 'skip',
+    persistence: { version: 1, data: { id: s.id } }, config: { cwd: '/x', env: {}, settings: {}, mcpServers: {}, persist: true,
+      model: 'm1', thinkingOption: 'standard', providerOptions: { appIds: ['asdk_app_a'] } } });
+  await until(() => events.some(event => event.type === 'session.ready'));
+
+  const auto = { ...card, key: '6f1c2d3e-0000-4000-8000-000000000010', clickable: false,
+    autoEligible: true, autoTier: 'once', labels: ['Allow once', 'Deny'] };
+  await f.view(s, { state: 'standby', approvals: [auto] });
+  assert.equal(f.broker.queued().filter(c => c.kind === 'approval').length, 0,
+    'the switch is off by default and never writes an approval command');
+  await f.broker.setAutoAllowApprovals(true);
+  const on = { ...auto, key: '6f1c2d3e-0000-4000-8000-000000000011' };
+  await f.view(s, { state: 'standby', approvals: [on] });
+  const command = await until(() => f.broker.queued().find(c => c.kind === 'approval'));
+  assert.equal(command.payload.choice, 'allow-auto');
+  assert.equal(events.filter(event => event.type === 'session.permission' && event.request.id === on.key).length, 1,
+    'the request remains visible as the manual fallback');
+  const claim = await f.broker.claim(command.id, s.tabId, s.documentKey);
+  await f.broker.result(command.id, claim.lease,
+    { answered: true, key: on.key, choice: 'allow-auto', tier: 'once', clicked: 1 });
+  await until(() => events.some(event => event.type === 'session.notice' &&
+    event.notice.title === '已自动允许网页授权'));
+  await f.view(s, { state: 'standby', closedApprovals: [on.key] });
+  assert.equal(f.broker.snapshot(s.id).approvals[on.key].state, 'resolved');
+  assert.equal(events.filter(event => event.type === 'session.permission_resolved').length, 1);
+});

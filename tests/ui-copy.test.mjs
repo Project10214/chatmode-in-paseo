@@ -145,7 +145,7 @@ test('COPY errors are concise, preserve uncertainty, and never expose arbitrary 
 });
 
 const settingsState = () => ({ checkedAt: Date.now(), status: { connected: true, paired: true, address: '127.0.0.1', lastSeenAt: Date.now() },
-  defaults: { appIds: [] }, catalog: null, observation: { active: 1, syncBlocked: 0, recoverable: 0 },
+  defaults: { appIds: [] }, autoAllow: false, catalog: null, observation: { active: 1, syncBlocked: 0, recoverable: 0 },
   capacity: { active: 1, waiting: 0, limit: 2 }, refreshing: false, blocked: [], lastCatalogAttempt: { phase: 'done' } });
 
 test('COPY settings render in compact and wide layouts without stale version or streaming claims', () => {

@@ -96,6 +96,7 @@ export async function settingsSnapshot(runtime, refresh = false) {
   const { refreshing, refreshStartedAt, error } = service.snapshot();
   if (!refreshError && !refreshing) refreshError = error || (lastCatalogAttempt?.phase === 'failed' ? lastCatalogAttempt.error : null);
   return { checkedAt: Date.now(), status: runtime.status(), observation: observationHealth(state, runtime.broker), catalog: state.catalog, defaults: state.defaults,
+    autoAllow: state.runtimeSettings?.autoAllowApprovals === true,
     capacity: runtime.broker.slots?.snapshot() ?? { limit: 2, active: 0, waiting: 0 },
     refreshing, refreshStartedAt, refreshError, lastCatalogAttempt,
     blocked: Object.values(state.sessions).filter(s => s.status === 'blocked').map(s => ({ id: s.id, error: safeError(s.error ?? 'RESULT_UNCONFIRMED') })) };

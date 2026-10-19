@@ -195,6 +195,17 @@ with sync_playwright() as pw:
               'missing app identity reported as server incompatibility, never replaced with an invented app')
         snapshot = load('<main><div data-codex-approval-surface="true"><p>请求</p><button>拒绝</button><button>允许一次</button></div></main>')
         check(snapshot['approvals'][0]['clickable'], 'explicit Chinese approval captions supported')
+        snapshot = load('<main><div data-codex-approval-surface="true"><div role="alert">Allow ChatGPT to use fixture?</div>'+
+          '<button>Always allow</button><button>Allow once</button><button>Deny</button></div></main>')
+        auto=snapshot['approvals'][0]
+        check(auto['autoEligible'] is True and auto['autoTier'] == 'persistent' and auto['clickable'] is True,
+              'auto tier prefers a persistent allow while manual allow-once remains available')
+        snapshot = load('<main><div data-codex-approval-surface="true"><div role="alert">Allow ChatGPT to use fixture?</div>'+
+          '<button>Always allow</button><button>Deny</button></div></main>')
+        check(snapshot['approvals'][0]['autoEligible'] is True and snapshot['approvals'][0]['clickable'] is False,
+              'persistent-only cards are auto-eligible but have no manual allow-once action')
+        snapshot = load('<main><div data-codex-approval-surface="true"><button>Sure</button><button>Deny</button></div></main>')
+        check(snapshot['approvals'][0]['autoEligible'] is False, 'unknown labels are not auto-eligible')
         snapshot = load('<main><div data-codex-approval-surface="true"><button>Always allow</button><button>Deny</button></div></main>')
         check(not snapshot['approvals'][0]['clickable'], 'Always allow cannot substitute for Allow once')
         snapshot = load('<main><div data-codex-approval-surface="true"><button>Allow</button><button>Allow once</button><button>Deny</button></div></main>')

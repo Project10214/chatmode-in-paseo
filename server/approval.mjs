@@ -6,7 +6,7 @@ import { invariant } from './protocol.mjs';
 const KEY = /^[a-z0-9-]{8,64}$/;
 const APP = /^[\p{L}\p{N}_.: ·()-]{1,80}$/u;
 const TOOL = /^[A-Za-z0-9_.:-]{1,80}$/;
-export const APPROVAL_CHOICES = Object.freeze(['allow-once', 'deny']);
+export const APPROVAL_CHOICES = Object.freeze(['allow-once', 'deny', 'allow-auto']);
 
 /** Strict shape of the page's report; anything else is an error, never a request. */
 export function approvalEvent(value) {
@@ -16,7 +16,7 @@ export function approvalEvent(value) {
     invariant(Object.keys(value).every(k => ['state', 'key'].includes(k)), 'APPROVAL_INVALID');
     return { state: 'closed', key: value.key };
   }
-  invariant(Object.keys(value).every(k => ['state', 'key', 'app', 'tool', 'input', 'clickable', 'allowLabel', 'denyLabel', 'labels', 'text'].includes(k)), 'APPROVAL_INVALID');
+  invariant(Object.keys(value).every(k => ['state', 'key', 'app', 'tool', 'input', 'clickable', 'allowLabel', 'denyLabel', 'labels', 'text', 'autoEligible', 'autoTier'].includes(k)), 'APPROVAL_INVALID');
   // Button captions as the page shows them (UI text only); shown on the
   // Paseo actions so the user sees exactly which page button is clicked.
   const caption = v => typeof v === 'string' && v.length > 0 && v.length <= 40 && !/[\n\u0000]/.test(v);
@@ -24,7 +24,9 @@ export function approvalEvent(value) {
   invariant(typeof clickable === 'boolean', 'APPROVAL_INVALID');
   invariant(clickable ? (value.allowLabel === undefined || caption(value.allowLabel)) && (value.denyLabel === undefined || caption(value.denyLabel))
     : value.allowLabel === undefined && value.denyLabel === undefined, 'APPROVAL_INVALID');
-  invariant(value.labels === undefined || (Array.isArray(value.labels) && value.labels.length <= 6 && value.labels.every(caption)), 'APPROVAL_INVALID');
+  invariant(value.labels === undefined || (Array.isArray(value.labels) && value.labels.length <= 16 && value.labels.every(caption)), 'APPROVAL_INVALID');
+  invariant(value.autoEligible === undefined || typeof value.autoEligible === 'boolean', 'APPROVAL_INVALID');
+  invariant(value.autoTier === undefined || ['persistent','once','confirm',null].includes(value.autoTier), 'APPROVAL_INVALID');
   invariant(value.text === undefined || (typeof value.text === 'string' && value.text.isWellFormed() && !value.text.includes('\u0000')), 'APPROVAL_INVALID');
   invariant((typeof value.app === 'string' && APP.test(value.app)) || (value.app === null && value.text?.trim()), 'APPROVAL_INVALID');
   invariant(value.tool === null || (typeof value.tool === 'string' && TOOL.test(value.tool)), 'APPROVAL_INVALID');
@@ -32,6 +34,8 @@ export function approvalEvent(value) {
     value.input.isWellFormed() && !value.input.includes('\u0000')), 'APPROVAL_INVALID');
   return { state: 'open', key: value.key, app: value.app, tool: value.tool, input: value.input, clickable,
     ...(value.allowLabel ? { allowLabel: value.allowLabel } : {}), ...(value.denyLabel ? { denyLabel: value.denyLabel } : {}),
+    autoEligible: value.autoEligible === true,
+    ...(value.autoTier ? { autoTier: value.autoTier } : {}),
     labels: value.labels ?? [], ...(value.text !== undefined ? {text:value.text} : {}) };
 }
 

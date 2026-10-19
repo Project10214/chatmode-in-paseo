@@ -26,6 +26,41 @@
   const SPECIAL = '[data-tool-call-id],[role="alert"],[role="status"],[data-public-reasoning-summary]';
   const BLOCK = /^(P|DIV|SECTION|ARTICLE|LI|UL|OL|PRE|BLOCKQUOTE|H[1-6]|TABLE|TR|DETAILS|SUMMARY)$/;
   const WORK = /^(?:Work(?:\s+for\s+.+)?|Worked\s+for\s+.+|Previous activity|工作(?:过程|记录)?|思考过程|之前的活动)$/i;
+  // Exact one-time/persistent confirmation captions. No substring matching:
+  // "Always allow", "Allow all" and "Trust" are persistent and intentionally
+  // separate from an ordinary one-time Allow.
+  const APPROVAL_LABELS = {
+    persistent: new Set([
+      'always allow','allow always','allow all','always approve','approve always','approve all',
+      'allow for this chat','allow for this conversation','allow for this session','allow for all chats',
+      'allow and remember','remember my choice','remember this choice',"don't ask again",'do not ask again',
+      'trust this app','trust this tool','trust','always',
+      '始终允许','总是允许','永久允许','一直允许','全部允许','允许全部','始终批准','全部批准',
+      '在此对话中始终允许','在此会话中始终允许','记住我的选择','记住选择','不再询问','不再提示',
+      '信任此应用','信任此工具','信任'
+    ]),
+    once: new Set([
+      'allow','allow once','approve','approve once','accept','accept once','authorize','authorize once',
+      '允许','允许一次','允許','允許一次','批准','批准一次','通过','通過','授权','授權','确认授权','確認授權'
+    ]),
+    confirm: new Set([
+      'continue','yes','ok','okay','proceed','confirm','i understand','got it',
+      '继续','繼續','是','好','确定','確定','确认','確認','明白','我知道了'
+    ]),
+    deny: new Set([
+      'deny','reject','cancel','no','close','dismiss','not now','later',
+      '拒绝','拒絕','取消','否','关闭','關閉','稍后','稍後','不允许','不允許'
+    ])
+  };
+  const approvalKey = value => typeof value === 'string' ?
+    value.replace(/\s+/g,' ').trim().replace(/[.!。！]+$/u,'').toLocaleLowerCase('en-US') : '';
+  const approvalTier = value => {
+    const key = approvalKey(value);
+    for (const tier of ['persistent','once','confirm','deny'])
+      if (APPROVAL_LABELS[tier].has(key)) return tier;
+    return null;
+  };
+  const APPROVAL_CONTEXT = /Allow\s+ChatGPT\s+to\s+use|允许\s*ChatGPT\s*使用|授\s*权|permission|authorize|approve/i;
   const keys = new WeakMap(), mediaRevisions = new WeakMap();
   let mediaNodes = new Map(), mediaSequence = 0;
   let keySequence = 0;
@@ -342,10 +377,24 @@
     const buttons = [...card.querySelectorAll('button')].filter(button =>
       button.closest(APPROVAL) === card && visible(button) && !button.disabled &&
       !button.matches(':disabled') && attr(button, 'aria-disabled') !== 'true' && !button.hasAttribute('aria-haspopup'));
-    const allow = buttons.filter(button => /^(?:Allow(?: once)?|允许(?:一次)?|允許(?:一次)?)$/i.test(caption(button)));
-    const deny = buttons.filter(button => /^(?:Deny|拒绝|拒絕)$/i.test(caption(button)));
-    return { allow: allow.length === 1 ? allow[0] : null, deny: deny.length === 1 ? deny[0] : null,
-      labels: buttons.map(button => caption(button)).filter(Boolean) };
+    const groups = {persistent:[], once:[], confirm:[], deny:[]};
+    for (const button of buttons) {
+      const value = caption(button), tier = approvalTier(value);
+      if (tier) groups[tier].push({button, label:value});
+    }
+    const tier = groups.persistent.length ? 'persistent' : groups.once.length ? 'once' :
+      groups.confirm.length ? 'confirm' : null;
+    const context = APPROVAL_CONTEXT.test(textOf(card, node => node.nodeType === Node.TEXT_NODE ||
+      (readable(node) && visible(node))));
+    const autoEligible = Boolean(tier && groups.deny.length > 0 &&
+      (tier !== 'confirm' || context));
+    const clickable = groups.once.length === 1 && groups.deny.length === 1;
+    return {
+      allow: clickable ? groups.once[0].button : null,
+      deny: clickable ? groups.deny[0].button : null,
+      labels: buttons.map(button => caption(button)).filter(Boolean),
+      groups, tier, autoEligible
+    };
   }
   function linkedApprovalPanels(card) {
     const panels = new Set();
@@ -442,6 +491,7 @@
         const clickable = Boolean(buttons.allow && buttons.deny), app = approvalApp(card);
         trackApproval(saved.key, card, root);
         result.push({ key: saved.key, text, app, tool: null, input, clickable, labels: buttons.labels,
+          autoEligible: buttons.autoEligible, autoTier: buttons.tier,
           ...(clickable ? { allowLabel: caption(buttons.allow), denyLabel: caption(buttons.deny) } : {}) });
         if (!clickable) issues.push({ code: 'APPROVAL_ACTIONS_UNRECOGNIZED', key: saved.key });
         // Preserve out-of-contract source values rather than truncate/rename
@@ -449,7 +499,7 @@
         if (!app || !/^[\p{L}\p{N}_.: ·()-]{1,80}$/u.test(app))
           issues.push({ code: 'APPROVAL_APP_UNCONFIRMED', key: saved.key });
         if ((input !== null && (input.length > 4096 || input.includes('\0') || !input.isWellFormed())) ||
-            buttons.labels.length > 6 || buttons.labels.some(label => label.length > 40 || /[\n\0]/.test(label)))
+            buttons.labels.length > 16 || buttons.labels.some(label => label.length > 40 || /[\n\0]/.test(label)))
           issues.push({ code: 'APPROVAL_SERVER_SHAPE_UNSUPPORTED', key: saved.key });
       } catch { issues.push({ code: 'APPROVAL_READ_FAILED' }); }
     }
@@ -522,6 +572,19 @@
     }
     return null;
   }
+  function resolveApprovalAuto(key) {
+    const issues = [], scopes = roots(issues);
+    const requests = approvalsIn(scopes, issues);
+    if (!requests.some(request => request.key === key && request.autoEligible)) return null;
+    for (const root of scopes) for (const card of root.querySelectorAll(APPROVAL)) {
+      if (keys.get(card)?.key !== key || !visible(card)) continue;
+      const buttons = approvalButtons(card);
+      if (!buttons.autoEligible || !buttons.tier) continue;
+      const group = buttons.groups[buttons.tier];
+      if (group.length) return {tier: buttons.tier, buttons: group.map(value => value.button)};
+    }
+    return null;
+  }
   function resolveMedia(id) {
     const known = mediaNodes.get(id);
     if (!known || known.cid !== conversationId() || !known.node.isConnected) return null;
@@ -530,5 +593,5 @@
     // Re-read ownership and resource selection NOW, not the previous frame.
     return {node:known.node,...mediaEvidence(known.node,known.kind)};
   }
-  globalThis.CIP_PAGE_CONTENT = Object.freeze({ read, resolveApproval, resolveMedia });
+  globalThis.CIP_PAGE_CONTENT = Object.freeze({ read, resolveApproval, resolveApprovalAuto, resolveMedia });
 })();

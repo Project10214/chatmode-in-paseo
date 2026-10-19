@@ -48,6 +48,11 @@ with sync_playwright() as pw:
             messages.append(card);for(const button of card.querySelectorAll('button'))button.onclick=()=>{actionClicks[button.dataset.choice]++;card.remove();};
             return card;};
           window.approvalOptions=(choice='allow-once')=>({key:CIP_PAGE_CONTENT.read().approvals[0].key,choice,conversationId:cid,guard:commandGuard});
+          window.addAutoApproval=(labels=['Allow once','Allow','Deny'])=>{const card=document.createElement('div');card.dataset.codexApprovalSurface='true';
+            card.innerHTML='<div role="alert">Allow ChatGPT to use fixture-tool?</div>'+labels.map((label,i)=>`<button data-choice="${i}">${label}</button>`).join('');
+            messages.append(card);for(const button of card.querySelectorAll('button'))button.onclick=()=>{actionClicks['auto-'+button.dataset.choice]=(actionClicks['auto-'+button.dataset.choice]||0)+1;button.disabled=true;
+              if(![...card.querySelectorAll('button')].some(other=>!other.disabled&&!['deny','cancel'].includes(other.textContent.toLowerCase())))card.remove();};
+            return card;};
           const actualNow=Date.now;window.actionClock=0;Date.now=()=>actualNow()+actionClock;
         }''', CID)
         return page
@@ -97,6 +102,49 @@ with sync_playwright() as pw:
         page = fresh()
         page.evaluate('''()=>{send.remove();const voice=document.createElement('button');voice.setAttribute('aria-label','Start Voice');box.closest('form').append(voice);addStop();}''')
         check(page.evaluate('tryAction(()=>CIP_DOM.stop(stopOptions()))')['ok'], 'Stop disappearance plus visible Voice is confirmed standby')
+        page.close()
+
+        page = fresh()
+        page.evaluate("addAutoApproval(['Allow once','Allow','Deny'])")
+        result = page.evaluate("tryAction(()=>CIP_DOM.answerApproval(approvalOptions('allow-auto')))")
+        check(result['ok'] and result['value']['choice']=='allow-auto' and result['value']['clicked']==2
+              and page.evaluate("actionClicks['auto-0']")==1 and page.evaluate("actionClicks['auto-1']")==1
+              and (page.evaluate("actionClicks['auto-2']") or 0)==0,
+              'auto approval clicks every one-time allow candidate, never Deny')
+        page.close()
+
+        page = fresh()
+        page.evaluate("addAutoApproval(['Always allow','Allow once','Deny'])")
+        result = page.evaluate("tryAction(()=>CIP_DOM.answerApproval(approvalOptions('allow-auto')))")
+        check(result['ok'] and result['value']['tier']=='persistent' and result['value']['clicked']==1
+              and page.evaluate("actionClicks['auto-0']")==1 and (page.evaluate("actionClicks['auto-1']") or 0)==0
+              and (page.evaluate("actionClicks['auto-2']") or 0)==0,
+              'auto approval prefers a persistent allow and does not also click the one-time button')
+        page.close()
+
+        page = fresh()
+        page.evaluate("addAutoApproval(['Always allow','Trust this app','Deny'])")
+        result = page.evaluate("tryAction(()=>CIP_DOM.answerApproval(approvalOptions('allow-auto')))")
+        check(result['ok'] and result['value']['tier']=='persistent' and result['value']['clicked']==2
+              and page.evaluate("actionClicks['auto-0']")==1 and page.evaluate("actionClicks['auto-1']")==1
+              and (page.evaluate("actionClicks['auto-2']") or 0)==0,
+              'auto approval clicks every persistent allow candidate, never Deny')
+        page.close()
+
+        page = fresh()
+        page.evaluate("addAutoApproval(['Continue','OK','Deny'])")
+        result = page.evaluate("tryAction(()=>CIP_DOM.answerApproval(approvalOptions('allow-auto')))")
+        check(result['ok'] and result['value']['tier']=='confirm' and result['value']['clicked']==2
+              and page.evaluate("actionClicks['auto-0']")==1 and page.evaluate("actionClicks['auto-1']")==1
+              and (page.evaluate("actionClicks['auto-2']") or 0)==0,
+              'auto approval clicks all generic confirmation candidates inside a recognized approval card')
+        page.close()
+
+        page = fresh()
+        page.evaluate("addAutoApproval(['Sure','Deny'])")
+        result = page.evaluate("tryAction(()=>CIP_DOM.answerApproval(approvalOptions('allow-auto')))")
+        check(not result['ok'] and page.evaluate("actionClicks['auto-0']||0")==0 and page.evaluate("actionClicks['auto-1']||0")==0,
+              'unknown labels are never guessed by auto approval')
         page.close()
 
         for mode in ['allow-after-ended','deny-after-ended','disabled-after-click','no-composer-approval']:

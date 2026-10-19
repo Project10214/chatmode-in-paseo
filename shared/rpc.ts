@@ -12,10 +12,12 @@ export const snapshot = defineRpc({ name: 'bridge.snapshot', input: z.object({ r
     capacity: z.object({ limit: z.number().int().min(1).max(8), active: z.number().int().nonnegative(), waiting: z.number().int().nonnegative() }).optional(),
     status: z.object({ address: z.string(), connected: z.boolean(), paired: z.boolean(), protocol: z.number(), lastSeenAt: z.number().optional() }),
     observation: observationHealthSchema.optional(),
-    catalog: catalog.nullable(), defaults: selection, blocked: z.array(z.object({ id: z.string(), error: z.string() })) }) });
+    catalog: catalog.nullable(), defaults: selection, autoAllow: z.boolean(), blocked: z.array(z.object({ id: z.string(), error: z.string() })) }) });
 export const saveDefaults = defineRpc({ name: 'bridge.defaults', input: selection, output: selection });
 export const pair = defineRpc({ name: 'bridge.pair', input: z.object({}), output: z.object({ address: z.string(), code: z.string(), expiresAt: z.number() }) });
 
 export const abandon = defineRpc({ name: 'bridge.abandon', input: z.object({ sessionId: z.string(), confirmed: z.literal(true) }), output: z.object({ abandoned: z.literal(true) }) });
 
 export const saveConcurrency = defineRpc({ name: 'bridge.concurrency', input: z.object({ maxConcurrent: z.number().int().min(1).max(8) }), output: z.object({ maxConcurrent: z.number().int().min(1).max(8) }) });
+
+export const saveAutoAllow = defineRpc({ name: 'bridge.auto-allow', input: z.object({ enabled: z.boolean() }), output: z.object({ enabled: z.boolean() }) });
