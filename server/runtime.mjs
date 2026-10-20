@@ -104,14 +104,14 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
             if(store.read().commands[value.id]?.payload?.files?.length)
               await broker.inputFiles.remove(value.id);
             break;
-          case '/authorize': result = await broker.authorize(value.id, value.lease); break;
+          case '/authorize': result = await broker.authorize(value.id, value.lease, value.documentKey); break;
           case '/verify-tab-close': result = broker.verifyTabClose(value.id, value.lease); break;
           case '/verify-approval': result = broker.verifyApproval(value.id, value.lease); break;
           case '/bind-conversation':
             result = await broker.bindConversation(value.id,value.lease,
               {tabId:value.tabId,documentKey:value.documentKey,url:value.url});break;
           case '/result': {
-            result = await broker.result(value.id, value.lease, value.result);
+            result = await broker.result(value.id, value.lease, value.result, value.documentKey);
             const command = store.read().commands[value.id];
             if(command?.kind==='send' && ['done','failed'].includes(command.phase) && command.payload?.files?.length)
               await broker.inputFiles.remove(value.id);

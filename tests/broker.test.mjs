@@ -31,6 +31,39 @@ test('claim and Send authorization are one-shot durable gates', async t => {
   await f.broker.authorize(c.id, lease.lease);
   await assert.rejects(f.broker.authorize(c.id, lease.lease), /SEND_NOT_AUTHORIZED/);
 });
+test('send claim adopts the claiming document and fences old-page writes', async t => {
+  const f = await fixture(t); const s = await f.ready();
+  const observationLease = f.broker.snapshot(s.id).observation.lease;
+  await f.broker.prompt(s.id, 'refresh-before-send', 'hello after refresh');
+  const command = f.broker.queued().find(c => c.kind === 'send' && c.sessionId === s.id);
+  const oldDocument = f.broker.snapshot(s.id).documentKey;
+  const newDocument = 'document-after-refresh';
+  const claim = await f.broker.claim(command.id, s.tabId, newDocument);
+  const claimed = f.broker.snapshot(s.id);
+  assert.equal(claimed.documentKey, newDocument);
+  assert.equal(claimed.tabId, s.tabId);
+  assert.equal(claimed.observation.lease, observationLease, 'claim must reuse observation lease');
+  await assert.rejects(f.broker.authorize(command.id, claim.lease, oldDocument), /PAGE_IDENTITY_MISMATCH/);
+  await f.broker.authorize(command.id, claim.lease, newDocument);
+  const url = 'https://chatgpt.com/c/refresh-conversation';
+  await assert.rejects(f.broker.bindConversation(command.id, claim.lease,
+    { tabId: s.tabId, documentKey: oldDocument, url }), /PAGE_IDENTITY_MISMATCH/);
+  await f.broker.bindConversation(command.id, claim.lease,
+    { tabId: s.tabId, documentKey: newDocument, url });
+  await assert.rejects(f.broker.result(command.id, claim.lease,
+    { receipt: true, config: s.config, url, nativeMessageId: 'native-refresh' }, oldDocument),
+    /PAGE_IDENTITY_MISMATCH/);
+  await f.broker.result(command.id, claim.lease,
+    { receipt: true, config: s.config, url, nativeMessageId: 'native-refresh' }, newDocument);
+  const done = f.broker.snapshot(s.id);
+  assert.equal(done.documentKey, newDocument);
+  assert.equal(done.conversationId, 'refresh-conversation');
+  assert.equal(done.history.find(item => item.id === 'user:' + done.turn.id).messageId, 'native-refresh');
+  assert.equal(f.broker.queued().filter(c => c.kind === 'send').length, 0);
+  const view = pageView(f.broker.snapshot(s.id), { items: [] });
+  await assert.rejects(f.broker.observeView({ ...view, documentKey: oldDocument }), /PAGE_IDENTITY_MISMATCH/);
+});
+
 test('native receipt cannot be recorded without authorization', async t => {
   const f = await fixture(t); const s = await f.ready(); await f.broker.prompt(s.id, 'a', 'hello'); const c = f.broker.queued()[0]; const lease = await f.broker.claim(c.id, s.tabId, s.documentKey);
   await assert.rejects(f.broker.result(c.id, lease.lease, { receipt: true, config: s.config, url: 'https://chatgpt.com/c/a', nativeMessageId: 'u' }), /SEND_NOT_AUTHORIZED/);

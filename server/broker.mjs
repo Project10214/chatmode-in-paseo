@@ -499,6 +499,15 @@ export class Broker {
       invariant(!s || !Object.values(d.commands).some(other=>other.id!==c.id&&other.sessionId&&other.sessionId!==s.id&&pending(other)&&other.tabId===tabId),'TAB_ALREADY_OWNED');
       invariant(!s || !Object.values(d.sessions).some(other => other.id !== s.id && other.tabId === tabId), 'TAB_ALREADY_OWNED');
       c.phase = 'claimed'; c.lease = token(); c.tabId = tabId; c.documentKey = documentKey;
+      // A Send is claimed from the page that will actually dispatch it. Keep
+      // the session's page generation in step with that claim so a reload
+      // between session.open and Send does not strand bind/result/observation
+      // on the previous document. The observation lease is intentionally
+      // reused; only the document identity moves.
+      if (c.kind === 'send' && s) {
+        invariant(s.turn?.id === c.payload.turnId, 'SESSION_UNKNOWN');
+        s.tabId = tabId; s.documentKey = documentKey;
+      }
       return { ...c };
     });
   }
@@ -516,20 +525,29 @@ export class Broker {
         'APPROVAL_VETOED');
     return {allowed:true};
   }
-  async authorize(id, lease) {
+  async authorize(id, lease, documentKey) {
     return this.store.transaction(d => {
       const c = d.commands[id]; invariant(c && c.lease === lease && c.kind === 'send' && c.phase === 'claimed', 'SEND_NOT_AUTHORIZED');
       const s = d.sessions[c.sessionId];
       invariant(c.deadline > now() && s.turn?.id === c.payload.turnId && !s.turn.cancelRequested, 'SEND_CANCELLED');
+      // The click authorization must belong to the same page generation that
+      // claimed the Send. An old page may race the reload after claim; it must
+      // never authorize a click after the session has moved on.
+      invariant(c.documentKey === s.documentKey &&
+        (documentKey === undefined || documentKey === s.documentKey), 'PAGE_IDENTITY_MISMATCH');
       c.phase = 'authorized'; s.turn.authorized = true; return { authorized: true };
     });
   }
-  async result(id, lease, result) {
+  async result(id, lease, result, documentKey) {
     invariant(object(result), 'INVALID_RESULT');
     let affected;
     const output = await this.store.transaction(d => {
       const c = d.commands[id]; invariant(c && c.lease === lease, 'LEASE_MISMATCH');
       const s = c.sessionId && d.sessions[c.sessionId];
+      // A late result from an older page generation must not be accepted after
+      // the session moved to the document that actually claimed the Send.
+      if (c.kind === 'send' && documentKey !== undefined)
+        invariant(s && documentKey === s.documentKey, 'PAGE_IDENTITY_MISMATCH');
       // A slow browser may return its genuine native receipt after the 90s
       // command deadline became a soft handoff. Never discard that late proof.
       if(c.phase==='done' && c.result?.receiptPending && result.receipt===true &&

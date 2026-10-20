@@ -149,7 +149,7 @@ async function identity(tabId, expected = null) {
 }
 async function postReceipt(id, row, profile = config) {
   if (row.endpoint && row.endpoint !== profile.endpoint) return;
-  await api('/result', { id, lease: row.lease, result: row.result }, true, profile);
+  await api('/result', { id, lease: row.lease, documentKey: row.documentKey, result: row.result }, true, profile);
   row.phase = 'acked';
   if (row.command?.kind === 'send' && row.result?.notSent === true) {
     discardKnownUnsentPayload(row);
