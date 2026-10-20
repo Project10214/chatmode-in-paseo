@@ -23,9 +23,29 @@ npm run verify:upstream   # CoS 来源与哈希校验
 npm test                  # 现役 Node 单元与集成测试
 npm run typecheck         # TypeScript / SDK
 npm run test:sdk          # 真实 Paseo SDK schema
+npm run sync:health       # 只读：本机 Runtime 状态里的页面→Paseo 同步健康度
 node --test tests/approval.test.mjs tests/approval-gate-http.test.mjs # 自动允许/手动拒绝并发与授权前服务端门禁
 # 已准备固定 beta.2 原版宿主包时额外运行：
 CIP_PASEO_SERVER_PACKAGE=/path/to/server-0.12.0-beta.2/package npm run test:host-gate
+```
+
+### 同步健康度（`npm run sync:health`）
+
+只读读取本机 Runtime 状态（`~/.chatmode-in-paseo/state.json`，可用 `CIP_STATE_DIR` 覆盖），**只输出长度和计数，不输出任何聊天正文**。它回答"页面→Paseo 这条同步链路现在是否健康"：
+
+| 列 | 含义 |
+| --- | --- |
+| `frames` | 该会话收到的 page-view 帧数；远大于读数次数说明传输在分帧 |
+| `lag` | 账本文本比已投递的历史更长 —— 正文被冻结或落后（修复 1 的症状） |
+| `rev` | 前一条用户消息引用发生漂移的次数（修复 1 的触发条件，修复后由 `SOURCE_USER_MESSAGE_REVISED` 显式报出） |
+| `cfl` | 来源身份冲突 —— 修复 1 修复前的症状，修复后应为 0 |
+| `churn` | **正文一字未改却被记为 rewrite** 的次数 —— DOM 路径位移被读成内容改写的指纹（修复 2 的症状），修复后新会话应为 0 |
+| `dom` | DOM 本地身份（没有稳定 native id）的来源数，位移风险高 |
+
+```sh
+npm run sync:health                    # 最近 8 个会话
+node scripts/sync-health.mjs --limit 40
+node scripts/sync-health.mjs --session <sessionId>
 ```
 
 离线浏览器测试需要 Python、Playwright 和 Chromium（安装方法见 [README](../README.md) 第 3 节）。它们加载内存页面，不登录账号、不发真实消息：

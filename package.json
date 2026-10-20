@@ -29,6 +29,7 @@
     "test:host-gate": "node --test tests/host-observation-current.mjs",
     "test:host-recovery": "node --test tests/host-observation-current.mjs",
     "check": "node scripts/check.mjs",
+    "sync:health": "node scripts/sync-health.mjs",
     "typecheck": "tsc --noEmit",
     "dev": "node server/standalone.mjs",
     "test:attachment-order": "python3 tests/attachment-order-browser.py",
