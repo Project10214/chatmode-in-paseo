@@ -69,6 +69,13 @@ async function completeRecovery(f, s) {
   return until(() => f.broker.snapshot(s.id).recovery?.status === 'completed'
     ? f.broker.snapshot(s.id) : null);
 }
+async function confirmFreshReceipt(f, s, dispatched, freshUser) {
+  const current = f.broker.snapshot(s.id);
+  await f.broker.result(dispatched.command.id, dispatched.claim.lease, {
+    receipt: true, config: current.config, nativeMessageId: freshUser.nativeMessageId,
+    url: `https://chatgpt.com/c/${current.conversationId}`
+  });
+}
 
 test('REC-1 recovery requires a selected turn and a known boundary before creating state', async t => {
   const { f, s } = await uncertain(t);
@@ -512,9 +519,10 @@ test('REC-16 completed recovery keeps the selected-turn history boundary while s
 
   const next = await f.broker.prompt(s.id, 'message-2', 'a genuinely new question');
   assert.notEqual(next.turnId, completed.turn.id);
-  await f.dispatchSend(f.broker.snapshot(s.id), { state: 'running' });
+  const dispatched = await f.dispatchSend(f.broker.snapshot(s.id), { state: 'running' });
   const freshUser = user(cid, 'u3', 'fresh question', 6);
   const freshAnswer = assistant(cid, 'a3', 'u3', 'fresh answer', 7);
+  await confirmFreshReceipt(f, s, dispatched, freshUser);
   await f.view(f.broker.snapshot(s.id), { state: 'running', transcriptComplete: true,
     items: [...fullPage, freshUser, freshAnswer] });
   const after = f.broker.snapshot(s.id);
@@ -534,6 +542,133 @@ test('REC-16 completed recovery keeps the selected-turn history boundary while s
     'the recovered assistant row is not duplicated');
   assert.equal(after.sourceProjections.some(row => row.sourceId === freshAnswer.id), true,
     'the fresh answer received its normal source projection');
+});
+
+test('REC-20 completed recovery starts a new turn when there was no existing later turn', async t => {
+  const { f, s } = await uncertain(t);
+  const cid = s.conversationId;
+  await claim(f, s, { nextUserMessageId: undefined, transcriptComplete: true });
+  const oldUser = user(cid, 'old-u', 'old question', 0);
+  const oldAnswer = assistant(cid, 'old-a', 'old-u', 'old answer', 1);
+  const targetUser = user(cid, 'u1', 'selected question', 2);
+  const targetAnswer = assistant(cid, 'a1', 'u1', 'selected answer', 3);
+  const fullPage = [oldUser, oldAnswer, targetUser, targetAnswer];
+  await f.view(f.broker.snapshot(s.id), { state: 'running', transcriptComplete: true, items: fullPage });
+  await f.view(f.broker.snapshot(s.id), { state: 'standby', transcriptComplete: true,
+    items: [targetUser, targetAnswer] });
+  const completed = await completeRecovery(f, s);
+  assert.equal(completed.recovery.status, 'completed');
+
+  const next = await f.broker.prompt(s.id, 'message-2', 'a genuinely new question');
+  assert.notEqual(next.turnId, completed.turn.id);
+  const dispatched = await f.dispatchSend(f.broker.snapshot(s.id), { state: 'running' });
+  const freshUser = user(cid, 'u4', 'fresh question', 4);
+  const freshAnswer = assistant(cid, 'a4', 'u4', 'fresh answer', 5);
+  await confirmFreshReceipt(f, s, dispatched, freshUser);
+  await f.view(f.broker.snapshot(s.id), { state: 'running', transcriptComplete: true,
+    items: [...fullPage, freshUser, freshAnswer] });
+  const after = f.broker.snapshot(s.id);
+  assert.equal(after.recovery.status, 'completed');
+  assert.equal(after.history.some(item => item.text === 'fresh answer'), true,
+    'the fresh answer is collected when the recovered turn had no existing next turn');
+  assert.equal(after.history.some(item => ['old question', 'old answer'].includes(item.text)), false,
+    'old history stays outside the completed recovery boundary');
+  assert.equal(after.sources.some(item => [oldUser.id, oldAnswer.id].includes(item.id)), false);
+  assert.equal(after.sourceProjections.some(row => [oldUser.id, oldAnswer.id].includes(row.sourceId)), false);
+  assert.equal(after.history.filter(item => item.text === 'hello').length, 1);
+  assert.equal(after.history.filter(item => item.text === 'selected answer').length, 1);
+});
+
+test('REC-21 completed recovery excludes every later turn that existed before the new prompt', async t => {
+  const { f, s } = await uncertain(t);
+  const cid = s.conversationId;
+  await claim(f, s);
+  const oldUser = user(cid, 'old-u', 'old question', 0);
+  const oldAnswer = assistant(cid, 'old-a', 'old-u', 'old answer', 1);
+  const targetUser = user(cid, 'u1', 'selected question', 2);
+  const targetAnswer = assistant(cid, 'a1', 'u1', 'selected answer', 3);
+  const laterOne = user(cid, 'u2', 'existing later question one', 4);
+  const laterOneAnswer = assistant(cid, 'a2', 'u2', 'existing later answer one', 5);
+  const laterTwo = user(cid, 'u3', 'existing later question two', 6);
+  const laterTwoAnswer = assistant(cid, 'a3', 'u3', 'existing later answer two', 7);
+  const fullPage = [oldUser, oldAnswer, targetUser, targetAnswer, laterOne, laterOneAnswer,
+    laterTwo, laterTwoAnswer];
+  await f.view(f.broker.snapshot(s.id), { state: 'running', transcriptComplete: true, items: fullPage });
+  await f.view(f.broker.snapshot(s.id), { state: 'standby', transcriptComplete: true,
+    items: [targetUser, targetAnswer, laterOne, laterOneAnswer, laterTwo, laterTwoAnswer] });
+  const completed = await completeRecovery(f, s);
+  assert.equal(completed.recovery.status, 'completed');
+
+  const next = await f.broker.prompt(s.id, 'message-2', 'a genuinely new question');
+  assert.notEqual(next.turnId, completed.turn.id);
+  const dispatched = await f.dispatchSend(f.broker.snapshot(s.id), { state: 'running' });
+  const freshUser = user(cid, 'u4', 'fresh question', 8);
+  const freshAnswer = assistant(cid, 'a4', 'u4', 'fresh answer', 9);
+  await confirmFreshReceipt(f, s, dispatched, freshUser);
+  await f.view(f.broker.snapshot(s.id), { state: 'running', transcriptComplete: true,
+    items: [...fullPage, freshUser, freshAnswer] });
+  const after = f.broker.snapshot(s.id);
+  const excluded = ['old question', 'old answer', 'existing later question one',
+    'existing later answer one', 'existing later question two', 'existing later answer two'];
+  assert.equal(after.recovery.status, 'completed');
+  assert.equal(after.history.some(item => item.text === 'fresh answer'), true,
+    'the fresh answer is collected');
+  assert.equal(after.history.some(item => excluded.includes(item.text)), false,
+    'neither old history nor any pre-existing later turn may be imported');
+  assert.equal(after.sources.some(item => [oldUser.id, oldAnswer.id, laterOne.id,
+    laterOneAnswer.id, laterTwo.id, laterTwoAnswer.id].includes(item.id)), false,
+    'none of the old or later sources enter the source ledger');
+  assert.equal(after.sourceProjections.some(row => [oldUser.id, oldAnswer.id, laterOne.id,
+    laterOneAnswer.id, laterTwo.id, laterTwoAnswer.id].includes(row.sourceId)), false,
+    'none of the old or later sources gain projections');
+  assert.equal(after.sourceProjections.some(row => row.sourceId === freshAnswer.id), true);
+  assert.equal(after.history.filter(item => item.text === 'selected answer').length, 1);
+});
+
+test('REC-22 a new receipt starts sync even when the old recovery anchor is not mounted', async t => {
+  const { f, s } = await uncertain(t);
+  const cid = s.conversationId;
+  await claim(f, s);
+  const targetUser = user(cid, 'u1', 'selected question', 1);
+  const targetAnswer = assistant(cid, 'a1', 'u1', 'selected answer', 2);
+  const nextUser = user(cid, 'u2', 'later question', 3);
+  const nextAnswer = assistant(cid, 'a2', 'u2', 'later answer', 4);
+  await f.view(f.broker.snapshot(s.id), { state: 'running', transcriptComplete: true,
+    items: [targetUser, targetAnswer, nextUser, nextAnswer] });
+  await f.view(f.broker.snapshot(s.id), { state: 'standby', transcriptComplete: true,
+    items: [targetUser, targetAnswer, nextUser, nextAnswer] });
+  const completed = await completeRecovery(f, s);
+  assert.equal(completed.recovery.status, 'completed');
+
+  const next = await f.broker.prompt(s.id, 'message-2', 'a genuinely new question');
+  assert.notEqual(next.turnId, completed.turn.id);
+  const dispatched = await f.dispatchSend(f.broker.snapshot(s.id), { state: 'running' });
+  const freshUser = user(cid, 'u4', 'fresh question', 5);
+  const freshAnswer = assistant(cid, 'a4', 'u4', 'fresh answer', 6);
+  await confirmFreshReceipt(f, s, dispatched, freshUser);
+  const current = f.broker.snapshot(s.id);
+  assert.equal(current.recovery.status, 'completed');
+  assert.equal(current.recovery.userMessageId, 'u1');
+  const rebound = await f.broker.rebindObservation({
+    sessionId: s.id, observationLease: current.observation.lease,
+    previousDocumentKey: current.documentKey, tabId: current.tabId,
+    documentKey: 'document-fresh-reconnect', url: `https://chatgpt.com/c/${cid}`
+  });
+  assert.equal(rebound.recovery?.status, 'completed');
+  const reconnected = f.broker.snapshot(s.id);
+  const result = await f.view(reconnected, { state: 'running', transcriptComplete: true,
+    items: [freshUser, freshAnswer] });
+  const after = f.broker.snapshot(s.id);
+  assert.equal(result.accepted, true);
+  assert.equal(after.recovery.status, 'completed');
+  assert.equal(after.recovery.reason, undefined, 'a missing old anchor must not make the new turn unknown');
+  assert.equal(after.history.some(item => item.text === 'fresh answer'), true,
+    'the fresh answer syncs from the accepted new turn receipt without the old DOM anchor');
+  assert.equal(after.history.some(item => ['later question', 'later answer'].includes(item.text)), false,
+    'the old later turn is not imported from the fresh-only frame');
+  assert.equal(after.sources.some(item => [nextUser.id, nextAnswer.id].includes(item.id)), false);
+  assert.equal(after.sourceProjections.some(row => row.sourceId === freshAnswer.id), true);
+  assert.equal(after.history.filter(item => item.text === 'selected answer').length, 1);
 });
 
 test('REC-17 a transport-split long read keeps the capture-wide recovery boundary', async t => {
@@ -605,32 +740,4 @@ test('REC-18 a same-lease monitor picks up the recovery boundary before the next
   assert.ok(frames.every(view => view.recoveryScope?.anchorPresent === true &&
     view.recoveryScope.userMessageId === 'u1' && view.recoveryScope.nextUserMessageId === 'u2'),
     'the existing lease must learn the new boundary without reconnecting');
-});
-
-test('REC-19 completed recovery scope carries only turns after the existing next turn', async t => {
-  const content = contentPage(t);
-  const session = content.session();
-  content.state.source = { conversationId: 'chat-a', items: [
-    user('chat-a', 'old-u', 'old question', 0),
-    assistant('chat-a', 'old-a', 'old-u', 'old answer', 1),
-    user('chat-a', 'u1', 'selected question', 2),
-    assistant('chat-a', 'a1', 'u1', 'selected answer', 3),
-    user('chat-a', 'u2', 'later question', 4),
-    assistant('chat-a', 'a2', 'u2', 'later answer', 5),
-    user('chat-a', 'u3', 'fresh question', 6),
-    assistant('chat-a', 'a3', 'u3', 'fresh answer', 7)
-  ], approvals: [], closedApprovals: [], issues: [], transcriptComplete: true };
-  const completed = { ...session,
-    recovery: { turnId: 'turn-a', userMessageId: 'u1', nextUserMessageId: 'u2',
-      transcriptComplete: true, status: 'completed' } };
-  assert.equal((await content.monitor(completed)).ok, true);
-  await content.tick(0);
-  const frames = content.accepted.filter(request => request.type === 'page-view')
-    .map(request => request.event.view);
-  assert.ok(frames.length >= 1);
-  assert.ok(frames.every(view => view.recoveryScope?.anchorPresent === true &&
-    view.recoveryScope.userMessageId === 'u1' &&
-    view.recoveryScope.afterUserMessageIds.includes('u3')),
-    'a completed recovery still carries the fresh turn, not old/next turns, across frames');
-  assert.equal(frames.some(view => view.items.some(item => item.text === 'fresh answer')), true);
 });

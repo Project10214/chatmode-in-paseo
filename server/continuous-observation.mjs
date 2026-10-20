@@ -20,37 +20,35 @@ const recoveryTurn = recovery => recovery?.turnId ?? null;
 /** The selected turn owns historical-read filtering for as long as the
  * original failed turn is current. A completed recovery stays bounded too;
  * clearing it on completion would make the next ordinary frame backfill the
- * whole page. A genuinely new prompt changes `session.turn.id` and releases
- * this boundary through the existing turn lifecycle.
+ * whole page. A genuinely new prompt is a NEW turn: its own accepted native
+ * user receipt is the only page user that may start normal sync.
  */
 function recoveryBoundary(session) {
   const recovery=session?.recovery;
   if(!recovery)return null;
   if(recoveryActive(session))
     return recoveryTurn(recovery)===session.turn?.id?recovery:null;
-  // A completed recovery keeps its history boundary after a new prompt. It
-  // must not reopen the recovery run or suppress approvals; it only excludes
-  // the page range that was outside the selected turn.
+  // A completed recovery keeps its history boundary until a new turn has its
+  // own accepted native receipt. It never reopens the recovery run or
+  // suppresses approvals; the new-turn window is handled in recoveryWindow().
   return recovery.status==='completed'?recovery:null;
 }
-const userMessageOf = item => typeof item?.nativeMessageId==='string'&&item.nativeMessageId
-  ? item.nativeMessageId : typeof item?.userMessageId==='string'&&item.userMessageId
-    ? item.userMessageId : typeof item?.id==='string'?item.id:null;
-/** User turns that are newer than the selected recovery window. They are the
- * only page content that may be imported after a completed recovery and a
- * genuinely new prompt; old history and the already-existing next turn stay
- * outside the boundary. */
-function afterRecoveryUsers(users,recovery) {
-  const anchorIndex=users.findIndex(item=>userMessageOf(item)===recovery.userMessageId);
-  if(anchorIndex<0)return null;
-  const next=recovery.nextUserMessageId;
-  const nextIndex=next?users.findIndex(item=>userMessageOf(item)===next):-1;
-  return users.slice((nextIndex>=0?nextIndex:anchorIndex)+1)
-    .map(userMessageOf).filter(Boolean);
+/** The only user turn that may start normal sync after a completed recovery is
+ * the new turn's own accepted native user ID. The old recovery anchor is not a
+ * permanent prerequisite: it may be virtualized out while the new turn is
+ * already receipt-confirmed. */
+function newTurnUserMessageId(session,recovery) {
+  const turn=session.turn;
+  if(!turn||turn.id===recovery.turnId)return null;
+  const id=turn.nativeMessageId??session.prompts?.[turn.clientMessageId]?.nativeMessageId;
+  if(typeof id!=='string'||!id||id===recovery.userMessageId)return null;
+  return id;
 }
-/** Resolve the selected user turn from THIS frame. The page end is known only
- * when another user message exists or the page explicitly proved its mounted
- * transcript is complete. `{known:false}` never imports the whole page.
+/** Resolve the selected recovery turn from THIS frame while recovery is active.
+ * The page end is known only when another user message exists or the page
+ * explicitly proved its mounted transcript is complete. After completion, a
+ * genuinely new turn is resolved from its own accepted receipt instead. An
+ * unknown window never imports the whole page.
  * `scope` is capture-wide evidence from the content script: a transport frame
  * can split before the anchor/answer, but every frame from that same full-page
  * capture still carries the selected boundary.
@@ -61,19 +59,10 @@ export function recoveryWindow(session,items,transcriptComplete,scope=null) {
   const anchor=recovery.userMessageId;
   const current=recoveryActive(session)||recoveryTurn(recovery)===session.turn?.id;
   if(!current&&recovery.status==='completed') {
-    let after=null;
-    if(scope&&scope.anchorPresent===true&&scope.userMessageId===anchor&&
-        Array.isArray(scope.afterUserMessageIds))
-      after=scope.afterUserMessageIds.filter(value=>typeof value==='string'&&value.length>0);
-    if(after===null) {
-      const users=(Array.isArray(items)?items:[]).filter(item=>item?.role==='user');
-      after=afterRecoveryUsers(users,recovery);
-    }
-    if(after===null)return {known:false,reason:'RECOVERY_ANCHOR_MISSING'};
-    return {known:true,historyOnly:true,userMessageId:anchor,
-      nextUserMessageId:recovery.nextUserMessageId??null,
-      transcriptComplete:scope?.transcriptComplete===true||transcriptComplete===true,
-      allowedUserMessageIds:after};
+    const newUserMessageId=newTurnUserMessageId(session,recovery);
+    if(!newUserMessageId)return {known:false,reason:'RECOVERY_NEW_TURN_UNBOUND'};
+    return {known:true,userMessageId:newUserMessageId,nextUserMessageId:null,
+      transcriptComplete:transcriptComplete===true};
   }
   if(scope&&scope.anchorPresent===true&&scope.userMessageId===anchor) {
     const next=typeof scope.nextUserMessageId==='string'&&scope.nextUserMessageId
@@ -97,11 +86,6 @@ function inRecoveryWindow(source,window) {
   // An unknown boundary is not "no filter": it must import nothing from the
   // page or from previously unprojected ledger rows.
   if(window.known!==true)return false;
-  if(window.historyOnly===true) {
-    const owner=source.userMessageId??(source.role==='user'?source.nativeMessageId:null);
-    return typeof owner==='string'&&Array.isArray(window.allowedUserMessageIds)&&
-      window.allowedUserMessageIds.includes(owner);
-  }
   // The anchor user item itself is part of the selected turn even if a page
   // reader omitted its derived userMessageId.
   if(source.role==='user'&&source.nativeMessageId===window.userMessageId)return true;
@@ -372,12 +356,7 @@ export function recordPageView(session,event,commands={},at=Date.now()) {
   } else if(window?.known&&activeRecovery) {
     if(session.recovery.status==='needs_review')session.recovery.status='observing';
     delete session.recovery.reason;delete session.recovery.needsReviewAt;
-    // Once a next turn was identified it is the immutable outer edge of the
-    // selected-turn history. A later partial/virtualized read that happens to
-    // end at the selected answer must not clear it and reopen that next turn
-    // for import after recovery completes.
-    if(window.nextUserMessageId)session.recovery.nextUserMessageId=window.nextUserMessageId;
-    else if(session.recovery.nextUserMessageId===undefined)session.recovery.nextUserMessageId=null;
+    session.recovery.nextUserMessageId=window.nextUserMessageId??null;
     session.recovery.transcriptComplete=window.transcriptComplete===true;
   }
   if(page.state==='running'&&!run?.active) {

@@ -262,25 +262,15 @@
     const recovery=m.recovery;
     if(!recovery||typeof recovery.userMessageId!=='string')return null;
     const users=(Array.isArray(view.items)?view.items:[]).filter(item=>item?.role==='user');
-    const userId=item=>typeof item?.nativeMessageId==='string'&&item.nativeMessageId
-      ? item.nativeMessageId : typeof item?.userMessageId==='string'&&item.userMessageId
-        ? item.userMessageId : typeof item?.id==='string'?item.id:null;
-    const index=users.findIndex(item=>userId(item)===recovery.userMessageId);
+    const index=users.findIndex(item=>item.nativeMessageId===recovery.userMessageId ||
+      item.userMessageId===recovery.userMessageId || item.id===recovery.userMessageId);
     if(index<0)return null;
     const next=users[index+1];
     const nextUserMessageId=typeof next?.nativeMessageId==='string'&&next.nativeMessageId
       ? next.nativeMessageId : null;
     if(!nextUserMessageId&&view.transcriptComplete!==true)return null;
-    // A completed recovery remains a history boundary after a new prompt.
-    // Carry only the user turns newer than that boundary so a split frame can
-    // import the fresh answer without reviving old history or the next turn.
-    const storedNext=typeof recovery.nextUserMessageId==='string'&&recovery.nextUserMessageId
-      ? recovery.nextUserMessageId : null;
-    const nextIndex=storedNext?users.findIndex(item=>userId(item)===storedNext):-1;
-    const start=(nextIndex>=0?nextIndex:index)+1;
     return {userMessageId:recovery.userMessageId,anchorPresent:true,
-      nextUserMessageId,transcriptComplete:view.transcriptComplete===true,
-      afterUserMessageIds:users.slice(start).map(userId).filter(Boolean)};
+      nextUserMessageId,transcriptComplete:view.transcriptComplete===true};
   }
   function framesOf(m, view) {
     const collections = ['items', 'approvals', 'closedApprovals', 'issues'];
