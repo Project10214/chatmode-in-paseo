@@ -44,6 +44,34 @@ python3 tests/binding-mv3-current.py            # 真 MV3 worker + 本机 Runtim
 
 浏览器级脚本位于 `tests/*.py`；`tests/legacy/` 收录旧架构研究夹具，不作为 v8 发布门禁。GitHub CI 的 `browser-regression` job 执行上述六类隔离浏览器检查，仍不能代替真实登录账号验收。
 
+### 浏览器夹具的本机环境（2026-10-21 实测）
+
+`tests/*.py` 依赖三件本机事实，缺一件就会静默少跑或直接报错：
+
+1. **Python Playwright 版本要与已缓存的 Chromium build 对应。** `~/Library/Caches/ms-playwright` 里已有 `chromium-1200`；**Playwright 1.57.0 正是使用 build 1200 的版本**（1.58→1208、1.59→1217、1.60→1223，都会重新下载浏览器）。装在 `.test-tools/pw-venv`：
+   ```sh
+   python3 -m venv .test-tools/pw-venv
+   .test-tools/pw-venv/bin/python -m pip install "playwright==1.57.0"
+   ```
+2. **`CIP_CHROMIUM` 必须指向 Chromium 可执行文件。** 多个夹具（`page-content`、`button-state`、`config-at-send` 等）不报错但直接 `KeyError: 'CIP_CHROMIUM'`：
+   ```sh
+   export CIP_CHROMIUM="$HOME/Library/Caches/ms-playwright/chromium-1200/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+   ```
+3. **真实宿主夹具要一个解包并装好依赖的 `@getpaseo/server` 目录**，缺了就抛 `CIP_PASEO_SERVER_PACKAGE is required`，不 skip：
+   ```sh
+   export CIP_PASEO_SERVER_PACKAGE="$PWD/.test-tools/paseo-server/package"
+   ```
+
+`.test-tools/run-browser-tests.sh` 已把这三项固定下来（本目录被 `.gitignore` 忽略，不进版本库）：
+
+```sh
+sh .test-tools/run-browser-tests.sh                 # 全部 29 个夹具
+sh .test-tools/run-browser-tests.sh page-content-browser.py
+```
+
+**2026-10-21 基线：29 个夹具 28 通过、1 失败。** 失败项是 `tests/prose-source-flow-browser.py`：它要求 `CIP_PASEO_PROVIDER_SOURCE` / `CIP_PASEO_RENDERER_BUNDLE` 指向**已安装 Paseo** 的 daemon 源文件与 web 渲染包，且哈希必须落在 `tests/fixtures/paseo-real-contract.mjs` 的 pinned 审计里。pinned 目前只覆盖 0.11.4 / 0.12.0-beta.1 / 0.12.0-beta.2，而本机已安装的是 **0.12.0 正式版**，其 daemon 文件与 web 包哈希均不在 pinned 列表内，因此按设计拒绝执行。
+
+
 `test:failed-send-persistence` 使用临时浏览器 profile 和本地路由，模拟网站的 IndexedDB 自动保存；验证自己的未发送正文与应用清理后不会在新页恢复，用户修改、历史未知草稿和未知回执仍保留。它不是 ChatGPT 闭源保存代码的复刻；真实 B01 的来源追踪与清理验收记录只保存在本地 `docs/internal/`，不随仓库发布。
 
 没有依赖或浏览器环境时写 **BLOCKED**，不能改称 PASS。离线 Chrome 测试必须使用独立 profile 和临时 Runtime；不要把生产 ChatGPT 账号或运行中的会话当夹具。修复问题时，同时加一条**能复现旧问题**的测试和相应的反向/异常测试。
