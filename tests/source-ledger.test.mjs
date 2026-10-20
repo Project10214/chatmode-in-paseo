@@ -324,3 +324,49 @@ test('LEDGER-11 a reconnected session reuses the persisted ledger without duplic
   assert.deepEqual(records(reconnected).map(record => record.id), ['kept', 'final', 'new']);
   assert.equal(byId(reconnected, 'kept').text, 'kept text');
 });
+
+test('LEDGER-12 a moved user-message reference keeps the first reference but still applies the body', () => {
+  // The extension derives userMessageId from the page's ambient "last seen user
+  // message" cursor, so one and the same assistant message can report a
+  // different reference between two reads. That must never discard the body.
+  const session = {};
+  const first = reconcileSources(session, [
+    source('answer', 'Hel', { userMessageId: 'user-previous' })
+  ], { now: 10 });
+  assert.deepEqual(first.changes.map(change => change.item.text), ['Hel']);
+
+  const second = reconcileSources(session, [
+    source('answer', 'Hello world', { userMessageId: 'user-current' })
+  ], { now: 20 });
+  assert.deepEqual(second.changes.map(change => [change.item.text, change.change]), [['Hello world', 'append']]);
+  assert.equal(second.issues.length, 1);
+  assert.equal(second.issues[0].code, 'SOURCE_USER_MESSAGE_REVISED');
+  assert.deepEqual(second.issues[0].fields, ['userMessageId']);
+  // The first reference is kept, so the turn attribution does not move.
+  assert.equal(byId(session, 'answer').userMessageId, 'user-previous');
+  assert.equal(byId(session, 'answer').text, 'Hello world');
+
+  const third = reconcileSources(session, [
+    source('answer', 'Hello world!', { userMessageId: 'user-current' })
+  ], { now: 30 });
+  assert.deepEqual(third.changes.map(change => change.item.text), ['Hello world!']);
+  assert.equal(byId(session, 'answer').text, 'Hello world!');
+});
+
+test('LEDGER-13 a DOM path shift is a position change, not a content rewrite', () => {
+  // `order` is a DOM path. A page that inserts one sibling shifts every path.
+  // That must not re-project, re-deliver or re-order the conversation.
+  const session = {};
+  reconcileSources(session, [source('answer', 'Hello', { order: [0] })], { now: 10 });
+  const shifted = reconcileSources(session, [source('answer', 'Hello', { order: [1] })], { now: 20 });
+  assert.deepEqual(shifted.changes, []);
+  assert.equal(shifted.unchanged, 1);
+  assert.deepEqual(shifted.issues, []);
+  // The stored position is still refreshed so later ordering stays correct.
+  assert.deepEqual(byId(session, 'answer').order, [1]);
+
+  const grown = reconcileSources(session, [source('answer', 'Hello world', { order: [2] })], { now: 30 });
+  assert.deepEqual(grown.changes.map(change => change.change), ['append']);
+  assert.deepEqual(byId(session, 'answer').order, [2]);
+  assert.equal(byId(session, 'answer').text, 'Hello world');
+});

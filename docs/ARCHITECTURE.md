@@ -1,6 +1,6 @@
 # Chatmode in Paseo 架构与边界（CIP v9）
 
-适用：Paseo 插件 `alpha.4.45`、Chrome 扩展 `0.2.49`。端点与安全校验见 [PROTOCOL.md](PROTOCOL.md)，真实验收入口见 [TESTING.md](TESTING.md)。
+适用：Paseo 插件 `alpha.4.46`、Chrome 扩展 `0.2.51`。端点与安全校验见 [PROTOCOL.md](PROTOCOL.md)，真实验收入口见 [TESTING.md](TESTING.md)。
 
 ## 1. 一套 Provider、一套 Runtime、一个 Chrome 扩展
 

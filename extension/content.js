@@ -251,9 +251,9 @@
     m.proseFlight=work;
     void work.finally(()=>{if(m.proseFlight===work)m.proseFlight=null;});
   }
-  function envelope(m, view, sequence) {
+  function envelope(m, view, sequence, readFinal = true) {
     return { type: 'page-view', event: { sessionId: m.sessionId, observationLease: m.observationLease,
-      documentKey, tabId: m.tabId, url: location.href, sequence, view } };
+      documentKey, tabId: m.tabId, url: location.href, sequence, readFinal, view } };
   }
   // The selected recovery turn is a property of the whole page capture, not of
   // one transport frame. Copy the proven boundary into every frame so a split
@@ -325,6 +325,11 @@
     for (const collection of collections)
       for (const [index, value] of view[collection].entries()) append(collection, value, index);
     if (count || !frames.length) flush();
+    // Only the LAST frame of one page read is the closing evidence of that
+    // read. A read split by the transport must not end the host turn before
+    // its remaining content has been received and projected: the server waits
+    // for the final frame before it treats a standby page as "finished".
+    for (let i = 0; i < frames.length; i++) frames[i].event.readFinal = i === frames.length - 1;
     return frames;
   }
   function drain(m) {

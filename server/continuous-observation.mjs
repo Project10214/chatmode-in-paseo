@@ -299,6 +299,11 @@ export function recordPageView(session,event,commands={},at=Date.now()) {
   invariant(object(event.view)&&Number.isSafeInteger(event.sequence)&&event.sequence>0,'PAGE_VIEW_INVALID');
   invariant(event.view.conversationId===undefined||event.view.conversationId===session.conversationId,'PAGE_IDENTITY_MISMATCH');
   const observation=ensureObservation(session),digest=fingerprint(event.view);
+  // One page read can be split into several transport frames. Only the last
+  // frame of that read is its closing evidence: ending the run on an earlier
+  // frame reported the host turn as completed before the remaining content
+  // had been received. An absent flag means a single-frame read.
+  const readFinal=event.readFinal!==false;
   if(event.sequence<observation.lastSequence)return {accepted:true,stale:true,events:[]};
   if(event.sequence===observation.lastSequence) {
     invariant(digest===observation.frameDigest,'OBSERVATION_SEQUENCE_CONFLICT');
@@ -429,8 +434,8 @@ export function recordPageView(session,event,commands={},at=Date.now()) {
   const status={id:session.id,state:'page-status',turnId:run?.id??null,item,page,issues};
   const runningIndex=events.findIndex(value=>value.state==='page-running'||value.state==='recovery-running');
   events.splice(runningIndex>=0?runningIndex+1:0,0,status);
-  if(page.state==='standby'&&!run?.awaitCommandView)closeRun(session,run,events,at);
-  if(window?.known&&page.state==='standby'&&!observation.run?.active&&recoveryActive(session)&&
+  if(readFinal&&page.state==='standby'&&!run?.awaitCommandView)closeRun(session,run,events,at);
+  if(readFinal&&window?.known&&page.state==='standby'&&!observation.run?.active&&recoveryActive(session)&&
       !session.recovery.pageStandbyAt){
     session.recovery.pageStandbyAt=at;session.recovery.lastObservedAt=at;
     events.push({id:session.id,state:'recovery-standby',turnId:session.recovery.runId??null});
