@@ -37,6 +37,7 @@
     "test:composer-diagnostics": "python3 tests/composer-diagnostics-browser.py",
     "test:sdk": "node --test tests/sdk-contract.mjs",
     "test:receipt-interaction": "python3 tests/receipt-interaction-browser.py",
+    "test:page-framing": "python3 tests/page-view-framing-browser.py",
     "test:catalog": "python3 tests/catalog-browser-regression.py",
     "test:discovery": "python3 tests/discovery-browser.py",
     "verify:upstream": "node scripts/verify-upstream.mjs",

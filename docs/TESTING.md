@@ -39,6 +39,7 @@ python3 tests/continuous-actions-browser.py    # Stop、持续授权按钮复核
 python3 tests/attachment-order-browser.py      # 先附件后正文
 python3 tests/failed-send-disposal-browser.py  # 未发送清理
 python3 tests/binding-mv3-current.py            # 真 MV3 worker + 本机 Runtime + 隔离页面
+python3 tests/page-view-framing-browser.py      # 一次页面读数被传输分帧时，只有末帧是收尾证据
 # 其它专项：tests/artifact-browser.py、tests/prose-source-flow-browser.py
 ```
 

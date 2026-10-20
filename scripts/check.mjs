@@ -2,7 +2,10 @@ import { readdir, readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 const root = path.resolve(import.meta.dirname, '..');
-async function walk(dir) { const out = []; for (const e of await readdir(dir, { withFileTypes: true })) { if (['node_modules', '.git', '.state'].includes(e.name)) continue; const full = path.join(dir, e.name); if (e.isDirectory()) out.push(...await walk(full)); else out.push(full); } return out; }
+// The repository's own sources only. `.test-tools` holds local tool state
+// (playwright venv, an extracted Paseo package); it is gitignored and must
+// never be parsed as if it were part of this project.
+async function walk(dir) { const out = []; for (const e of await readdir(dir, { withFileTypes: true })) { if (['node_modules', '.git', '.state', '.test-tools'].includes(e.name)) continue; const full = path.join(dir, e.name); if (e.isDirectory()) out.push(...await walk(full)); else out.push(full); } return out; }
 const protocol = await import('../server/protocol.mjs');
 const workerProtocol = /const PROTOCOL = (\d+)/.exec(await readFile(path.join(root, 'extension/background.js'), 'utf8'));
 if (!workerProtocol || Number(workerProtocol[1]) !== protocol.PROTOCOL) throw new Error('CIP protocol declarations disagree');
