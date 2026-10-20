@@ -10,7 +10,7 @@ const messages = {
   INVALID_ENDPOINT: '请输入当前电脑的 127.0.0.1 本地地址。',
   PROTOCOL_MISMATCH: '两个插件版本不兼容，请一起更新并重载。',
   OPEN_CHATGPT_TAB: '请先打开目标 ChatGPT 对话，再点“接回网页回答”。',
-  RECOVERY_SESSION_NOT_FOUND: '当前页面对话没有匹配的未确认 Paseo 会话。',
+  RECOVERY_SESSION_NOT_FOUND: '当前页面对话没有匹配的未确认 Paseo 会话；未绑定的失败会话会标记为“未绑定”。',
   RECOVERY_MESSAGE_UNSUPPORTED: '这条用户消息缺少稳定的网页消息 ID，不能作为接回目标。',
   RECOVERY_BOUNDARY_UNKNOWN: '无法确认这条消息的回答边界。请打开包含完整回答的对话，并滚动到这一轮之后再试。',
   RECOVERY_ALREADY_ACTIVE: '这个会话已有正在进行的接回。',
@@ -176,7 +176,7 @@ function renderRecovery(info) {
     return;
   }
   if (!sessions.length) {
-    body.append(dom('p', '当前 ChatGPT 对话没有匹配的未确认 Paseo 会话。请先在 Paseo 打开那个结果未确认的会话，再回到对应网页。', 'recovery-note'));
+    body.append(dom('p', '当前 ChatGPT 对话没有匹配的未确认 Paseo 会话。请先在 Paseo 打开那个结果未确认的会话，再回到对应网页。未绑定的首次发送会标记为“未绑定”。', 'recovery-note'));
     return;
   }
   if (!Array.isArray(info.candidates) || !info.candidates.length) {
@@ -190,15 +190,17 @@ function renderRecovery(info) {
     const select = dom('select');
     select.setAttribute('aria-label', '目标 Paseo 会话');
     for (const row of sessions) {
-      const option = dom('option', shortId(row.sessionId));
+      const option = dom('option', `${row.unbound ? '未绑定 · ' : ''}${shortId(row.sessionId)}`);
       option.value = row.sessionId;
       select.append(option);
     }
     select.addEventListener('change', () => { selectedSession = select.value; });
     block.append(select);
-    block.append(dom('p', '同一对话有多个未确认会话，请选择要接回的那个。'));
+    block.append(dom('p', '同一对话有多个未确认会话，请选择要接回的那个。未绑定表示首次发送尚未确认，接回后才会关联当前对话。'));
   } else {
-    block.append(dom('p', `会话 ${shortId(selectedSession)}`));
+    const row = sessions[0];
+    block.append(dom('p', `${row.unbound ? '未绑定 · ' : ''}会话 ${shortId(selectedSession)}`));
+    if (row.unbound) block.append(dom('p', '这个会话的首次发送尚未确认。接回只会关联当前网页对话，不会重发消息。'));
   }
   body.append(block);
 

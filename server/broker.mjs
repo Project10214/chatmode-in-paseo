@@ -132,12 +132,12 @@ export class Broker {
   manualRecoveryTargets() {
     const d=this.store.read();
     return Object.values(d.sessions)
-      .filter(s => s.conversationId && s.status!=='abandoned' && !s.archiveIntent &&
+      .filter(s => s.status!=='abandoned' && !s.archiveIntent &&
         s.turn?.outcome==='failed' && s.turn?.notSent!==true &&
         !(s.recovery?.status==='completed'&&s.recovery.turnId===s.turn.id) &&
         !Object.values(d.commands).some(c=>blockingControl(s,c)))
-      .map(s => ({sessionId:s.id,conversationId:s.conversationId,status:s.status,
-        error:s.error??null,recovery:s.recovery?{
+      .map(s => ({sessionId:s.id,conversationId:s.conversationId??null,unbound:!s.conversationId,
+        status:s.status,error:s.error??null,recovery:s.recovery?{
           status:s.recovery.status,userMessageId:s.recovery.userMessageId,
           createdAt:s.recovery.createdAt,reason:s.recovery.reason??null
         }:null}));
@@ -886,7 +886,7 @@ export class Broker {
     const at=now();
     const result=await this.store.transaction(d=>{
       const s=d.sessions[input.sessionId];
-      invariant(s&&s.conversationId===route&&s.status!=='abandoned'&&!s.archiveIntent,'SESSION_UNKNOWN');
+      invariant(s&&(!s.conversationId||s.conversationId===route)&&s.status!=='abandoned'&&!s.archiveIntent,'SESSION_UNKNOWN');
       invariant(!recoveryActive(s),'RECOVERY_ALREADY_ACTIVE');
       invariant(s.turn?.outcome==='failed'&&s.turn?.notSent!==true,'RECOVERY_NOT_AVAILABLE');
       // A completed recovery belongs to its original turn. A later failed turn
@@ -897,6 +897,11 @@ export class Broker {
       invariant(!Object.values(d.sessions).some(other=>other.id!==s.id&&other.tabId===input.tabId),'TAB_ALREADY_OWNED');
       invariant(!Object.values(d.commands).some(other=>other.sessionId&&other.sessionId!==s.id&&
         pending(other)&&other.tabId===input.tabId),'TAB_ALREADY_OWNED');
+      // A first Send can fail before any conversation route was bound. The
+      // user's explicit page selection supplies that route; this is an
+      // observation link only, never a native Send receipt.
+      const newlyBound=!s.conversationId;
+      s.conversationId=route;s.boundAt??=at;
       // The failed turn's own Send command may still be pending because the
       // click result was unconfirmed. Retire that one-shot gate now; it must
       // never authorize a click after the user starts manual recovery.
@@ -931,7 +936,7 @@ export class Broker {
         if(c.phase==='queued'){c.phase='failed';c.error='AUTO_APPROVAL_SUPPRESSED';canceled.push(c.id);}
         else {c.vetoed=true;c.vetoReason='RECOVERY_ENTERED';}
       }
-      return {sessionId:s.id,recovery:structuredClone(s.recovery),
+      return {sessionId:s.id,recovery:structuredClone(s.recovery),newlyBound,
         observation:observationDescriptor(s),canceled,takeovers};
     },{control:true});
     for(const id of result.canceled)this.settle(id,'AUTO_APPROVAL_SUPPRESSED');
@@ -939,6 +944,8 @@ export class Broker {
       this.settle(id,'RECOVERY_TAKEOVER');
       if(this.store.read().commands[id]?.payload?.files?.length)await this.inputFiles.remove(id);
     }
+    if(result.newlyBound)this.emit(result.sessionId,{id:result.sessionId,
+      turnId:result.recovery.turnId,state:'bound',conversationId:result.recovery.conversationId});
     this.emit(result.sessionId,{id:result.sessionId,state:'recovery-started',
       turnId:result.recovery.runId,userMessageId:result.recovery.userMessageId});
     return {sessionId:result.sessionId,recovery:result.recovery,observation:result.observation};

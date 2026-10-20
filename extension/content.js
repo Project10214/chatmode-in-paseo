@@ -255,13 +255,32 @@
     return { type: 'page-view', event: { sessionId: m.sessionId, observationLease: m.observationLease,
       documentKey, tabId: m.tabId, url: location.href, sequence, view } };
   }
+  // The selected recovery turn is a property of the whole page capture, not of
+  // one transport frame. Copy the proven boundary into every frame so a split
+  // before the anchor or answer cannot be mistaken for a disappearing anchor.
+  function recoveryScope(m, view) {
+    const recovery=m.recovery;
+    if(!recovery||typeof recovery.userMessageId!=='string')return null;
+    const users=(Array.isArray(view.items)?view.items:[]).filter(item=>item?.role==='user');
+    const index=users.findIndex(item=>item.nativeMessageId===recovery.userMessageId ||
+      item.userMessageId===recovery.userMessageId || item.id===recovery.userMessageId);
+    if(index<0)return null;
+    const next=users[index+1];
+    const nextUserMessageId=typeof next?.nativeMessageId==='string'&&next.nativeMessageId
+      ? next.nativeMessageId : null;
+    if(!nextUserMessageId&&view.transcriptComplete!==true)return null;
+    return {userMessageId:recovery.userMessageId,anchorPresent:true,
+      nextUserMessageId,transcriptComplete:view.transcriptComplete===true};
+  }
   function framesOf(m, view) {
     const collections = ['items', 'approvals', 'closedApprovals', 'issues'];
-    let base = { ...view, items: [], approvals: [], closedApprovals: [], issues: [] };
+    const scope = recoveryScope(m, view);
+    let base = { ...view, ...(scope?{recoveryScope:scope}:{}), items: [], approvals: [], closedApprovals: [], issues: [] };
     // Reserve the maximum sequence width so crossing 9 -> 10 cannot overflow.
     const sizeOfBase = value => encode(JSON.stringify(envelope(m, value, Number.MAX_SAFE_INTEGER)));
     if (sizeOfBase(base) > MAX_FRAME_BYTES) {
-      base = { conversationId: m.conversationId, page: view.page, items: [], approvals: [], closedApprovals: [],
+      base = { conversationId: m.conversationId, page: view.page, ...(scope?{recoveryScope:scope}:{}),
+        items: [], approvals: [], closedApprovals: [],
         issues: [{ code: 'PAGE_VIEW_METADATA_TOO_LARGE' }] };
     }
     if (sizeOfBase(base) > MAX_FRAME_BYTES) {
@@ -440,6 +459,12 @@
             monitor.conversationId !== s.conversationId) {
           respond({ ok: false, error: 'PAGE_IDENTITY_CHANGED' }); return;
         }
+        // The same document can enter/leave recovery without a new lease.
+        // Refresh only boundary metadata; pending frames keep their original
+        // capture-wide scope.
+        monitor.recovery = s.recovery;
+        monitor.runId = s.runId;
+        monitor.active = s.active;
       } else {
         if (monitor) revokeObservation(monitor);
         monitor = { ...s, routeRevoked: false, sequence: 0, pending: [], deliveryFlight: null,

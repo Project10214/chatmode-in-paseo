@@ -148,7 +148,8 @@ async function recoveryInspect() {
   const targets = await api('/recovery/targets', undefined, true, profile);
   if (config !== profile) throw codeError('CONNECTION_CHANGED');
   const sessions = (Array.isArray(targets.sessions) ? targets.sessions : [])
-    .filter(row => row?.conversationId === cid);
+    .filter(row => row?.conversationId === cid ||
+      (row?.conversationId == null && row?.unbound === true));
   return { tabId: tab.id, conversationId: cid, documentKey: page.documentKey,
     url: page.url, sessions, candidates: Array.isArray(reply.value.candidates) ? reply.value.candidates : [] };
 }

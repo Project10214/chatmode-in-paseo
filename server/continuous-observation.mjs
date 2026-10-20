@@ -16,13 +16,37 @@ const RECOVERY_ACTIVE = new Set(['observing','needs_review']);
 export function recoveryActive(session) {
   return Boolean(session?.recovery && RECOVERY_ACTIVE.has(session.recovery.status));
 }
+const recoveryTurn = recovery => recovery?.turnId ?? null;
+/** The selected turn owns historical-read filtering for as long as the
+ * original failed turn is current. A completed recovery stays bounded too;
+ * clearing it on completion would make the next ordinary frame backfill the
+ * whole page. A genuinely new prompt changes `session.turn.id` and releases
+ * this boundary through the existing turn lifecycle.
+ */
+function recoveryBoundary(session) {
+  const recovery=session?.recovery;
+  if(!recovery)return null;
+  if(recoveryTurn(recovery)!==session.turn?.id)return null;
+  return recoveryActive(session)||recovery.status==='completed'?recovery:null;
+}
 /** Resolve the selected user turn from THIS frame. The page end is known only
  * when another user message exists or the page explicitly proved its mounted
  * transcript is complete. `{known:false}` never imports the whole page.
+ * `scope` is capture-wide evidence from the content script: a transport frame
+ * can split before the anchor/answer, but every frame from that same full-page
+ * capture still carries the selected boundary.
  */
-export function recoveryWindow(session,items,transcriptComplete) {
-  if(!recoveryActive(session))return null;
-  const anchor=session.recovery.userMessageId;
+export function recoveryWindow(session,items,transcriptComplete,scope=null) {
+  const recovery=recoveryBoundary(session);
+  if(!recovery)return null;
+  const anchor=recovery.userMessageId;
+  if(scope&&scope.anchorPresent===true&&scope.userMessageId===anchor) {
+    const next=typeof scope.nextUserMessageId==='string'&&scope.nextUserMessageId
+      ? scope.nextUserMessageId : null;
+    if(next||scope.transcriptComplete===true)
+      return {known:true,userMessageId:anchor,nextUserMessageId:next,
+        transcriptComplete:scope.transcriptComplete===true};
+  }
   const users=(Array.isArray(items)?items:[]).filter(item=>item?.role==='user');
   const index=users.findIndex(item=>item.nativeMessageId===anchor||item.userMessageId===anchor||item.id===anchor);
   if(index<0)return {known:false,reason:'RECOVERY_ANCHOR_MISSING'};
@@ -51,13 +75,18 @@ export function ensureObservation(session) {
   return session.observation;
 }
 export function observationDescriptor(session) {
-  const observation=session.observation;
+  const observation=session.observation,recovery=recoveryBoundary(session);
   return {sessionId:session.id,tabId:session.tabId,documentKey:session.documentKey,
     conversationId:session.conversationId,observationLease:observation.lease,
     generation:observation.generation,runId:observation.run?.id??null,
     // Only an active run needs its page reopened by the extension. Idle or
     // historical bindings must be observed only through an already-open tab.
     active:Boolean(observation.run?.active||['sending','running','stopping'].includes(session.status)),
+    // Capture-wide boundary evidence. It lets a large read be split by the
+    // existing transport framing without losing the selected user anchor.
+    ...(recovery?{recovery:{turnId:recovery.turnId,userMessageId:recovery.userMessageId,
+      nextUserMessageId:recovery.nextUserMessageId??null,
+      transcriptComplete:recovery.transcriptComplete===true,status:recovery.status}}:{}),
     ...(session.turn?.receiptPending?{receiptPending:true,turnId:session.turn.id,
       lease:session.turn.lease,nativeMessageId:null}:{})};
 }
@@ -115,7 +144,7 @@ function previousHistoryItem(session,source,commands) {
     const recorded=session.history.find(row=>row.type==='user_message'&&row.messageId===nativeId);
     if(recorded)return recorded;
     const command=Object.values(commands).find(c=>c.sessionId===session.id&&c.kind==='send'&&c.result?.nativeMessageId===nativeId);
-    const anchorMatch=recoveryActive(session)&&session.recovery.userMessageId===nativeId;
+    const anchorMatch=recoveryBoundary(session)?.userMessageId===nativeId;
     const turnId=command?.payload.turnId??(session.turn?.nativeMessageId===nativeId||anchorMatch?session.turn.id:null);
     if(turnId)return session.history.find(row=>row.id==='user:'+turnId)??null;
   }
@@ -206,7 +235,7 @@ function projectSources(session,result,commands,run,events,issues,window=null) {
       if(index<0)session.sourceProjections.push(record);else session.sourceProjections[index]=record;
       events.push({id:session.id,state:'source',turnId:run?.id??null,item,
         sourceId:source.id,revision:source.revision,change:changes.get(source.id)?.change??'new'});
-      if(window?.known&&item.type==='assistant_message'&&source.role==='assistant'&&
+      if(window?.known&&recoveryActive(session)&&item.type==='assistant_message'&&source.role==='assistant'&&
           source.lane==='output'&&source.kind==='message'&&item.text.trim()){
         // Completion still requires the existing host confirmation. This is
         // only the set of projected outputs that must be confirmed.
@@ -281,29 +310,33 @@ export function recordPageView(session,event,commands={},at=Date.now()) {
     }
     if(run?.awaitCommandView===attempt.commandId)delete run.awaitCommandView;
   }
-  let window=recoveryWindow(session,event.view.items,event.view.transcriptComplete===true);
+  let window=recoveryWindow(session,event.view.items,event.view.transcriptComplete===true,
+    event.view.recoveryScope);
+  const activeRecovery=recoveryActive(session);
   const unknown=Boolean(window&&!window.known);
   if(unknown) {
-    const already=session.recovery.status==='needs_review'&&session.recovery.reason===window.reason;
-    session.recovery.status='needs_review';
-    session.recovery.needsReviewAt=at;
-    session.recovery.reason=window.reason;
-    delete session.recovery.pageStandbyAt;
-    if(run?.active) {
-      run.active=false;run.endedAt=at;
+    if(activeRecovery) {
+      const already=session.recovery.status==='needs_review'&&session.recovery.reason===window.reason;
+      session.recovery.status='needs_review';
+      session.recovery.needsReviewAt=at;
+      session.recovery.reason=window.reason;
+      delete session.recovery.pageStandbyAt;
+      if(run?.active) {
+        run.active=false;run.endedAt=at;
+      }
+      if(!already) {
+        issues.push({code:window.reason});
+        events.push({id:session.id,state:'recovery-needs-review',turnId:run?.id??null,reason:window.reason});
+      }
     }
-    if(!already) {
-      issues.push({code:window.reason});
-      events.push({id:session.id,state:'recovery-needs-review',turnId:run?.id??null,reason:window.reason});
-    }
-  } else if(window?.known) {
+  } else if(window?.known&&activeRecovery) {
     if(session.recovery.status==='needs_review')session.recovery.status='observing';
     delete session.recovery.reason;delete session.recovery.needsReviewAt;
     session.recovery.nextUserMessageId=window.nextUserMessageId??null;
     session.recovery.transcriptComplete=window.transcriptComplete===true;
   }
   if(page.state==='running'&&!run?.active) {
-    if(window?.known) {
+    if(activeRecovery&&window?.known) {
       // Resume the same recovery run when the answer grows after a standby
       // read. Never create a parallel page-origin run for the same document.
       run=observation.run;
@@ -312,7 +345,7 @@ export function recordPageView(session,event,commands={},at=Date.now()) {
         session.recovery.status='observing';
         events.push({id:session.id,state:'recovery-running',turnId:run.id});
       }
-    } else if(!recoveryActive(session)) {
+    } else if(!window&&!activeRecovery) {
       run=observation.run={id:randomUUID(),active:true,origin:'page',startedAt:at,endedAt:null};
       events.push({id:session.id,state:'page-running',turnId:run.id});
     }

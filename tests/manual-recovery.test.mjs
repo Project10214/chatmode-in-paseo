@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ProviderEventSchema } from '@getpaseo/plugin/server/provider';
 import { fixture, pageView, until } from './helpers.mjs';
+import { page as contentPage } from './fixtures/content-page.mjs';
 import { createProvider, CAPABILITIES } from '../server/provider.mjs';
 import { sourceRevision } from '../server/source-ledger.mjs';
 
@@ -29,6 +30,23 @@ async function uncertain(t, clientMessageId = 'message-1') {
   assert.equal(s.status, 'idle');
   assert.ok(s.conversationId);
   return { f, s, dispatched };
+}
+// The first Send can fail before the browser ever bound a Conversation. Keep
+// this path separate from dispatchSend(), which always binds.
+async function unboundUncertain(t, clientMessageId = 'message-1') {
+  const f = await fixture(t), opened = await f.ready();
+  await f.broker.prompt(opened.id, clientMessageId, 'hello');
+  const command = f.broker.queued().find(c => c.kind === 'send' && c.sessionId === opened.id);
+  const claim = await f.broker.claim(command.id, opened.tabId, opened.documentKey);
+  await f.broker.authorize(command.id, claim.lease);
+  await f.broker.failTurn(opened.id, 'TURN_CHANGED', true, command.payload.turnId);
+  const s = f.broker.snapshot(opened.id);
+  assert.equal(s.conversationId, null);
+  assert.equal(s.status, 'blocked');
+  assert.equal(s.turn.outcome, 'failed');
+  assert.equal(s.turn.authorized, true);
+  assert.equal(s.turn.receivedAt, undefined);
+  return { f, s, command, claim };
 }
 
 function claim(f, s, extra = {}) {
@@ -403,4 +421,175 @@ test('REC-10 archive waits for recovery completion and then closes only the arch
   await completeRecovery(f, s);
   assert.ok(f.broker.queued().some(c => c.kind === 'close-tab' && c.sessionId === s.id),
     'once recovery completes, the archived idle tab follows the existing close path');
+});
+
+test('REC-15 an unbound first Send failure is recoverable by explicitly selecting the current page turn', async t => {
+  const { f, s } = await unboundUncertain(t);
+  const events = [];
+  const unsubscribe = f.broker.subscribe(s.id, event => events.push(event));
+  t.after(unsubscribe);
+  const offered = f.broker.manualRecoveryTargets();
+  assert.equal(offered.length, 1);
+  assert.equal(offered[0].sessionId, s.id);
+  assert.equal(offered[0].conversationId, null);
+  assert.equal(offered[0].unbound, true);
+
+  const cid = 'chat-unbound-first-send';
+  const result = await f.broker.claimRecovery({
+    sessionId: s.id, tabId: s.tabId, documentKey: s.documentKey,
+    url: `https://chatgpt.com/c/${cid}`, userMessageId: 'u1',
+    boundaryKnown: true, nextUserMessageId: 'u2'
+  });
+  const bound = f.broker.snapshot(s.id);
+  assert.equal(bound.conversationId, cid);
+  assert.equal(bound.status, 'running');
+  assert.equal(bound.turn.outcome, 'failed');
+  assert.equal(bound.turn.nativeMessageId, undefined,
+    'selecting a page conversation is not a native receipt');
+  assert.equal(bound.turn.receivedAt, undefined);
+  assert.equal(result.observation.conversationId, cid);
+  assert.equal(result.observation.recovery.userMessageId, 'u1');
+  assert.equal(events.some(event => event.state === 'bound' && event.conversationId === cid), true);
+  assert.equal(events.some(event => event.state === 'recovery-started'), true);
+  assert.equal(Object.values(f.store.read().commands).filter(c => c.kind === 'send').length, 1);
+  assert.equal(f.store.read().commands[s.turn.commandId].phase, 'failed');
+  assert.equal(f.store.read().commands[s.turn.commandId].error, 'RECOVERY_TAKEOVER');
+
+  const target = user(cid, 'u1', 'the unbound question', 1);
+  const answer = assistant(cid, 'a1', 'u1', 'the unbound answer', 2);
+  const next = user(cid, 'u2', 'the next question', 3);
+  await f.view(bound, { state: 'running', transcriptComplete: false, items: [target, answer, next] });
+  const current = f.broker.snapshot(s.id);
+  assert.equal(current.recovery.status, 'observing');
+  assert.equal(current.history.filter(item => item.type === 'user_message').length, 1,
+    'the failed original user row is reused, not duplicated');
+  assert.equal(current.history.some(item => item.text === 'the unbound answer'), true);
+  await f.view(current, { state: 'standby', transcriptComplete: false, items: [target, answer, next] });
+  const completed = await completeRecovery(f, s);
+  assert.equal(completed.recovery.status, 'completed');
+  assert.equal(completed.status, 'idle');
+  assert.equal(Object.values(f.store.read().commands).filter(c => c.kind === 'send').length, 1,
+    'manual recovery never creates or replays a Send');
+});
+
+test('REC-16 completed recovery keeps the selected-turn boundary through repeated frames and reconnect, then releases on a new prompt', async t => {
+  const { f, s } = await uncertain(t);
+  const cid = s.conversationId;
+  await claim(f, s);
+  const oldUser = user(cid, 'old-u', 'old question', 0);
+  const oldAnswer = assistant(cid, 'old-a', 'old-u', 'old answer', 1);
+  const targetUser = user(cid, 'u1', 'selected question', 2);
+  const targetAnswer = assistant(cid, 'a1', 'u1', 'selected answer', 3);
+  const nextUser = user(cid, 'u2', 'later question', 4);
+  const nextAnswer = assistant(cid, 'a2', 'u2', 'later answer', 5);
+  const fullPage = [oldUser, oldAnswer, targetUser, targetAnswer, nextUser, nextAnswer];
+  await f.view(f.broker.snapshot(s.id), { state: 'running', transcriptComplete: true, items: fullPage });
+  await f.view(f.broker.snapshot(s.id), { state: 'standby', transcriptComplete: true,
+    items: [targetUser, targetAnswer, nextUser] });
+  const completed = await completeRecovery(f, s);
+  assert.equal(completed.recovery.status, 'completed');
+
+  const samePage = await f.view(completed, { state: 'running', transcriptComplete: true, items: fullPage });
+  const repeated = f.broker.snapshot(s.id);
+  assert.equal(samePage.accepted, true);
+  assert.equal(repeated.recovery.status, 'completed');
+  assert.equal(repeated.status, 'idle');
+  assert.equal(repeated.observation.run?.active, false, 'completion is not reopened by an ordinary frame');
+  assert.equal(repeated.history.filter(item => item.type === 'assistant_message').length, 1);
+  assert.equal(repeated.history.some(item => item.text === 'old answer' || item.text === 'later answer'), false);
+  assert.equal(repeated.sources.some(item => item.id === oldAnswer.id || item.id === nextAnswer.id), false);
+
+  const rebound = await f.broker.rebindObservation({
+    sessionId: s.id, observationLease: repeated.observation.lease,
+    previousDocumentKey: repeated.documentKey, tabId: repeated.tabId,
+    documentKey: 'document-reconnected', url: `https://chatgpt.com/c/${cid}`
+  });
+  assert.equal(rebound.recovery?.status, 'completed');
+  await f.view(f.broker.snapshot(s.id), { state: 'running', transcriptComplete: true, items: fullPage });
+  const reconnected = f.broker.snapshot(s.id);
+  assert.equal(reconnected.recovery.status, 'completed');
+  assert.equal(reconnected.history.some(item => item.text === 'old answer' || item.text === 'later answer'), false);
+
+  const next = await f.broker.prompt(s.id, 'message-2', 'a genuinely new question');
+  assert.notEqual(next.turnId, completed.turn.id);
+  await f.dispatchSend(f.broker.snapshot(s.id), { state: 'running' });
+  const freshUser = user(cid, 'u3', 'fresh question', 6);
+  const freshAnswer = assistant(cid, 'a3', 'u3', 'fresh answer', 7);
+  await f.view(f.broker.snapshot(s.id), { state: 'running', transcriptComplete: true,
+    items: [...fullPage, freshUser, freshAnswer] });
+  const after = f.broker.snapshot(s.id);
+  assert.equal(after.recovery.status, 'completed');
+  assert.equal(after.history.some(item => item.text === 'fresh answer'), true,
+    'a new prompt leaves the completed recovery boundary and syncs normally');
+});
+
+test('REC-17 a transport-split long read keeps the capture-wide recovery boundary', async t => {
+  const { f, s } = await uncertain(t);
+  const cid = s.conversationId;
+  const content = contentPage(t);
+  content.navigate(cid);
+  const identity = await content.identity();
+  const claimed = await f.broker.claimRecovery({
+    sessionId: s.id, tabId: content.session().tabId, documentKey: identity.value.documentKey,
+    url: identity.value.url, userMessageId: 'u1', boundaryKnown: true, nextUserMessageId: 'u2'
+  });
+  assert.equal(claimed.recovery.status, 'observing');
+
+  const items = [];
+  for (let index = 0; index < 59; index++) {
+    items.push(user(cid, `old-u-${index}`, `old question ${index}`, index * 2));
+    items.push(assistant(cid, `old-a-${index}`, `old-u-${index}`,
+      `old answer ${index} ${'x'.repeat(6000)}`, index * 2 + 1));
+  }
+  const targetUser = user(cid, 'u1', 'selected question', 118);
+  const targetAnswer = assistant(cid, 'a1', 'u1', 'a'.repeat(24 * 1024), 119);
+  const nextUser = user(cid, 'u2', 'next question', 120);
+  content.state.source = { conversationId: cid, items: [...items, targetUser, targetAnswer, nextUser],
+    approvals: [], closedApprovals: [], issues: [], transcriptComplete: true };
+  const monitorReply = await content.monitor(claimed.observation);
+  assert.equal(monitorReply.ok, true);
+  await content.tick(0);
+
+  const frames = content.accepted.filter(request => request.type === 'page-view')
+    .map(request => request.event.view);
+  assert.ok(frames.length >= 2, 'the existing transport must split this read');
+  const anchorFrame = frames.findIndex(view => view.items.some(item => item.id === targetUser.id));
+  const answerFrame = frames.findIndex(view => view.items.some(item => item.id === targetAnswer.id));
+  assert.ok(anchorFrame >= 0 && answerFrame > anchorFrame, 'the target answer must be in a later frame');
+  assert.equal(frames[anchorFrame].items.some(item => item.id === targetAnswer.id), false);
+  assert.equal(frames[answerFrame].items.some(item => item.id === targetUser.id), false);
+  assert.ok(frames.every(view => view.recoveryScope?.anchorPresent === true &&
+    view.recoveryScope.userMessageId === 'u1'));
+
+  for (const request of content.accepted.filter(value => value.type === 'page-view'))
+    await f.broker.observeView(request.event);
+  const current = f.broker.snapshot(s.id);
+  assert.equal(current.recovery.status, 'observing');
+  assert.equal(current.recovery.reason, undefined);
+  assert.equal(current.recovery.nextUserMessageId, 'u2');
+  assert.equal(current.history.some(item => item.text === targetAnswer.text), true,
+    'the answer frame is imported even though the anchor was in the prior frame');
+  assert.equal(current.sources.some(item => item.id === `old-a-0`), false);
+});
+
+test('REC-18 a same-lease monitor picks up the recovery boundary before the next capture', async t => {
+  const content = contentPage(t);
+  const session = content.session();
+  assert.equal((await content.monitor(session)).ok, true);
+  content.accepted.length = 0;
+  content.state.source = { conversationId: 'chat-a', items: [
+    user('chat-a', 'u1', 'selected question', 1),
+    assistant('chat-a', 'a1', 'u1', 'selected answer', 2),
+    user('chat-a', 'u2', 'next question', 3)
+  ], approvals: [], closedApprovals: [], issues: [], transcriptComplete: true };
+  const reply = await content.monitor({ ...session,
+    recovery: { turnId: 'turn-a', userMessageId: 'u1', nextUserMessageId: 'u2',
+      transcriptComplete: true, status: 'observing' } });
+  assert.equal(reply.ok, true);
+  const frames = content.accepted.filter(request => request.type === 'page-view')
+    .map(request => request.event.view);
+  assert.ok(frames.length >= 1);
+  assert.ok(frames.every(view => view.recoveryScope?.anchorPresent === true &&
+    view.recoveryScope.userMessageId === 'u1' && view.recoveryScope.nextUserMessageId === 'u2'),
+    'the existing lease must learn the new boundary without reconnecting');
 });

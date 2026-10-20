@@ -386,3 +386,24 @@ test('RECOVERY-POPUP4 cancel is an explicit popup-only operation and never a pag
   assert.deepEqual(f.calls.find(c=>c.route==='/recovery/cancel').body,{sessionId:'session-a'});
   assert.equal(f.calls.some(c=>c.body?.kind==='binding_lost'||c.message==='command'),false);
 });
+test('RECOVERY-POPUP5 an unbound failed session remains selectable on the current conversation and claims by page identity',async()=>{
+  const f=await recoveryWorker();
+  f.state.targets={sessions:[
+    {sessionId:'session-unbound',conversationId:null,unbound:true,status:'blocked'},
+    {sessionId:'session-other',conversationId:'chat-b',unbound:false,status:'running'}
+  ]};
+  f.state.recoveryCandidates={ok:true,value:{conversationId:'chat-a',documentKey:'document-a',
+    url:sessionUrl(),transcriptComplete:true,candidates:[
+      {userMessageId:'u1',text:'first',recoverable:true,boundaryKnown:true,transcriptComplete:true}]}};
+  const inspect=await f.message({type:'recovery-inspect'},popupSender());
+  assert.equal(inspect.ok,true);
+  assert.equal(inspect.value.sessions.length,1);
+  assert.equal(inspect.value.sessions[0].sessionId,'session-unbound');
+  const claim=await f.message({type:'recovery-claim',sessionId:'session-unbound',userMessageId:'u1'},popupSender());
+  assert.equal(claim.ok,true);
+  assert.deepEqual(f.calls.find(c=>c.route==='/recovery/claim').body,
+    {sessionId:'session-unbound',tabId:71,documentKey:'document-a',url:sessionUrl(),
+      userMessageId:'u1',boundaryKnown:true,transcriptComplete:true});
+  assert.equal(f.calls.some(c=>['/claim','/authorize','/result'].includes(c.route)),false,
+    'binding an unbound recovery never creates a Send');
+});
