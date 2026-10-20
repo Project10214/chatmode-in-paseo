@@ -128,6 +128,30 @@ async function settleBlankTab(tabId) {
   for (const end = Date.now() + 30000; Date.now() < end; await delay(500)) if (await ready()) break;
   return true;
 }
+async function recoveryTab() {
+  const pick = async query => (await chrome.tabs.query(query)).find(tab => conversation(tab?.url));
+  let tab = null;
+  try { tab = await pick({ active: true, lastFocusedWindow: true }); } catch {}
+  if (!tab) tab = await pick({ active: true });
+  if (!tab || !Number.isInteger(tab.id)) throw codeError('OPEN_CHATGPT_TAB');
+  return tab;
+}
+async function recoveryInspect() {
+  const tab = await recoveryTab(), profile = config;
+  if (!profile.token) throw codeError('AUTH_REQUIRED');
+  const page = await identity(tab.id);
+  const cid = conversation(page.url);
+  if (!cid) throw codeError('WRONG_CONVERSATION');
+  const reply = await tabRpc(tab.id, { type: 'recovery-candidates' }, 5000);
+  if (!reply?.ok || reply.value?.conversationId !== cid || reply.value?.documentKey !== page.documentKey)
+    throw codeError(reply?.error ?? 'RECOVERY_READ_FAILED');
+  const targets = await api('/recovery/targets', undefined, true, profile);
+  if (config !== profile) throw codeError('CONNECTION_CHANGED');
+  const sessions = (Array.isArray(targets.sessions) ? targets.sessions : [])
+    .filter(row => row?.conversationId === cid);
+  return { tabId: tab.id, conversationId: cid, documentKey: page.documentKey,
+    url: page.url, sessions, candidates: Array.isArray(reply.value.candidates) ? reply.value.candidates : [] };
+}
 async function identity(tabId, expected = null) {
   const deadline = Date.now() + 25000;
   do {
@@ -681,6 +705,29 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     // Trust only our exact extension UI, whether Chrome opens it as a popup or a tab.
     const popup = sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL('popup.html');
     if (popup && message.type === 'status') return { paired: Boolean(config.token), connected: Boolean(config.token) && Date.now() - lastOnlineAt < 15000, endpoint: config.endpoint, activeSessions: activeSessions.length };
+    if (popup && message.type === 'recovery-inspect') return recoveryInspect();
+    if (popup && message.type === 'recovery-claim') {
+      const info = await recoveryInspect();
+      if (!info.sessions.some(row => row.sessionId === message.sessionId))
+        throw codeError('RECOVERY_SESSION_NOT_FOUND');
+      const candidate = info.candidates.find(row => row.userMessageId === message.userMessageId);
+      if (!candidate || candidate.recoverable !== true) throw codeError('RECOVERY_MESSAGE_UNSUPPORTED');
+      if (candidate.boundaryKnown !== true) throw codeError('RECOVERY_BOUNDARY_UNKNOWN');
+      const actual = await chrome.tabs.get(info.tabId);
+      if (conversation(actual.url) !== info.conversationId) throw codeError('RECOVERY_BOUNDARY_UNKNOWN');
+      const result = await api('/recovery/claim', { sessionId: message.sessionId,
+        tabId: info.tabId, documentKey: info.documentKey, url: actual.url,
+        userMessageId: message.userMessageId, boundaryKnown: true,
+        transcriptComplete: candidate.transcriptComplete === true,
+        ...(candidate.nextUserMessageId ? { nextUserMessageId: candidate.nextUserMessageId } : {}) });
+      void pump();
+      return result;
+    }
+    if (popup && message.type === 'recovery-cancel') {
+      const result = await api('/recovery/cancel', { sessionId: message.sessionId });
+      void pump();
+      return result;
+    }
     if (popup && message.type === 'pair') {
       const candidate = { endpoint: endpointOf(message.endpoint || DEFAULT_ENDPOINT).origin, token: null };
       if (executions.size || activeSessions.length) throw codeError('BRIDGE_BUSY');

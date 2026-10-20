@@ -442,3 +442,23 @@ test('CPROV-11 actual prompt exposes authorization and standby before a delayed 
   assert.equal(Object.values(p.store.read().commands).filter(command=>command.kind==='send').length,1);
   p.assertNoInvalid();
 });
+
+test('CPROV-13 opening a session during recovery does not invent a host turn for the recovery run',async t=>{
+  const p=await context(t),ready=await p.ready();
+  await p.broker.prompt(ready.id,'recovery-prompt','recover me');
+  const sent=await p.dispatchSend(ready,{state:'running'});
+  await p.broker.failTurn(ready.id,'TURN_CHANGED',true,sent.command.payload.turnId);
+  const failed=p.current(ready.id);
+  const recovery=await p.broker.claimRecovery({sessionId:failed.id,tabId:failed.tabId,
+    documentKey:failed.documentKey,url:`https://chatgpt.com/c/${failed.conversationId}`,
+    userMessageId:'11111111-1111-4111-8111-111111111111',
+    nextUserMessageId:'22222222-2222-4222-8222-222222222222',boundaryKnown:true,
+    transcriptComplete:false});
+  const runId=recovery.recovery.runId;
+  await p.connection.send({type:'session.open',requestId:'open-recovery',sessionId:'host-recovery',
+    config:CONFIG,history:'skip',persistence:{version:1,data:{id:failed.id}}});
+  await until(()=>p.events.some(event=>event.type==='session.ready'&&event.sessionId==='host-recovery'));
+  assert.equal(p.events.filter(event=>event.type==='session.turn'&&event.turnId===runId).length,0);
+  assert.equal(p.current(failed.id).status,'running');
+  p.assertNoInvalid();
+});

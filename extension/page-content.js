@@ -528,6 +528,23 @@
     }
     return result;
   }
+  // Page-end evidence is deliberately conservative. Only a contiguous visible
+  // 1..N sequence can prove the mounted transcript ends at N; virtualized or
+  // non-numeric turn markers cannot.
+  function transcriptComplete(scopes) {
+    const turns = new Set();
+    let hidden = false;
+    for (const root of scopes) for (const node of root.querySelectorAll('[data-testid^="conversation-turn-"]')) {
+      const match = /^conversation-turn-(\d+)$/.exec(attr(node, 'data-testid') ?? '');
+      if (!match) continue;
+      const boxes = [...node.getClientRects()];
+      if (!visible(node) || !boxes.some(box => box.width > 0 && box.height > 0)) { hidden = true; continue; }
+      turns.add(Number(match[1]));
+    }
+    if (hidden) return false;
+    const ordered = [...turns].sort((a, b) => a - b);
+    return ordered.length > 0 && ordered.every((value, index) => value === index + 1);
+  }
   function read() {
     const issues = [], items = [], cid = conversationId(), scopes = roots(issues);
     mediaNodes = new Map();
@@ -583,7 +600,7 @@
     }
     return { conversationId: cid, observedAt: Date.now(), items, approvals,
       closedApprovals: [...closed,...[...supersededApprovals].map(key=>({key,reason:'superseded'}))],
-      issues };
+      transcriptComplete: transcriptComplete(scopes), issues };
   }
   function resolveApproval(key, choice) {
     if (choice !== 'allow-once' && choice !== 'deny') return null;

@@ -4,6 +4,7 @@ import { catalogService } from './catalog.mjs';
 import { createChromeWake } from './chrome-wake.mjs';
 import { sessionIdFromPersistence } from './wake.mjs';
 import { createProviderDelivery } from './provider-delivery.mjs';
+import { recoveryActive } from './continuous-observation.mjs';
 import { permissionRequest, approvalChoice } from './approval.mjs';
 import { errorLabel } from '../shared/ui-copy.mjs';
 
@@ -299,9 +300,47 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
       binding.delivery?.kick();
       return;
     }
+    if(event.state==='recovery-started'||event.state==='recovery-running') {
+      if(event.state==='recovery-started')emit({type:'session.notice',sessionId:hostId,notice:{
+        id:'recovery-status:'+binding.id,severity:'info',title:'正在接回网页回答',
+        description:'只读取所选用户消息到下一轮用户消息之间的页面内容；不会重发消息。'}});
+      return;
+    }
+    if(event.state==='recovery-needs-review') {
+      emit({type:'session.notice',sessionId:hostId,notice:{
+        id:'recovery-status:'+binding.id,severity:'warning',title:'无法确认目标轮边界',
+        description:'目标用户消息或页面末尾已变化，请重新选择这次回答；旧内容没有被导入。'}});
+      return;
+    }
+    if(event.state==='recovery-standby') {
+      if(binding.work)for(const activity of binding.work.values()){
+        if(activity.data.phase==='completed')continue;
+        activity.data.phase='completed';activity.data.nativeStatus='complete';
+        for(const step of activity.data.steps)step.done=true;
+        emitItem(hostId,structuredClone(activity));
+      }
+      emit({type:'session.notice',sessionId:hostId,notice:{
+        id:'recovery-status:'+binding.id,severity:'info',title:'已读取目标轮，等待正文确认',
+        description:'接回内容仍需宿主时间线确认；不会自动重发消息。'}});
+      binding.delivery?.kick();return;
+    }
+    if(event.state==='recovery-completed') {
+      emit({type:'session.notice',sessionId:hostId,notice:{
+        id:'recovery-status:'+binding.id,severity:'info',title:'网页回答已接回',dismissed:true}});
+      binding.delivery?.kick();return;
+    }
+    if(event.state==='recovery-cancelled'||event.state==='recovery-expired') {
+      emit({type:'session.notice',sessionId:hostId,notice:{
+        id:'recovery-status:'+binding.id,severity:'warning',
+        title:event.state==='recovery-cancelled'?'已取消接回网页回答':'接回网页回答已过期',
+        description:'不会自动重发原消息；可以重新选择目标轮或发送新的消息。'}});
+      return;
+    }
     if(event.state==='page-running') {
       const run=broker.snapshot(binding.id).observation?.run;
-      if(run?.active&&run.id===event.turnId)announce(hostId,event.turnId);
+      // A recovery run is not a Paseo prompt turn. It must not create a
+      // synthetic host turn that has no matching completion event.
+      if(run?.active&&run.id===event.turnId&&run.origin!=='recovery')announce(hostId,event.turnId);
       return;
     }
     if(event.state==='page-standby') {
@@ -329,6 +368,7 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
       emit({type:'session.permission',sessionId:hostId,request:permissionRequest(event.approval)});
       const actual=store.read().sessions[binding.id]?.approvals?.[event.approval.key];
       const auto=store.read().runtimeSettings?.autoAllowApprovals===true &&
+        !recoveryActive(store.read().sessions[binding.id]) &&
         event.approval.autoEligible===true && Boolean(event.approval.autoTier) &&
         !actual?.manualRequested&&!actual?.manualVeto&&!actual?.autoSuppressed&&!actual?.clickUncertain &&
         !binding.autoApprovals?.has(event.approval.key);
@@ -589,6 +629,9 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
               s.conversationId ? '已恢复对话关联' : '配置已保存，待发送时应用',
             description: resumingActive ? '继续读取原对话；不会重发消息。' :
               s.conversationId ? '不会重发旧消息。' : '首次发送时生效。' } });
+          if(recoveryActive(s))emit({type:'session.notice',sessionId:input.sessionId,notice:{
+            id:'recovery-status:'+s.id,severity:'info',title:'正在接回网页回答',
+            description:'只读取所选目标轮；不会重发消息。'}});
           configEvent(input.sessionId, s.id);
           if(input.history==='replay')for(const item of broker.snapshot(s.id).history)emitItem(input.sessionId,item);
           emit({type:'session.ready',requestId:input.requestId,sessionId:input.sessionId});

@@ -88,6 +88,8 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
           return json(res,200,{sessions:broker.observationBindings()},origin);
         if (req.method === 'GET' && route === '/recovery-targets')
           return json(res, 200, { sessions: broker.recoveryTargets() }, origin);
+        if (req.method === 'GET' && route === '/recovery/targets')
+          return json(res, 200, { sessions: broker.manualRecoveryTargets() }, origin);
         invariant(req.method === 'POST', 'ROUTE_NOT_FOUND');
         const value = await body(req); let result;
         switch (route) {
@@ -139,6 +141,8 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
             break;
           }
           case '/rebind-observation': result = await broker.rebindObservation(value); break;
+          case '/recovery/claim': result = await broker.claimRecovery(value); break;
+          case '/recovery/cancel': result = await broker.cancelRecovery(value.sessionId); break;
           case '/page-view':
             result=await broker.observeView(value);
             if(!result.duplicate&&!result.stale&&typeof onExternalTurn==='function')

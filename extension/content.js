@@ -402,6 +402,32 @@
       }, e=>respond({ok:false,error:e.code??'TRANSCRIPT_UNCONFIRMED'}));
       return true;
     }
+    if (message.type === 'recovery-candidates') {
+      const cid = conversation();
+      if (!cid) { respond({ ok: false, error: 'WRONG_CONVERSATION' }); return; }
+      const source = readSource({ conversationId: cid });
+      if (source.conversationId !== cid) { respond({ ok: false, error: 'WRONG_CONVERSATION' }); return; }
+      const users = source.items.filter(item => item?.role === 'user');
+      const candidates = users.map((item, index) => {
+        const next = users[index + 1] ?? null;
+        const nextUserMessageId = typeof next?.nativeMessageId === 'string' && next.nativeMessageId
+          ? next.nativeMessageId : null;
+        return {
+          userMessageId: typeof item.nativeMessageId === 'string' && item.nativeMessageId
+            ? item.nativeMessageId : null,
+          text: typeof item.text === 'string' ? item.text.slice(0, 500) : '',
+          recoverable: typeof item.nativeMessageId === 'string' && item.nativeMessageId.length > 0,
+          // A next user item without a stable native ID is not a usable server
+          // boundary. Only page-end proof can make that last turn selectable.
+          boundaryKnown: Boolean(nextUserMessageId) || source.transcriptComplete === true,
+          transcriptComplete: source.transcriptComplete === true,
+          ...(nextUserMessageId ? { nextUserMessageId } : {}),
+        };
+      });
+      respond({ ok: true, value: { conversationId: cid, documentKey, url: location.href,
+        transcriptComplete: source.transcriptComplete === true, candidates } });
+      return;
+    }
     if (message.type === 'monitor') {
       const s = message.session;
       if (disposed || !s || s.documentKey !== documentKey || s.conversationId !== conversation() ||
