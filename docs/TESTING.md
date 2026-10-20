@@ -1,6 +1,6 @@
 # 测试与验收指南
 
-适用于 **CIP v9 / 扩展 0.2.49 / 插件 alpha.4.45** 的开发、修复和升级。产品范围与行为边界见[产品说明书](PRODUCT_MANUAL.md)，端点以 [PROTOCOL.md](PROTOCOL.md) 为准。旧版 v5 路由不再作为现役验收指令。
+适用于 **CIP v9 / 扩展 0.2.50 / 插件 alpha.4.45** 的开发、修复和升级。产品范围与行为边界见[产品说明书](PRODUCT_MANUAL.md)，端点以 [PROTOCOL.md](PROTOCOL.md) 为准。旧版 v5 路由不再作为现役验收指令。
 
 **原则：测试强度按风险决定，但不得牺牲消息安全和真实验收。** 每一项只报告自己亲自验证到的层级：源码正确 ≠ 离线浏览器通过 ≠ 真实网页登录页成功 ≠ 外部 MCP 实际执行成功。
 
@@ -34,6 +34,7 @@ CIP_PASEO_SERVER_PACKAGE=/path/to/server-0.12.0-beta.2/package npm run test:host
 export CIP_NODE="$(command -v node)"
 python3 tests/public-message-browser.py        # 公开原文，MAIN/ISOLATED
 python3 tests/page-content-browser.py          # DOM 公开来源与授权卡
+python3 tests/model-picker-opening-browser.py # 菜单打开后才有模型元数据；缺失/错误模型仍拒绝
 python3 tests/continuous-actions-browser.py    # Stop、持续授权按钮复核与网页授权动作
 python3 tests/attachment-order-browser.py      # 先附件后正文
 python3 tests/failed-send-disposal-browser.py  # 未发送清理

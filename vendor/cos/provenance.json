@@ -125,7 +125,7 @@
     },
     {
       "localPath": "extension/upstream/cos-models.js",
-      "localSha256": "7e98408afb163013df1e14090d0fd92cc8d2a6148b9e5f34cb5ddc404d9c8209",
+      "localSha256": "78e7f0c5ff3a64584b980e70b52c14fbd799fa0b173717d6cb15ba7c96eb3a43",
       "world": "ISOLATED",
       "sourcePath": "extension/chatgpt-dom.js",
       "sourceBlobSha": "00cb77438ff4b2e9d16fab556bc57757ac737921",
@@ -141,7 +141,7 @@
         "selectModelSettings"
       ],
       "sourceRangeHint": "approx. 2830–3175; function names are definitive",
-      "relation": "function-level transplant with documented adaptations; not an unchanged whole file"
+      "relation": "function-level transplant with documented adaptations; a unique native control can open before model metadata mounts, while selection still requires exact model/effort evidence; not an unchanged whole file"
     },
     {
       "localPath": "extension/upstream/cos-picker-main.js",

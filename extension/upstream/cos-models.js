@@ -1,6 +1,6 @@
 /* Direct CoS chatgpt-dom.js picker function transplant (MIT), pinned ccd23b66cecf2f684fa3e12ca190297be02842cf.
  * Changes: CIP message/stamp namespace, dependency injection, strict no-nearest-effort selection,
- * stricter choice validation and missing-original-choice guard. No private model API.
+ * stricter choice validation, missing-original-choice guard and native-control opening before model proof. No private model API.
  */
 (() => {
   'use strict';
@@ -50,7 +50,12 @@
       .filter(node => node.matches('button,[role="button"]') && !node.closest(`${OWN_SURFACES},[data-testid^="conversation-turn"],[data-message-author-role],.markdown,[contenteditable],[hidden],[aria-hidden="true"],[inert]`) && node.getClientRects().length > 0 &&
         node.id !== 'composer-plus-btn' && node.getAttribute('data-testid') !== 'composer-plus-btn');
     const observed = candidates.filter(node => node.getAttribute('data-cip-cos-picker-route') === location.pathname);
-    return observed.length === 1 ? observed[0] : candidates.length === 1 && !candidates[0].matches(reported) ? candidates[0] : null;
+    if (observed.length) return observed.length === 1 ? observed[0] : null;
+    // Native controls can expose their model metadata only after opening.
+    // Recognizing the control permits opening, not accepting its selection:
+    // selectModelSettings still requires the exact model/effort from state().
+    const native = candidates.filter(node => node.matches(reported));
+    return native.length === 1 ? native[0] : candidates.length === 1 ? candidates[0] : null;
   }
   function pickerVersionNamed(row, expected) {
     const text = node => String(node.textContent || '').replace(/\s+/g, ' ').trim();
