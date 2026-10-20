@@ -472,7 +472,7 @@ test('REC-15 an unbound first Send failure is recoverable by explicitly selectin
     'manual recovery never creates or replays a Send');
 });
 
-test('REC-16 completed recovery keeps the selected-turn boundary through repeated frames and reconnect, then releases on a new prompt', async t => {
+test('REC-16 completed recovery keeps the selected-turn history boundary while syncing a new prompt', async t => {
   const { f, s } = await uncertain(t);
   const cid = s.conversationId;
   await claim(f, s);
@@ -520,7 +520,20 @@ test('REC-16 completed recovery keeps the selected-turn boundary through repeate
   const after = f.broker.snapshot(s.id);
   assert.equal(after.recovery.status, 'completed');
   assert.equal(after.history.some(item => item.text === 'fresh answer'), true,
-    'a new prompt leaves the completed recovery boundary and syncs normally');
+    'a new prompt leaves the selected-turn history boundary and syncs the fresh answer');
+  assert.equal(after.history.some(item => ['old question', 'old answer', 'later question', 'later answer'].includes(item.text)),
+    false, 'old history and the already-existing next turn stay excluded after the new prompt');
+  assert.equal(after.sources.some(item => [oldUser.id, oldAnswer.id, nextUser.id, nextAnswer.id].includes(item.id)),
+    false, 'excluded page sources are not revived by normal sync');
+  assert.equal(after.sourceProjections.some(row =>
+    [oldUser.id, oldAnswer.id, nextUser.id, nextAnswer.id].includes(row.sourceId)), false,
+    'excluded sources never gain projections after the new prompt');
+  assert.equal(after.history.filter(item => item.text === 'hello').length, 1,
+    'the recovered original user row is not duplicated');
+  assert.equal(after.history.filter(item => item.text === 'selected answer').length, 1,
+    'the recovered assistant row is not duplicated');
+  assert.equal(after.sourceProjections.some(row => row.sourceId === freshAnswer.id), true,
+    'the fresh answer received its normal source projection');
 });
 
 test('REC-17 a transport-split long read keeps the capture-wide recovery boundary', async t => {
@@ -592,4 +605,32 @@ test('REC-18 a same-lease monitor picks up the recovery boundary before the next
   assert.ok(frames.every(view => view.recoveryScope?.anchorPresent === true &&
     view.recoveryScope.userMessageId === 'u1' && view.recoveryScope.nextUserMessageId === 'u2'),
     'the existing lease must learn the new boundary without reconnecting');
+});
+
+test('REC-19 completed recovery scope carries only turns after the existing next turn', async t => {
+  const content = contentPage(t);
+  const session = content.session();
+  content.state.source = { conversationId: 'chat-a', items: [
+    user('chat-a', 'old-u', 'old question', 0),
+    assistant('chat-a', 'old-a', 'old-u', 'old answer', 1),
+    user('chat-a', 'u1', 'selected question', 2),
+    assistant('chat-a', 'a1', 'u1', 'selected answer', 3),
+    user('chat-a', 'u2', 'later question', 4),
+    assistant('chat-a', 'a2', 'u2', 'later answer', 5),
+    user('chat-a', 'u3', 'fresh question', 6),
+    assistant('chat-a', 'a3', 'u3', 'fresh answer', 7)
+  ], approvals: [], closedApprovals: [], issues: [], transcriptComplete: true };
+  const completed = { ...session,
+    recovery: { turnId: 'turn-a', userMessageId: 'u1', nextUserMessageId: 'u2',
+      transcriptComplete: true, status: 'completed' } };
+  assert.equal((await content.monitor(completed)).ok, true);
+  await content.tick(0);
+  const frames = content.accepted.filter(request => request.type === 'page-view')
+    .map(request => request.event.view);
+  assert.ok(frames.length >= 1);
+  assert.ok(frames.every(view => view.recoveryScope?.anchorPresent === true &&
+    view.recoveryScope.userMessageId === 'u1' &&
+    view.recoveryScope.afterUserMessageIds.includes('u3')),
+    'a completed recovery still carries the fresh turn, not old/next turns, across frames');
+  assert.equal(frames.some(view => view.items.some(item => item.text === 'fresh answer')), true);
 });

@@ -26,8 +26,27 @@ const recoveryTurn = recovery => recovery?.turnId ?? null;
 function recoveryBoundary(session) {
   const recovery=session?.recovery;
   if(!recovery)return null;
-  if(recoveryTurn(recovery)!==session.turn?.id)return null;
-  return recoveryActive(session)||recovery.status==='completed'?recovery:null;
+  if(recoveryActive(session))
+    return recoveryTurn(recovery)===session.turn?.id?recovery:null;
+  // A completed recovery keeps its history boundary after a new prompt. It
+  // must not reopen the recovery run or suppress approvals; it only excludes
+  // the page range that was outside the selected turn.
+  return recovery.status==='completed'?recovery:null;
+}
+const userMessageOf = item => typeof item?.nativeMessageId==='string'&&item.nativeMessageId
+  ? item.nativeMessageId : typeof item?.userMessageId==='string'&&item.userMessageId
+    ? item.userMessageId : typeof item?.id==='string'?item.id:null;
+/** User turns that are newer than the selected recovery window. They are the
+ * only page content that may be imported after a completed recovery and a
+ * genuinely new prompt; old history and the already-existing next turn stay
+ * outside the boundary. */
+function afterRecoveryUsers(users,recovery) {
+  const anchorIndex=users.findIndex(item=>userMessageOf(item)===recovery.userMessageId);
+  if(anchorIndex<0)return null;
+  const next=recovery.nextUserMessageId;
+  const nextIndex=next?users.findIndex(item=>userMessageOf(item)===next):-1;
+  return users.slice((nextIndex>=0?nextIndex:anchorIndex)+1)
+    .map(userMessageOf).filter(Boolean);
 }
 /** Resolve the selected user turn from THIS frame. The page end is known only
  * when another user message exists or the page explicitly proved its mounted
@@ -40,6 +59,22 @@ export function recoveryWindow(session,items,transcriptComplete,scope=null) {
   const recovery=recoveryBoundary(session);
   if(!recovery)return null;
   const anchor=recovery.userMessageId;
+  const current=recoveryActive(session)||recoveryTurn(recovery)===session.turn?.id;
+  if(!current&&recovery.status==='completed') {
+    let after=null;
+    if(scope&&scope.anchorPresent===true&&scope.userMessageId===anchor&&
+        Array.isArray(scope.afterUserMessageIds))
+      after=scope.afterUserMessageIds.filter(value=>typeof value==='string'&&value.length>0);
+    if(after===null) {
+      const users=(Array.isArray(items)?items:[]).filter(item=>item?.role==='user');
+      after=afterRecoveryUsers(users,recovery);
+    }
+    if(after===null)return {known:false,reason:'RECOVERY_ANCHOR_MISSING'};
+    return {known:true,historyOnly:true,userMessageId:anchor,
+      nextUserMessageId:recovery.nextUserMessageId??null,
+      transcriptComplete:scope?.transcriptComplete===true||transcriptComplete===true,
+      allowedUserMessageIds:after};
+  }
   if(scope&&scope.anchorPresent===true&&scope.userMessageId===anchor) {
     const next=typeof scope.nextUserMessageId==='string'&&scope.nextUserMessageId
       ? scope.nextUserMessageId : null;
@@ -62,6 +97,11 @@ function inRecoveryWindow(source,window) {
   // An unknown boundary is not "no filter": it must import nothing from the
   // page or from previously unprojected ledger rows.
   if(window.known!==true)return false;
+  if(window.historyOnly===true) {
+    const owner=source.userMessageId??(source.role==='user'?source.nativeMessageId:null);
+    return typeof owner==='string'&&Array.isArray(window.allowedUserMessageIds)&&
+      window.allowedUserMessageIds.includes(owner);
+  }
   // The anchor user item itself is part of the selected turn even if a page
   // reader omitted its derived userMessageId.
   if(source.role==='user'&&source.nativeMessageId===window.userMessageId)return true;
@@ -332,7 +372,12 @@ export function recordPageView(session,event,commands={},at=Date.now()) {
   } else if(window?.known&&activeRecovery) {
     if(session.recovery.status==='needs_review')session.recovery.status='observing';
     delete session.recovery.reason;delete session.recovery.needsReviewAt;
-    session.recovery.nextUserMessageId=window.nextUserMessageId??null;
+    // Once a next turn was identified it is the immutable outer edge of the
+    // selected-turn history. A later partial/virtualized read that happens to
+    // end at the selected answer must not clear it and reopen that next turn
+    // for import after recovery completes.
+    if(window.nextUserMessageId)session.recovery.nextUserMessageId=window.nextUserMessageId;
+    else if(session.recovery.nextUserMessageId===undefined)session.recovery.nextUserMessageId=null;
     session.recovery.transcriptComplete=window.transcriptComplete===true;
   }
   if(page.state==='running'&&!run?.active) {
