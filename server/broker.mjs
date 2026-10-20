@@ -506,6 +506,14 @@ export class Broker {
       // reused; only the document identity moves.
       if (c.kind === 'send' && s) {
         invariant(s.turn?.id === c.payload.turnId, 'SESSION_UNKNOWN');
+        // A new page monitor starts its own sequence at 1. Keep the existing
+        // lease/generation/run, but clear only the old document's sequence
+        // bookkeeping when the document actually changes.
+        if (s.documentKey !== documentKey) {
+          const observation = ensureObservation(s);
+          observation.lastSequence = 0;
+          observation.frameDigest = null;
+        }
         s.tabId = tabId; s.documentKey = documentKey;
       }
       return { ...c };

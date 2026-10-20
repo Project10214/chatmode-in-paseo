@@ -64,6 +64,48 @@ test('send claim adopts the claiming document and fences old-page writes', async
   await assert.rejects(f.broker.observeView({ ...view, documentKey: oldDocument }), /PAGE_IDENTITY_MISMATCH/);
 });
 
+test('refreshed document starts a new observation sequence without replacing the run', async t => {
+  const f = await fixture(t), s = await f.ready();
+  await f.sending(s, 'refresh-first', 'first');
+  await f.view(s, { state: 'standby', items: [sourceItem('first-answer', 'first answer', { order: [1] })] });
+  const before = f.broker.snapshot(s.id);
+  assert.equal(before.observation.lastSequence, 1);
+  const runId = before.observation.run.id;
+  await f.broker.prompt(s.id, 'refresh-second', 'second after refresh');
+  const command = f.broker.queued().find(c => c.kind === 'send' && c.sessionId === s.id);
+  const documentKey = 'document-after-existing-observation';
+  const claim = await f.broker.claim(command.id, before.tabId, documentKey);
+  const claimed = f.broker.snapshot(s.id);
+  assert.equal(claimed.documentKey, documentKey);
+  assert.equal(claimed.observation.lastSequence, 0);
+  assert.equal(claimed.observation.frameDigest, null);
+  assert.equal(claimed.observation.lease, before.observation.lease);
+  assert.equal(claimed.observation.run.id, runId);
+  await f.broker.authorize(command.id, claim.lease, documentKey);
+  const url = 'https://chatgpt.com/c/' + claimed.conversationId;
+  await f.broker.bindConversation(command.id, claim.lease,
+    { tabId: before.tabId, documentKey, url });
+  await f.broker.result(command.id, claim.lease,
+    { receipt: true, config: s.config, url, nativeMessageId: 'native-refresh-second' }, documentKey);
+  await f.view(s, { state: 'standby', sequence: 1,
+    items: [sourceItem('second-answer', 'second answer', { order: [1] })] });
+  assert.equal(f.broker.snapshot(s.id).history.some(item => item.id === 'page:second-answer'), true);
+});
+
+test('same-document send claim keeps the observation sequence and run', async t => {
+  const f = await fixture(t), s = await f.ready();
+  await f.sending(s, 'same-document-first', 'first');
+  await f.view(s, { state: 'standby', items: [sourceItem('same-document-answer', 'answer', { order: [1] })] });
+  const before = f.broker.snapshot(s.id);
+  assert.equal(before.observation.lastSequence, 1);
+  await f.broker.prompt(s.id, 'same-document-second', 'second');
+  const command = f.broker.queued().find(c => c.kind === 'send' && c.sessionId === s.id);
+  await f.broker.claim(command.id, before.tabId, before.documentKey);
+  const claimed = f.broker.snapshot(s.id);
+  assert.equal(claimed.observation.lastSequence, 1);
+  assert.equal(claimed.observation.run.id, before.observation.run.id);
+});
+
 test('native receipt cannot be recorded without authorization', async t => {
   const f = await fixture(t); const s = await f.ready(); await f.broker.prompt(s.id, 'a', 'hello'); const c = f.broker.queued()[0]; const lease = await f.broker.claim(c.id, s.tabId, s.documentKey);
   await assert.rejects(f.broker.result(c.id, lease.lease, { receipt: true, config: s.config, url: 'https://chatgpt.com/c/a', nativeMessageId: 'u' }), /SEND_NOT_AUTHORIZED/);

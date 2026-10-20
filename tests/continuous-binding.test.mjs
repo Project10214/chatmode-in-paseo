@@ -503,6 +503,7 @@ test('CONT-17 one-shot Send authorization and file-chunk gates remain separate f
   assert.equal(clicks, 1);
   assert.equal(f.byRoute('/claim').length, 1);
   assert.equal(f.byRoute('/authorize').length, 1);
+  assert.equal(f.byRoute('/authorize')[0].body.documentKey, 'document-a');
   assert.equal(f.byRoute('/input-chunk').length, 1);
   assert.equal(f.byRoute('/result').length, 1);
   assert.equal(f.local.ledger['send-once'].phase, 'acked');

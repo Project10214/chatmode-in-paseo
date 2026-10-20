@@ -756,7 +756,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (message.type === 'authorize') {
       const row = ledger[message.id];
       if (!row || row.tabId !== tabId || row.documentKey !== message.documentKey || row.lease !== message.lease || row.phase !== 'claimed' || row.endpoint !== config.endpoint) throw codeError('CLAIM_MISMATCH');
-      const result = await api('/authorize', { id: message.id, lease: message.lease });
+      const result = await api('/authorize', { id: message.id, lease: message.lease,
+        documentKey: message.documentKey });
       row.phase = 'authorized'; await saveLedger(); return result;
     }
     const artifactRoute=({'artifact-begin':'/artifact/begin','artifact-chunk':'/artifact/chunk',
