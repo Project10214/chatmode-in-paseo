@@ -44,13 +44,22 @@
     const group=/^\/g\/([^/]+)\/?$/.exec(from);
     return !!group&&next.startsWith('/g/'+group[1]+'/c/');
   };
+  // Both forms name the same route; never normalize a conversation or group ID.
+  const routeKey=path=>CONVERSATION_PATH.test(path)||/^\/g\/[^/]+\/$/.test(path)
+    ?path.replace(/\/$/,''):path;
   function routeOf(current){
-    const path=location.pathname;
+    const path=routeKey(location.pathname),start=routeKey(current.path);
     if(current.revoked)return false;
-    if(path===current.path){if(current.elected){current.revoked=true;return false;}return true;}
-    if(current.elected && current.elected!==path){current.revoked=true;return false;}
-    if(!current.elected && freshTarget(current.path,path))current.elected=path;
-    return current.elected===path;
+    if(path===start){if(current.elected){current.revoked=true;return false;}return true;}
+    if(current.elected){
+      if(current.elected!==path){current.revoked=true;return false;}
+      return true;
+    }
+    if(freshTarget(start,path)){current.elected=path;return true;}
+    // Even a non-conversation detour must revoke this arm permanently.
+    // Otherwise '/' -> '/search' -> '/c/...' can borrow the pending POST.
+    current.revoked=true;
+    return false;
   }
   let active=true,arm=null,observedFetch=null;
   const progress=(current,stage)=>{

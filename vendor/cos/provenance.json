@@ -47,7 +47,7 @@
     },
     {
       "localPath": "extension/upstream/cos-send-evidence.js",
-      "localSha256": "1b11dd45fc13e52fb1f362cc01ad72a905777b512dba3e19586ba5e21504101a",
+      "localSha256": "a8e9c4f9eaea007b6a98e21c5c151b5377b332b7862f7f8c3977e16a2d7b412d",
       "world": "MAIN",
       "runAt": "document_start",
       "sourceCommit": "e40562640361ca8f74158b2262ca8c555b00abed",
@@ -56,11 +56,11 @@
       "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/e40562640361ca8f74158b2262ca8c555b00abed/extension/usage.js",
       "sourceFunctions": ["armRequest"],
       "sourceRangeHint": "noteSendModel / installFetchObserver; bounded passive POST body inspection",
-      "relation": "adapted CoS native outgoing user-message UUID reader: bounded Request/POST clone, one elected new-conversation route, request-body SHA256, accepted SSE response fences; alpha.4.4 verifies that every selected app actually appears in the same native POST after body matching, without exposing app IDs, request text or parameters; only one UUID and bounded public proof stage cross worlds"
+      "relation": "adapted CoS native outgoing user-message UUID reader: bounded Request/POST clone, one elected new-conversation route, request-body SHA256, accepted SSE response fences; alpha.4.4 verifies that every selected app actually appears in the same native POST after body matching, without exposing app IDs, request text or parameters; only one UUID and bounded public proof stage cross worlds; first-send route comparison permits only an optional trailing slash on the same recognized route, and permanently revokes unrelated intermediate paths without changing body/app/response/time fences"
     },
     {
       "localPath": "extension/upstream/cos-request-receipt.js",
-      "localSha256": "fb88d58f6d23033e9f47fad4df55aa2ced67a541d501586fedd4f483739be1e0",
+      "localSha256": "8d61585116ef73c71cae7ab9c3132d6c6a59f4248f8dcc084b91662e6f413334",
       "world": "ISOLATED",
       "sourceCommit": "e40562640361ca8f74158b2262ca8c555b00abed",
       "sourcePath": "extension/content.js",
@@ -68,7 +68,7 @@
       "sourceUrl": "https://github.com/totec448-spec/chat-on-steroids/blob/e40562640361ca8f74158b2262ca8c555b00abed/extension/content.js",
       "sourceFunctions": ["arm"],
       "sourceRangeHint": "sentRequestSince; one-shot arm/observe/disarm CIP adaptation",
-      "relation": "exposes only accepted native ID after this Send's click plus bounded proof-stage diagnostics, including app-reference omission without prompt content; never replay or permissive DOM fallback"
+      "relation": "exposes only accepted native ID after this Send's click plus bounded proof-stage diagnostics, including app-reference omission without prompt content; never replay or permissive DOM fallback; mirrors the producer's exact first-route/group policy through receipt consumption, including post-response departure revocation and route-listener cleanup"
     },
     {
       "localPath": "extension/upstream/cos-apps-observer.js",
