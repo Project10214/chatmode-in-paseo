@@ -1,4 +1,7 @@
 import test from 'node:test';
+const shippedVersions = () => { const source = readFileSync(new URL('../shared/versions.ts', import.meta.url), 'utf8');
+  const read = name => new RegExp(`export const ${name} = '([^']*)'`).exec(source)?.[1] ?? null;
+  return { PLUGIN_VERSION: read('PLUGIN_VERSION'), INSTALLED_EXTENSION_VERSION: read('INSTALLED_EXTENSION_VERSION') }; };
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -18,6 +21,7 @@ function renderer(file, { state = [], useRpc = () => async () => ({}) } = {}) {
   const refs = [], rpc = Object.fromEntries(['snapshot', 'saveDefaults', 'saveConcurrency', 'pair', 'abandon'].map(k => [k, Symbol(k)]));
   const jsx = (type, props) => ({ type, props });
   const modules = {
+    '../shared/versions.js': shippedVersions(),
     react: {
       useState(initial) {
         const at = cursor++;
@@ -141,6 +145,12 @@ test('COPY errors are concise, preserve uncertainty, and never expose arbitrary 
   assert.doesNotMatch(copy.errorLabel('STOP_UNCONFIRMED'), /已停止/);
   assert.match(copy.errorLabel('RECEIPT_UNCONFIRMED'), /不会自动重发/);
   assert.match(copy.errorLabel('FUTURE_ERROR'), /FUTURE_ERROR/);
+  // A claim the Runtime refused keeps its own reason: the user must be able to
+  // tell "the page was too slow" from "the page is wrong".
+  assert.match(copy.errorLabel('COMMAND_NOT_CLAIMABLE'), /准备超时/);
+  assert.doesNotMatch(copy.errorLabel('COMMAND_NOT_CLAIMABLE'), /COMMAND_NOT_CLAIMABLE/);
+  assert.match(copy.errorLabel('PAGE_IDENTITY_MISMATCH'), /身份已变化/);
+  assert.match(copy.errorLabel('TAB_ALREADY_OWNED'), /已被其他会话占用/);
   assert.doesNotMatch(copy.errorLabel('private user text or secret=123'), /private|123/);
 });
 
@@ -217,4 +227,33 @@ test('COPY provider notices do not infer page execution, completion or approval 
   assert.equal(failed.error.code, 'MODEL_UNAVAILABLE');
   assert.equal(failed.error.message, copy.errorLabel('MODEL_UNAVAILABLE'));
   assert.equal(f.broker.queued().filter(c => ['send', 'approval', 'stop'].includes(c.kind)).length, 0);
+});
+
+test('COPY settings state the plugin and extension builds and flag a stale extension', () => {
+  // The installed builds are inlined into the client bundle; read the same
+  // files here so the copy can never drift from what ships.
+  const plugin = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const installed = JSON.parse(readFileSync(new URL('../extension/manifest.json', import.meta.url), 'utf8'));
+  const base = settingsState();
+  const state = [];
+  state[2] = { ...base, extensionVersion: installed.version, status: { ...base.status, protocol: 9 } };
+  const body = text(renderer('settings.tsx', { state }).render('SettingsScreen', { theme, layout: { compact: false } }));
+  assert.match(body, new RegExp('插件 ' + plugin.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(body, /协议 9/);
+  assert.match(body, new RegExp('扩展 ' + installed.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.doesNotMatch(body, /重新加载扩展/);
+
+  const stale = [];
+  stale[2] = { ...base, extensionVersion: '0.0.1', status: { ...base.status, protocol: 9 } };
+  const staleBody = text(renderer('settings.tsx', { state: stale }).render('SettingsScreen', { theme, layout: { compact: false } }));
+  assert.match(staleBody, /扩展 0\.0\.1/);
+  assert.match(staleBody, new RegExp('已安装 ' + installed.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(staleBody, /重新加载扩展/);
+
+  // An extension that has never reported a build is unknown, not "up to date".
+  const unknown = [];
+  unknown[2] = { ...base, extensionVersion: null, status: { ...base.status, protocol: 9 } };
+  const unknownBody = text(renderer('settings.tsx', { state: unknown }).render('SettingsScreen', { theme, layout: { compact: false } }));
+  assert.match(unknownBody, /扩展 版本未上报/);
+  assert.doesNotMatch(unknownBody, /重新加载扩展/);
 });

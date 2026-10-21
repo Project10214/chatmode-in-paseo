@@ -57,7 +57,8 @@ with sync_playwright() as pw:
         }''')
         before_html = page.content()
         opened = page.evaluate('CIP_PAGE_CONTENT.read()')
-        check(set(opened) == {'conversationId', 'observedAt', 'items', 'approvals', 'closedApprovals', 'issues'}, 'snapshot API shape')
+        check(set(opened) == {'conversationId', 'observedAt', 'items', 'approvals', 'closedApprovals', 'transcriptComplete', 'issues'}, 'snapshot API shape')
+        check(opened['transcriptComplete'] is False, 'legacy non-numeric turn markers do not prove the transcript end')
         check(opened['conversationId'] == 'fixture-conversation' and isinstance(opened['observedAt'], int), 'URL conversation and observation time')
         required = {'id', 'userMessageId', 'role', 'lane', 'kind', 'text', 'format', 'order'}
         check(all(required <= row.keys() and row['format'] == 'text' and isinstance(row['order'], list)
@@ -146,6 +147,17 @@ with sync_playwright() as pw:
 
         error = load('<main><h1>页面暂时无法打开</h1><div>Unknown response 93X<br>请稍后重试。</div></main>')
         check([row['text'] for row in error['items']] == ['页面暂时无法打开', 'Unknown response 93X\n请稍后重试。'], 'full-page errors without composer or message metadata retained')
+        complete = load('<main><section data-testid="conversation-turn-1"><div data-message-author-role="user" data-message-id="u1">first</div></section>'+
+          '<section data-testid="conversation-turn-2"><div data-message-author-role="assistant" data-message-id="a1">answer</div></section></main>')
+        check(complete['transcriptComplete'] is True, 'contiguous visible numeric turn markers prove the mounted transcript end')
+        missing = load('<main><section data-testid="conversation-turn-1"><div data-message-author-role="user" data-message-id="u1">first</div></section>'+
+          '<section data-testid="conversation-turn-3"><div data-message-author-role="assistant" data-message-id="a1">answer</div></section></main>')
+        check(missing['transcriptComplete'] is False, 'a gap in numeric turn markers cannot prove the page end')
+        hidden = load('<main><section data-testid="conversation-turn-1"><div data-message-author-role="user" data-message-id="u1">first</div></section>'+
+          '<section data-testid="conversation-turn-2" hidden><div data-message-author-role="assistant" data-message-id="a1">answer</div></section></main>')
+        check(hidden['transcriptComplete'] is False, 'a hidden or virtualized final turn cannot prove the page end')
+        check(load('<main><section data-testid="conversation-turn-0"></section><section data-testid="conversation-turn-1"></section></main>')['transcriptComplete'] is False,
+              'zero-based or non-contiguous turn numbering is not treated as proof')
         error = load('<aside>OTHER_SIDEBAR</aside><h1>Whole-page error without main</h1><div role="alert">No composer</div>')
         check([row['text'] for row in error['items']] == ['Whole-page error without main', 'No composer'], 'body fallback reads whole-page errors but never sidebar')
         media_snapshot = load('<main><section data-testid="conversation-turn-1"><div data-message-author-role="assistant" data-message-id="answer-media"><button type="button"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9YkCvYoAAAAASUVORK5CYII=" alt="Generated image"></button></div><a href="https://example.com"><img src="https://www.google.com/s2/favicons?domain=example.com"></a></section></main>')

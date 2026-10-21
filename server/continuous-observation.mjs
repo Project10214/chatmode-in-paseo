@@ -12,6 +12,85 @@ import { artifactSourceRevision } from './artifact-identity.mjs';
 
 const fingerprint = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const pending = command => ['queued','claimed','authorized'].includes(command.phase);
+const RECOVERY_ACTIVE = new Set(['observing','needs_review']);
+export function recoveryActive(session) {
+  return Boolean(session?.recovery && RECOVERY_ACTIVE.has(session.recovery.status));
+}
+const recoveryTurn = recovery => recovery?.turnId ?? null;
+/** The selected turn owns historical-read filtering for as long as the
+ * original failed turn is current. A completed recovery stays bounded too;
+ * clearing it on completion would make the next ordinary frame backfill the
+ * whole page. A genuinely new prompt is a NEW turn: its own accepted native
+ * user receipt is the only page user that may start normal sync.
+ */
+function recoveryBoundary(session) {
+  const recovery=session?.recovery;
+  if(!recovery)return null;
+  if(recoveryActive(session))
+    return recoveryTurn(recovery)===session.turn?.id?recovery:null;
+  // A completed recovery keeps its history boundary until a new turn has its
+  // own accepted native receipt. It never reopens the recovery run or
+  // suppresses approvals; the new-turn window is handled in recoveryWindow().
+  return recovery.status==='completed'?recovery:null;
+}
+/** The only user turn that may start normal sync after a completed recovery is
+ * the new turn's own accepted native user ID. The old recovery anchor is not a
+ * permanent prerequisite: it may be virtualized out while the new turn is
+ * already receipt-confirmed. */
+function newTurnUserMessageId(session,recovery) {
+  const turn=session.turn;
+  if(!turn||turn.id===recovery.turnId)return null;
+  const id=turn.nativeMessageId??session.prompts?.[turn.clientMessageId]?.nativeMessageId;
+  if(typeof id!=='string'||!id||id===recovery.userMessageId)return null;
+  return id;
+}
+/** Resolve the selected recovery turn from THIS frame while recovery is active.
+ * The page end is known only when another user message exists or the page
+ * explicitly proved its mounted transcript is complete. After completion, a
+ * genuinely new turn is resolved from its own accepted receipt instead. An
+ * unknown window never imports the whole page.
+ * `scope` is capture-wide evidence from the content script: a transport frame
+ * can split before the anchor/answer, but every frame from that same full-page
+ * capture still carries the selected boundary.
+ */
+export function recoveryWindow(session,items,transcriptComplete,scope=null) {
+  const recovery=recoveryBoundary(session);
+  if(!recovery)return null;
+  const anchor=recovery.userMessageId;
+  const current=recoveryActive(session)||recoveryTurn(recovery)===session.turn?.id;
+  if(!current&&recovery.status==='completed') {
+    const newUserMessageId=newTurnUserMessageId(session,recovery);
+    if(!newUserMessageId)return {known:false,reason:'RECOVERY_NEW_TURN_UNBOUND'};
+    return {known:true,userMessageId:newUserMessageId,nextUserMessageId:null,
+      transcriptComplete:transcriptComplete===true};
+  }
+  if(scope&&scope.anchorPresent===true&&scope.userMessageId===anchor) {
+    const next=typeof scope.nextUserMessageId==='string'&&scope.nextUserMessageId
+      ? scope.nextUserMessageId : null;
+    if(next||scope.transcriptComplete===true)
+      return {known:true,userMessageId:anchor,nextUserMessageId:next,
+        transcriptComplete:scope.transcriptComplete===true};
+  }
+  const users=(Array.isArray(items)?items:[]).filter(item=>item?.role==='user');
+  const index=users.findIndex(item=>item.nativeMessageId===anchor||item.userMessageId===anchor||item.id===anchor);
+  if(index<0)return {known:false,reason:'RECOVERY_ANCHOR_MISSING'};
+  const next=users[index+1];
+  if(next)return {known:true,userMessageId:anchor,
+    nextUserMessageId:next.nativeMessageId??null,transcriptComplete:transcriptComplete===true};
+  if(transcriptComplete===true)return {known:true,userMessageId:anchor,
+    nextUserMessageId:null,transcriptComplete:true};
+  return {known:false,reason:'RECOVERY_BOUNDARY_UNKNOWN'};
+}
+function inRecoveryWindow(source,window) {
+  if(!window)return true;
+  // An unknown boundary is not "no filter": it must import nothing from the
+  // page or from previously unprojected ledger rows.
+  if(window.known!==true)return false;
+  // The anchor user item itself is part of the selected turn even if a page
+  // reader omitted its derived userMessageId.
+  if(source.role==='user'&&source.nativeMessageId===window.userMessageId)return true;
+  return source.userMessageId===window.userMessageId;
+}
 export function ensureObservation(session) {
   session.observation ??= {lease:randomBytes(24).toString('hex'),generation:0,
     page:null,run:null,lastSequence:0,frameDigest:null,lastObservedAt:null};
@@ -20,13 +99,18 @@ export function ensureObservation(session) {
   return session.observation;
 }
 export function observationDescriptor(session) {
-  const observation=session.observation;
+  const observation=session.observation,recovery=recoveryBoundary(session);
   return {sessionId:session.id,tabId:session.tabId,documentKey:session.documentKey,
     conversationId:session.conversationId,observationLease:observation.lease,
     generation:observation.generation,runId:observation.run?.id??null,
     // Only an active run needs its page reopened by the extension. Idle or
     // historical bindings must be observed only through an already-open tab.
     active:Boolean(observation.run?.active||['sending','running','stopping'].includes(session.status)),
+    // Capture-wide boundary evidence. It lets a large read be split by the
+    // existing transport framing without losing the selected user anchor.
+    ...(recovery?{recovery:{turnId:recovery.turnId,userMessageId:recovery.userMessageId,
+      nextUserMessageId:recovery.nextUserMessageId??null,
+      transcriptComplete:recovery.transcriptComplete===true,status:recovery.status}}:{}),
     ...(session.turn?.receiptPending?{receiptPending:true,turnId:session.turn.id,
       lease:session.turn.lease,nativeMessageId:null}:{})};
 }
@@ -84,7 +168,8 @@ function previousHistoryItem(session,source,commands) {
     const recorded=session.history.find(row=>row.type==='user_message'&&row.messageId===nativeId);
     if(recorded)return recorded;
     const command=Object.values(commands).find(c=>c.sessionId===session.id&&c.kind==='send'&&c.result?.nativeMessageId===nativeId);
-    const turnId=command?.payload.turnId??(session.turn?.nativeMessageId===nativeId?session.turn.id:null);
+    const anchorMatch=recoveryBoundary(session)?.userMessageId===nativeId;
+    const turnId=command?.payload.turnId??(session.turn?.nativeMessageId===nativeId||anchorMatch?session.turn.id:null);
     if(turnId)return session.history.find(row=>row.id==='user:'+turnId)??null;
   }
   if(source.role==='assistant'&&source.kind==='message'&&source.lane==='output'&&source.nativeMessageId)
@@ -102,14 +187,27 @@ function stateItem(session,page,issues=[]) {
         return [code,{code}];
       })).values()]}};
 }
-function projectSources(session,result,commands,run,events,issues) {
+function projectSources(session,result,commands,run,events,issues,window=null) {
   const changes=new Map(result.changes.map(change=>[change.item.id,change]));
   // Failed local projections are retried even if the source did not change.
   // These records describe only local history, not host delivery/ACK state.
   for(const source of session.sources??[]) {
     if(!source?.id||!source.revision)continue;
+    // Recovery reads one selected turn. This same gate covers newly read items,
+    // previously unprojected ledger rows and approval fallback notices.
+    if(!inRecoveryWindow(source,window))continue;
     const index=session.sourceProjections.findIndex(row=>row.sourceId===source.id);
     const projection=session.sourceProjections[index];
+    if(window?.known&&recoveryActive(session)&&source.role==='assistant'&&
+        source.lane==='output'&&source.kind==='message'&&projection) {
+      // The answer may already have been projected before the original prompt
+      // was marked failed. Recovery still needs that exact row confirmed.
+      const item=session.history.find(row=>row.id===projection.itemId);
+      if(item?.type==='assistant_message'&&item.text.trim()) {
+        session.recovery.required??={};
+        session.recovery.required[item.id]={text:item.text};
+      }
+    }
     if(projection?.revision===source.revision&&session.history.some(row=>row.id===projection.itemId)) {
       issues.push(...(projection.proseIssues??[]));continue;
     }
@@ -161,13 +259,34 @@ function projectSources(session,result,commands,run,events,issues) {
       if(index<0)session.sourceProjections.push(record);else session.sourceProjections[index]=record;
       events.push({id:session.id,state:'source',turnId:run?.id??null,item,
         sourceId:source.id,revision:source.revision,change:changes.get(source.id)?.change??'new'});
-      if(source.role==='user'&&source.nativeMessageId)session.lastNativeMessageId=source.nativeMessageId;
+      if(window?.known&&recoveryActive(session)&&item.type==='assistant_message'&&source.role==='assistant'&&
+          source.lane==='output'&&source.kind==='message'&&item.text.trim()){
+        // Completion still requires the existing host confirmation. This is
+        // only the set of projected outputs that must be confirmed.
+        session.recovery.required??={};
+        session.recovery.required[item.id]={text:item.text};
+      }
+      // A recovery anchor is a DOM locator, never a Send receipt. Do not
+      // promote it to the optional "last verified native message" context.
+      if(source.role==='user'&&source.nativeMessageId&&
+          session.turn?.observationAnchorNativeMessageId!==source.nativeMessageId)
+        session.lastNativeMessageId=source.nativeMessageId;
     } catch(error) {issues.push({code:error.code??'SOURCE_PROJECTION_FAILED',sourceId:source.id});}
   }
 }
 function closeRun(session,run,events,at) {
   if(!run?.active)return;
   run.active=false;run.endedAt=at;
+  if(run.origin==='recovery') {
+    // Keep the original failed prompt terminal. Recovery is a separate
+    // observation identity; standby only starts host-confirmation waiting.
+    if(recoveryActive(session)) {
+      session.recovery.pageStandbyAt=at;
+      session.recovery.lastObservedAt=at;
+      events.push({id:session.id,state:'recovery-standby',turnId:run.id});
+    }
+    return;
+  }
   if(session.turn&&(run.id===session.turn.id||run.promptIds?.includes(session.turn.id))) {
     session.turn.outcome='completed';
     const prompt=session.prompts?.[session.turn.clientMessageId];if(prompt)prompt.outcome='completed';
@@ -180,10 +299,23 @@ export function recordPageView(session,event,commands={},at=Date.now()) {
   invariant(object(event.view)&&Number.isSafeInteger(event.sequence)&&event.sequence>0,'PAGE_VIEW_INVALID');
   invariant(event.view.conversationId===undefined||event.view.conversationId===session.conversationId,'PAGE_IDENTITY_MISMATCH');
   const observation=ensureObservation(session),digest=fingerprint(event.view);
+  // One page read can be split into several transport frames. Only the last
+  // frame of that read is its closing evidence: ending the run on an earlier
+  // frame reported the host turn as completed before the remaining content
+  // had been received. An absent flag means a single-frame read.
+  const readFinal=event.readFinal!==false;
   if(event.sequence<observation.lastSequence)return {accepted:true,stale:true,events:[]};
   if(event.sequence===observation.lastSequence) {
     invariant(digest===observation.frameDigest,'OBSERVATION_SEQUENCE_CONFLICT');
     return {accepted:true,duplicate:true,events:[]};
+  }
+  // A late frame from a cancelled/expired recovery belongs to a document the
+  // user already retired. Accept its sequence bookkeeping so a later monitor
+  // can continue, but never turn it into new projected content or status.
+  if(session.recovery&&['cancelled','expired'].includes(session.recovery.status)&&
+      session.recovery.tabId===session.tabId&&session.recovery.documentKey===session.documentKey){
+    observation.lastSequence=event.sequence;observation.frameDigest=digest;observation.lastObservedAt=at;
+    return {accepted:true,stale:true,events:[]};
   }
   const historyStart=session.history.length;
   const events=[],issues=[...(Array.isArray(event.view.issues)?event.view.issues:[])];
@@ -207,14 +339,53 @@ export function recordPageView(session,event,commands={},at=Date.now()) {
     }
     if(run?.awaitCommandView===attempt.commandId)delete run.awaitCommandView;
   }
-  if(page.state==='running'&&!run?.active) {
-    run=observation.run={id:randomUUID(),active:true,origin:'page',startedAt:at,endedAt:null};
-    events.push({id:session.id,state:'page-running',turnId:run.id});
+  let window=recoveryWindow(session,event.view.items,event.view.transcriptComplete===true,
+    event.view.recoveryScope);
+  const activeRecovery=recoveryActive(session);
+  const unknown=Boolean(window&&!window.known);
+  if(unknown) {
+    if(activeRecovery) {
+      const already=session.recovery.status==='needs_review'&&session.recovery.reason===window.reason;
+      session.recovery.status='needs_review';
+      session.recovery.needsReviewAt=at;
+      session.recovery.reason=window.reason;
+      delete session.recovery.pageStandbyAt;
+      if(run?.active) {
+        run.active=false;run.endedAt=at;
+      }
+      if(!already) {
+        issues.push({code:window.reason});
+        events.push({id:session.id,state:'recovery-needs-review',turnId:run?.id??null,reason:window.reason});
+      }
+    }
+  } else if(window?.known&&activeRecovery) {
+    if(session.recovery.status==='needs_review')session.recovery.status='observing';
+    delete session.recovery.reason;delete session.recovery.needsReviewAt;
+    session.recovery.nextUserMessageId=window.nextUserMessageId??null;
+    session.recovery.transcriptComplete=window.transcriptComplete===true;
   }
-  const items=Array.isArray(event.view.items)?event.view.items.map(item=>
-    object(item)&&item.kind==='notice'&&typeof item.sourceType==='string'?{...item,sourceKind:item.sourceType}:item):event.view.items;
+  if(page.state==='running'&&!run?.active) {
+    if(activeRecovery&&window?.known) {
+      // Resume the same recovery run when the answer grows after a standby
+      // read. Never create a parallel page-origin run for the same document.
+      run=observation.run;
+      if(run?.origin==='recovery') {
+        run.active=true;run.endedAt=null;delete session.recovery.pageStandbyAt;
+        session.recovery.status='observing';
+        events.push({id:session.id,state:'recovery-running',turnId:run.id});
+      }
+    } else if(!window&&!activeRecovery) {
+      run=observation.run={id:randomUUID(),active:true,origin:'page',startedAt:at,endedAt:null};
+      events.push({id:session.id,state:'page-running',turnId:run.id});
+    }
+  }
+  const rawItems=Array.isArray(event.view.items)?event.view.items.map(item=>
+    object(item)&&item.kind==='notice'&&typeof item.sourceType==='string'?{...item,sourceKind:item.sourceType}:item):[];
+  // When the boundary is unknown, no content is reconciled or projected. The
+  // user must reselect; approvals below remain independently readable.
+  const items=unknown?[]:window?rawItems.filter(item=>inRecoveryWindow(item,window)):rawItems;
   const result=reconcileSources(session,items,{now:at});issues.push(...result.issues);
-  projectSources(session,result,commands,run,events,issues);
+  projectSources(session,result,commands,run,events,issues,window);
   for(const input of Array.isArray(event.view.approvals)?event.view.approvals:[]) {
     try {
       const approval=approvalEvent({...input,state:'open'});
@@ -225,6 +396,9 @@ export function recordPageView(session,event,commands={},at=Date.now()) {
       // snapshot must not overwrite them with untrusted DOM observations.
       for(const field of ['manualRequested','manualVeto','autoSuppressed','clickUncertain'])
         if(previous?.[field]===true)value[field]=true;
+      // Recovery suppresses only NEW automatic approvals for this session.
+      // Manual choices still go through the existing identity/uncertainty gates.
+      if(recoveryActive(session))value.autoSuppressed=true;
       if(JSON.stringify(previous)!==JSON.stringify(value)) {
         session.approvals[approval.key]=value;
         events.push({id:session.id,state:'approval',approval:value});
@@ -236,7 +410,7 @@ export function recordPageView(session,event,commands={},at=Date.now()) {
       if(typeof input?.text==='string') {
         const fallback=reconcileSources(session,[{id:'approval-notice:'+fingerprint(input),userMessageId:null,
           role:'page',lane:'output',kind:'notice',text:input.text,format:'text',order:[]}],{now:at});
-        projectSources(session,fallback,commands,run,events,issues);
+        projectSources(session,fallback,commands,run,events,issues,window);
       }
     }
   }
@@ -258,10 +432,18 @@ export function recordPageView(session,event,commands={},at=Date.now()) {
   // Establish the fixed status row before the first native body. Updating it
   // later must not insert a new separator inside that body's native chunks.
   const status={id:session.id,state:'page-status',turnId:run?.id??null,item,page,issues};
-  events.splice(events[0]?.state==='page-running'?1:0,0,status);
-  if(page.state==='standby'&&!run?.awaitCommandView)closeRun(session,run,events,at);
+  const runningIndex=events.findIndex(value=>value.state==='page-running'||value.state==='recovery-running');
+  events.splice(runningIndex>=0?runningIndex+1:0,0,status);
+  if(readFinal&&page.state==='standby'&&!run?.awaitCommandView)closeRun(session,run,events,at);
+  if(readFinal&&window?.known&&page.state==='standby'&&!observation.run?.active&&recoveryActive(session)&&
+      !session.recovery.pageStandbyAt){
+    session.recovery.pageStandbyAt=at;session.recovery.lastObservedAt=at;
+    events.push({id:session.id,state:'recovery-standby',turnId:session.recovery.runId??null});
+  }
   const sending=Object.values(commands).some(c=>c.sessionId===session.id&&c.kind==='send'&&pending(c));
-  session.status=sending?'sending':observation.run?.active?'running':'idle';
+  // Recovery keeps the session visibly busy while waiting for reselect or host
+  // confirmation. It must not make the failed original prompt look idle.
+  session.status=sending?'sending':recoveryActive(session)?'running':observation.run?.active?'running':'idle';
   return {accepted:true,events,issues,observation:observationDescriptor(session)};
 }
 export function recordObservationGap(session,event,at=Date.now()) {

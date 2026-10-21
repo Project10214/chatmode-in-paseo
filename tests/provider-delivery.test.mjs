@@ -159,3 +159,19 @@ test('PD-13 source freshness is rechecked after durable prepare, before any body
   assert.ok(attempts.some(a=>a.target==='old'&&a.status==='retired'&&a.reason==='source-changed-before-send'));
 });
 
+test('PD-14 a moved user-message reference still reaches the native body on the host',async t=>{
+  // The page derives the preceding-user reference from an ambient cursor, so
+  // the same assistant message can report a different one between two reads.
+  // The reference is a pointer, not the source's identity: the grown body must
+  // still travel the whole way to the host timeline.
+  const w=await world(t);
+  const body=(text,userMessageId)=>({id:'formal',userMessageId,role:'assistant',lane:'output',
+    kind:'message',text,format:'text',order:[0],nativeMessageId:'native-formal'});
+  await w.view(w.s,{state:'standby',items:[body('Hel','user-previous')]});
+  await until(()=>w.text()==='Hel');
+  await w.view(w.s,{state:'standby',items:[body('Hello world','user-current')]});
+  await until(()=>w.text()==='Hello world');
+  assert.equal(w.broker.snapshot(w.s.id).sources.find(row=>row.id==='formal').text,'Hello world');
+  assert.ok(w.bodies().length>=1);
+  assert.ok(w.bodies().every(event=>event.item.messageId==='native-formal'));
+});

@@ -1,6 +1,6 @@
 # 测试与验收指南
 
-适用于 **CIP v9 / 扩展 0.2.49 / 插件 alpha.4.45** 的开发、修复和升级。产品范围与行为边界见[产品说明书](PRODUCT_MANUAL.md)，端点以 [PROTOCOL.md](PROTOCOL.md) 为准。旧版 v5 路由不再作为现役验收指令。
+适用于 **CIP v9 / 扩展 0.2.54 / 插件 alpha.4.52** 的开发、修复和升级。产品范围与行为边界见[产品说明书](PRODUCT_MANUAL.md)，端点以 [PROTOCOL.md](PROTOCOL.md) 为准。旧版 v5 路由不再作为现役验收指令。
 
 **原则：测试强度按风险决定，但不得牺牲消息安全和真实验收。** 每一项只报告自己亲自验证到的层级：源码正确 ≠ 离线浏览器通过 ≠ 真实网页登录页成功 ≠ 外部 MCP 实际执行成功。
 
@@ -23,9 +23,29 @@ npm run verify:upstream   # CoS 来源与哈希校验
 npm test                  # 现役 Node 单元与集成测试
 npm run typecheck         # TypeScript / SDK
 npm run test:sdk          # 真实 Paseo SDK schema
+npm run sync:health       # 只读：本机 Runtime 状态里的页面→Paseo 同步健康度
 node --test tests/approval.test.mjs tests/approval-gate-http.test.mjs # 自动允许/手动拒绝并发与授权前服务端门禁
 # 已准备固定 beta.2 原版宿主包时额外运行：
 CIP_PASEO_SERVER_PACKAGE=/path/to/server-0.12.0-beta.2/package npm run test:host-gate
+```
+
+### 同步健康度（`npm run sync:health`）
+
+只读读取本机 Runtime 状态（`~/.chatmode-in-paseo/state.json`，可用 `CIP_STATE_DIR` 覆盖），**只输出长度和计数，不输出任何聊天正文**。它回答"页面→Paseo 这条同步链路现在是否健康"：
+
+| 列 | 含义 |
+| --- | --- |
+| `frames` | 该会话收到的 page-view 帧数；远大于读数次数说明传输在分帧 |
+| `lag` | 账本文本比已投递的历史更长 —— 正文被冻结或落后（修复 1 的症状） |
+| `rev` | 前一条用户消息引用发生漂移的次数（修复 1 的触发条件，修复后由 `SOURCE_USER_MESSAGE_REVISED` 显式报出） |
+| `cfl` | 来源身份冲突 —— 修复 1 修复前的症状，修复后应为 0 |
+| `churn` | **正文一字未改却被记为 rewrite** 的次数 —— DOM 路径位移被读成内容改写的指纹（修复 2 的症状），修复后新会话应为 0 |
+| `dom` | DOM 本地身份（没有稳定 native id）的来源数，位移风险高 |
+
+```sh
+npm run sync:health                    # 最近 8 个会话
+node scripts/sync-health.mjs --limit 40
+node scripts/sync-health.mjs --session <sessionId>
 ```
 
 离线浏览器测试需要 Python、Playwright 和 Chromium（安装方法见 [README](../README.md) 第 3 节）。它们加载内存页面，不登录账号、不发真实消息：
@@ -34,14 +54,51 @@ CIP_PASEO_SERVER_PACKAGE=/path/to/server-0.12.0-beta.2/package npm run test:host
 export CIP_NODE="$(command -v node)"
 python3 tests/public-message-browser.py        # 公开原文，MAIN/ISOLATED
 python3 tests/page-content-browser.py          # DOM 公开来源与授权卡
+python3 tests/model-picker-opening-browser.py # 菜单打开后才有模型元数据；缺失/错误模型仍拒绝
 python3 tests/continuous-actions-browser.py    # Stop、持续授权按钮复核与网页授权动作
 python3 tests/attachment-order-browser.py      # 先附件后正文
 python3 tests/failed-send-disposal-browser.py  # 未发送清理
 python3 tests/binding-mv3-current.py            # 真 MV3 worker + 本机 Runtime + 隔离页面
+python3 tests/page-view-framing-browser.py      # 一次页面读数被传输分帧时，只有末帧是收尾证据
 # 其它专项：tests/artifact-browser.py、tests/prose-source-flow-browser.py
 ```
 
 浏览器级脚本位于 `tests/*.py`；`tests/legacy/` 收录旧架构研究夹具，不作为 v8 发布门禁。GitHub CI 的 `browser-regression` job 执行上述六类隔离浏览器检查，仍不能代替真实登录账号验收。
+
+### 浏览器夹具的本机环境（2026-10-21 实测）
+
+`tests/*.py` 依赖三件本机事实，缺一件就会静默少跑或直接报错：
+
+1. **Python Playwright 版本要与已缓存的 Chromium build 对应。** `~/Library/Caches/ms-playwright` 里已有 `chromium-1200`；**Playwright 1.57.0 正是使用 build 1200 的版本**（1.58→1208、1.59→1217、1.60→1223，都会重新下载浏览器）。装在 `.test-tools/pw-venv`：
+   ```sh
+   python3 -m venv .test-tools/pw-venv
+   .test-tools/pw-venv/bin/python -m pip install "playwright==1.57.0"
+   ```
+2. **`CIP_CHROMIUM` 必须指向 Chromium 可执行文件。** 多个夹具（`page-content`、`button-state`、`config-at-send` 等）不报错但直接 `KeyError: 'CIP_CHROMIUM'`：
+   ```sh
+   export CIP_CHROMIUM="$HOME/Library/Caches/ms-playwright/chromium-1200/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+   ```
+3. **真实宿主夹具要一个解包并装好依赖的 `@getpaseo/server` 目录**，缺了就抛 `CIP_PASEO_SERVER_PACKAGE is required`，不 skip：
+   ```sh
+   export CIP_PASEO_SERVER_PACKAGE="$PWD/.test-tools/paseo-server-012/package"
+   ```
+   要跑到**已安装的 Paseo** 上，还要指明它的 daemon 源文件与 web 渲染包（哈希必须落在 `tests/fixtures/paseo-real-contract.mjs` 的 pinned 审计里）：
+   ```sh
+   export CIP_PASEO_PROVIDER_SOURCE="$CIP_PASEO_SERVER_PACKAGE/dist/server/server/agent/plugin-provider.js"
+   export CIP_PASEO_RENDERER_BUNDLE="/Applications/Paseo.app/Contents/Resources/app-dist/_expo/static/js/web/index-<hash>.js"
+   ```
+
+`.test-tools/run-browser-tests.sh` 已把这几项固定下来（本目录被 `.gitignore` 忽略，不进版本库）：
+
+```sh
+sh .test-tools/run-browser-tests.sh                 # 全部 30 个夹具
+sh .test-tools/run-browser-tests.sh page-content-browser.py
+```
+
+**2026-10-21 基线：30 个夹具全部通过**（含 `prose-source-flow-browser.py`），`npm run test:host-gate` 对着 **Paseo 0.12.0 正式版** 4/4。
+
+**pinned 审计现覆盖 0.11.4 / 0.12.0-beta.1 / 0.12.0-beta.2 / 0.12.0 正式版。** 0.12.0 的审计依据：npm 发布的 `@getpaseo/server@0.12.0` 与已安装桌面 app **逐字节一致**（`plugin-provider.js`、`agent-manager.js` 哈希均相同），因此可复现。与 beta.2 相比，daemon mapper 差 3 行（全在 `prompt.steer` 能力协商），agent manager 差 2 行（**都在 agent 注册路径**，不在 pending/staged-events 轮次生命周期里），`mapTimelineItem` 字节一致，web reducer 仍是 Metro id `3664` + 同样的三个依赖。
+
 
 `test:failed-send-persistence` 使用临时浏览器 profile 和本地路由，模拟网站的 IndexedDB 自动保存；验证自己的未发送正文与应用清理后不会在新页恢复，用户修改、历史未知草稿和未知回执仍保留。它不是 ChatGPT 闭源保存代码的复刻；真实 B01 的来源追踪与清理验收记录只保存在本地 `docs/internal/`，不随仓库发布。
 

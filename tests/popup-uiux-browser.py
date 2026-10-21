@@ -30,7 +30,12 @@ class Handler(BaseHTTPRequestHandler):
 server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
 threading.Thread(target=server.serve_forever,daemon=True).start()
 base=f'http://127.0.0.1:{server.server_port}/popup.html'
-js="""window.fx={paired:true,connected:true,activeSessions:2,calls:[],failStatus:false,failPair:false,opened:0};
+js="""window.fx={paired:true,connected:true,activeSessions:2,calls:[],failStatus:false,failPair:false,opened:0,
+  lastClaim:null,lastCancel:null,
+  recovery:{sessions:[{sessionId:'session-a',conversationId:'chat-a',status:'blocked',
+    recovery:{status:'cancelled'}}],candidates:[
+      {userMessageId:'native-u1',text:'first selected question',recoverable:true,boundaryKnown:true,transcriptComplete:false,nextUserMessageId:'native-u2'},
+      {userMessageId:'native-u2',text:'last question without page-end proof',recoverable:true,boundaryKnown:false,transcriptComplete:false}]}};
 window.chrome={
   runtime:{
     getManifest:()=>({version:'0.2.6',version_name:'0.2.6'}),
@@ -49,6 +54,15 @@ window.chrome={
       if(request.type==='disconnect'){
         fx.paired=false;fx.connected=false;
         return {ok:true,value:{paired:false}};
+      }
+      if(request.type==='recovery-inspect')return {ok:true,value:fx.recovery};
+      if(request.type==='recovery-claim'){
+        fx.lastClaim=request;fx.recovery.sessions[0].recovery={status:'observing'};
+        return {ok:true,value:{accepted:true}};
+      }
+      if(request.type==='recovery-cancel'){
+        fx.lastCancel=request;fx.recovery.sessions[0].recovery={status:'cancelled'};
+        return {ok:true,value:{accepted:true}};
       }
       return {ok:false,error:'UNKNOWN'};
     }
@@ -118,6 +132,7 @@ try:
                 assert page.evaluate("fx.calls.filter(c=>c.type==='disconnect').length")==1
                 assert page.locator('#pair-section').is_hidden()
                 assert page.get_by_role('button',name='开始配对').is_visible()
+                assert page.locator('#show-recovery').is_hidden()
                 page.locator('body').screenshot(path=str(OUTPUT/f'unpaired-{scheme}.png'))
                 checks.append(scheme+' disconnect: explicit confirmation, no auto-open pairing, no extra logout')
                 page.get_by_role('button',name='开始配对').click()
@@ -132,6 +147,22 @@ try:
                 page.get_by_text('配对成功。现在可在 Paseo 新建 Chatmode 会话。',exact=True).wait_for()
                 assert page.locator('#code').input_value()=='' and page.locator('#dashboard').is_visible()
                 checks.append(scheme+' pairing: invalid code retains draft; success clears secret and returns home')
+                page.locator('#show-recovery').click()
+                page.get_by_text('选择目标用户消息',exact=True).wait_for()
+                assert page.locator('.recovery-candidate').count()==2
+                assert page.locator('.recovery-candidate').nth(1).is_disabled()
+                page.locator('.recovery-candidate').nth(0).click()
+                page.get_by_role('button',name='接回这一轮').click()
+                page.get_by_text('已开始接回这一轮网页回答；不会自动重发原消息。',exact=True).wait_for()
+                claim=page.evaluate('fx.lastClaim')
+                assert claim=={'type':'recovery-claim','sessionId':'session-a','userMessageId':'native-u1'},claim
+                assert page.locator('#dashboard').is_visible()
+                page.locator('#show-recovery').click()
+                page.get_by_text('正在接回网页回答',exact=True).wait_for()
+                page.get_by_role('button',name='取消这次接回').click()
+                page.get_by_text('已取消接回，不会自动重发原消息。',exact=True).wait_for()
+                assert page.evaluate('fx.lastCancel')=={'type':'recovery-cancel','sessionId':'session-a'}
+                checks.append(scheme+' recovery: bounded target only, explicit claim payload, cancel exits')
                 assert not errors,errors
                 page.close()
         finally:browser.close()

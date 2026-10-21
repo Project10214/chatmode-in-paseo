@@ -1,6 +1,6 @@
 # CIP v9：Chrome 扩展与本机 Runtime 协议
 
-适用源码：Paseo 插件 `0.1.0-alpha.4.45`，Chrome 扩展 `0.2.49`（2026-10-19）。
+适用源码：Paseo 插件 `0.1.0-alpha.4.52`，Chrome 扩展 `0.2.54`（2026-10-21）。
 **唯一版本依据**：`server/protocol.mjs` 的 `PROTOCOL` 与 `extension/background.js` 的 `PROTOCOL`。此协议不是 MCP、ACP 或原版 CoS bridge；Paseo Provider 另采用其原生 v1 接口。旧 CIP v1–v8 不能与 v9 混用。
 
 ## 通信与身份
@@ -29,7 +29,7 @@ Paseo Agent → Provider → Runtime（127.0.0.1:17843） ↔ Chrome MV3 worker
 | `POST /bind-conversation` | 独立保存已授权 Send 产生的真实对话 URL；不伪造发送回执 |
 | `GET /observations` | 已绑定对话的观察描述，包含页面身份和新一代观察租约 |
 | `POST /rebind-observation` | 经过原对话和旧文档证明后更换观察文档与 lease；不触发 Send |
-| `POST /page-view` | 原生可见按钮状态、公开来源、授权卡、来源问题的持续快照；服务端验证序号、身份、重复与修订 |
+| `POST /page-view` | 原生可见按钮状态、公开来源、授权卡、来源问题的持续快照；服务端验证序号、身份、重复与修订。一次页面读数超过传输上限时会被拆成多帧，事件上的 `readFinal` 标明哪一帧是这次读数的最后一帧 |
 | `POST /observation-gap` | 观察暂时不可读，留下问题记录；不能推断网页停止 |
 | `POST /receipt-observation` | 在原 Send 的已绑定对话中对账迟到回执；不能二次点击 Send |
 | `POST /artifact/begin`、`chunk`、`commit`、`unsupported` | 与已验证来源身份绑定的附件传输与不可用回执 |
@@ -48,5 +48,7 @@ Paseo Agent → Provider → Runtime（127.0.0.1:17843） ↔ Chrome MV3 worker
 5. **授权独立于发送。** `approval` 是命令类型，不是开放的远端权限 API。用户可以在 Paseo 显式处理网页权限；设置页提供可选自动允许（包括持久许可），默认关闭。关开关和人工处理会取消尚未认领的自动命令；已认领命令在每次点击前调用 `/verify-approval` 再校验，已发生的点击不能撤销。多按钮同层自动点击必须在每次点击前重新确认当前按钮仍为允许，无法确认则终止后续点击。结果不明时不自动重试同一授权。
 6. **授权内容变更和消失不等于 Deny。** 复用的网页授权卡变更内容后须发出原请求失效通知，新卡使用新 ID。Paseo 当前原生 Provider SDK 对没有用户选择的 `permission_resolved` 默认记为 Deny；桥接不得冒用该事件强行结束旧卡。旧卡会提示已失效、不能再点击网页；用户可显式选择其「拒绝」来**只清理 Paseo 待处理卡**，不再操作 ChatGPT，网页实际结果保持未知。
 6. **没有通用文件、Shell 或 MCP 代理接口。** Runtime 不因读取网页内容执行本机命令；token、聊天正文与本机文件内容不得放入日志。
+7. **一次页面读数是一个整体。** 读数被传输拆成多帧时，只有 `readFinal:true` 的那一帧是这次读数的收尾证据；在它到达之前不得结束轮次，也不得把「网页待命」当作整次读数已完成。缺少该字段表示未拆分，按单帧处理。
+8. **位置不是内容。** 来源的 DOM 路径（`order`）只用于排序，不参与内容修订号；网页结构位移不得被读成正文改写，也不得因此重投卡片。前一条用户消息的引用（`userMessageId`）是指针而非来源身份：它变化时保留首次引用，但**不得丢弃正文更新**。
 
 运行状态保存在 `~/.chatmode-in-paseo/`（可由 `CIP_STATE_DIR` 替换），权限仅限本机用户，**不加密**。存储容量与单轮限制以对应代码常量及测试为准。真正发布前需按 [测试与验收指南](TESTING.md) 做隔离 MV3 与真实账号三端验收。
