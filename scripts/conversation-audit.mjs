@@ -69,17 +69,30 @@ const duplicatedLedgerRows = (session, kinds) => {
   }
   return [...byText.values()].filter(count => count > 1).length;
 };
-/** More than one forwarded attempt for the same source means the body could
- * reach the host twice. */
+/**
+ * The same characters reaching the host twice. A body that was delivered in
+ * two segments is normal: the attempt ranges are contiguous. A duplicate is
+ * two forwarded attempts whose ranges OVERLAP.
+ */
 const duplicateDeliveries = session => {
   const durable = (session.nativeDelivery || {}).durable;
   if (!durable) return 0;
   const bySource = new Map();
   for (const attempt of durable.attempts || []) {
     if (!['sent', 'confirmed', 'uncertain'].includes(attempt.status)) continue;
-    bySource.set(attempt.sourceId, (bySource.get(attempt.sourceId) || 0) + 1);
+    if (!Number.isInteger(attempt.from) || !Number.isInteger(attempt.to)) continue;
+    if (!bySource.has(attempt.sourceId)) bySource.set(attempt.sourceId, []);
+    bySource.get(attempt.sourceId).push([attempt.from, attempt.to]);
   }
-  return [...bySource.values()].filter(count => count > 1).length;
+  let duplicates = 0;
+  for (const ranges of bySource.values()) {
+    for (let i = 0; i < ranges.length; i++)
+      for (let j = i + 1; j < ranges.length; j++) {
+        const [aFrom, aTo] = ranges[i], [bFrom, bTo] = ranges[j];
+        if (aFrom < bTo && bFrom < aTo) duplicates++;
+      }
+  }
+  return duplicates;
 };
 const pendingDeliveries = session => {
   const durable = (session.nativeDelivery || {}).durable;
