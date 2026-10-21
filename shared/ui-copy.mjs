@@ -64,7 +64,12 @@ const errors = Object.freeze({
   APPROVAL_UNCONFIRMED: '未确认网页已处理授权，请核对网页。',
   APPROVAL_UNRECOGNIZED: '无法识别授权按钮，请到 ChatGPT 网页处理。',
   APPROVAL_BUSY: '授权操作正在处理，请稍候。',
-  APPROVAL_UNSUPPORTED: '不支持此授权选项，请使用卡片中的选项。'
+  APPROVAL_UNSUPPORTED: '不支持此授权选项，请使用卡片中的选项。',
+  COMMAND_NOT_CLAIMABLE: '网页准备超时，本轮未开始，请重试。',
+  WRONG_TAB: '标签页归属已变化，请重新打开该对话。',
+  TAB_ALREADY_OWNED: '该标签页已被其他会话占用。',
+  PAGE_IDENTITY_MISMATCH: '网页身份已变化，请刷新 ChatGPT 页面。',
+  INVALID_TAB: '标签页无效，请重试。'
 });
 export function errorLabel(code) {
   if (Object.hasOwn(errors, code)) return errors[code];

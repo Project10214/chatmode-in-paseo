@@ -113,27 +113,43 @@ function conversation(url) {
 // conversation, no composer) until it is reloaded again (seen three times on
 // 2026-10-17). Before preparing a Send nothing is typed or claimed yet, so
 // such a tab is reloaded once; the normal identity checks then run as usual.
-async function settleBlankTab(tabId) {
+//
+// A tab whose document is still LOADING is a slow ChatGPT page, not an empty
+// shell. Reloading it restarts the load and makes it slower, so it is only
+// waited for. Every wait is bounded by the command deadline: a claim filed
+// after the deadline is refused by the Runtime.
+async function settleBlankTab(tabId, deadline) {
   const ready = async () => {
     try { const r = await tabRpc(tabId, { type: 'page-ready' }, 3000); return r?.ok === true && r.value?.composer === true; }
     catch { return false; }
   };
-  // chrome.tabs.create() resolving only proves a tab object exists. A tab in a
-  // background/occluded window can stay blank or throttled, so also wait for
-  // the actual ChatGPT document. If it still is not loading, bring that one
-  // tab to the foreground once (never reload a loaded page first).
-  const loaded = async () => {
+  const page = async () => {
     try { const tab = await chrome.tabs.get(tabId);
-      return tab?.status === 'complete' && !tab.discarded && String(tab.url || '').startsWith('https://chatgpt.com/'); }
-    catch { return false; }
+      return { url: String(tab?.url || ''), complete: tab?.status === 'complete', discarded: Boolean(tab?.discarded) }; }
+    catch { return { url: '', complete: false, discarded: true }; }
   };
-  for (const end = Date.now() + 8000; Date.now() < end; await delay(500)) if (await ready()) return false;
-  if (!(await loaded())) {
+  const atChatGPT = value => value.url.startsWith('https://chatgpt.com/');
+  const limit = Number.isFinite(deadline) ? Math.max(2000, deadline - Date.now() - 12000) : 45000;
+  const end = Date.now() + limit;
+  for (const until = Math.min(end, Date.now() + 8000); Date.now() < until; await delay(500)) if (await ready()) return false;
+  let state = await page();
+  if (!state.complete || state.discarded || !atChatGPT(state)) {
+    // chrome.tabs.create() resolving only proves a tab object exists. A tab in
+    // a background/occluded window can stay blank or throttled, so also wait
+    // for the actual ChatGPT document. If it still is not loading, bring that
+    // one tab to the foreground once (never reload a loaded page first).
     try { await chrome.tabs.update?.(tabId, { active: true }); } catch {}
-    for (const end = Date.now() + 10000; Date.now() < end; await delay(500)) if (await ready()) return false;
+    for (const until = Math.min(end, Date.now() + 10000); Date.now() < until; await delay(500)) if (await ready()) return false;
+    state = await page();
   }
-  try { await chrome.tabs.reload(tabId); } catch { return false; }
-  for (const end = Date.now() + 30000; Date.now() < end; await delay(500)) if (await ready()) break;
+  // A document that FINISHED loading but still has no composer is the empty
+  // shell this was written for, and is reloaded once. A tab whose content was
+  // discarded is reloaded too. A document that is still LOADING is only waited
+  // for: reloading it restarts the load and makes it slower.
+  if ((state.complete || state.discarded) && atChatGPT(state)) {
+    try { await chrome.tabs.reload(tabId); } catch { return false; }
+    for (const until = Math.min(end, Date.now() + 30000); Date.now() < until; await delay(500)) if (await ready()) break;
+  }
   return true;
 }
 async function recoveryTab() {
@@ -256,7 +272,7 @@ async function execute(command) {
   if (Object.hasOwn(ledger, command.id)) return;
   const profile = config;
   ledger[command.id] = { phase: 'reserved', command, endpoint: profile.endpoint, at: Date.now() }; await saveLedger();
-  let claim, tabId, reopened = false; const temporary = command.kind === 'catalog';
+  let claim, tabId, reopened = false, claimRejected = null; const temporary = command.kind === 'catalog';
   try {
     if(command.kind==='close-tab') {
       tabId=command.payload.tabId;
@@ -295,12 +311,21 @@ async function execute(command) {
       if (!tabs[tabId] || tabs[tabId].sessionId !== command.sessionId) throw codeError('TAB_NOT_OWNED');
     }
     ledger[command.id].tabId = tabId; await saveLedger();
-    if (['open','configure','ensure'].includes(command.kind) && !reopened) await settleBlankTab(tabId);
+    if (['open','configure','ensure'].includes(command.kind) && !reopened) await settleBlankTab(tabId, command.deadline);
     const page = command.kind === 'close-tab'
       ? { documentKey: command.payload.documentKey }
       : await identity(tabId, command.kind==='ensure'?command.payload:null);
     if (config !== profile) throw codeError('CONNECTION_CHANGED');
-    claim = await api('/claim', { id: command.id, tabId, documentKey: page.documentKey, ...(command.kind==='ensure'?{url:page.url,nativeMessageId:page.nativeMessageId,reopened}:{}) }, true, profile);
+    try {
+      claim = await api('/claim', { id: command.id, tabId, documentKey: page.documentKey, ...(command.kind==='ensure'?{url:page.url,nativeMessageId:page.nativeMessageId,reopened}:{}) }, true, profile);
+    } catch (error) {
+      // The Runtime refused the claim. That is a fact about the Runtime, not a
+      // local prepare failure, and it must be reported as itself: a generic
+      // code hides the only reason that matters (a claim filed after the
+      // command deadline).
+      claimRejected = error.code ?? null;
+      throw error;
+    }
     ledger[command.id] = { ...ledger[command.id], phase: 'claimed', lease: claim.lease, documentKey: page.documentKey };
     await saveLedger();
     if (command.kind !== 'close-tab') {
@@ -339,8 +364,11 @@ async function execute(command) {
       // Nothing was claimed or clicked according to the local worker. A
       // request to /claim might still have reached the server before its
       // reply was lost: only the server can prove this was never claimed.
-      const allowed=['TAB_NOT_OWNED','PAGE_CLOSED','WRONG_PAGE','WRONG_CONVERSATION','TURN_CHANGED','REOPEN_IDENTITY_UNPROVEN','CONTENT_UNAVAILABLE','PAGE_RELOAD_REQUIRED','CONNECTION_CHANGED'];
-      const error=allowed.includes(e.code)?e.code:'BROWSER_PREPARE_FAILED';
+      // The same vocabulary the Runtime accepts on /fail-unclaimed. A claim the
+      // Runtime refused keeps its own code: a generic one hides the only
+      // reason that matters.
+      const allowed=['TAB_NOT_OWNED','PAGE_CLOSED','WRONG_PAGE','WRONG_CONVERSATION','TURN_CHANGED','REOPEN_IDENTITY_UNPROVEN','CONTENT_UNAVAILABLE','PAGE_RELOAD_REQUIRED','CONNECTION_CHANGED','COMMAND_NOT_CLAIMABLE','WRONG_TAB','TAB_ALREADY_OWNED','PAGE_IDENTITY_MISMATCH','INVALID_TAB','SESSION_UNKNOWN'];
+      const error=claimRejected??(allowed.includes(e.code)?e.code:'BROWSER_PREPARE_FAILED');
       const row = ledger[command.id];
       row.phase = 'unclaimed'; row.prepareError = error;
       // Persist before the ACK so an MV3 restart can retry only this server

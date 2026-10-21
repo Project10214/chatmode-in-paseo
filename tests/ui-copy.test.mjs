@@ -145,6 +145,12 @@ test('COPY errors are concise, preserve uncertainty, and never expose arbitrary 
   assert.doesNotMatch(copy.errorLabel('STOP_UNCONFIRMED'), /已停止/);
   assert.match(copy.errorLabel('RECEIPT_UNCONFIRMED'), /不会自动重发/);
   assert.match(copy.errorLabel('FUTURE_ERROR'), /FUTURE_ERROR/);
+  // A claim the Runtime refused keeps its own reason: the user must be able to
+  // tell "the page was too slow" from "the page is wrong".
+  assert.match(copy.errorLabel('COMMAND_NOT_CLAIMABLE'), /准备超时/);
+  assert.doesNotMatch(copy.errorLabel('COMMAND_NOT_CLAIMABLE'), /COMMAND_NOT_CLAIMABLE/);
+  assert.match(copy.errorLabel('PAGE_IDENTITY_MISMATCH'), /身份已变化/);
+  assert.match(copy.errorLabel('TAB_ALREADY_OWNED'), /已被其他会话占用/);
   assert.doesNotMatch(copy.errorLabel('private user text or secret=123'), /private|123/);
 });
 

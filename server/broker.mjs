@@ -256,7 +256,9 @@ export class Broker {
     },{control:true});
   }
   async failUnclaimed(id, error) {
-    const allowed=['TAB_NOT_OWNED','PAGE_CLOSED','WRONG_PAGE','WRONG_CONVERSATION','TURN_CHANGED','REOPEN_IDENTITY_UNPROVEN','CONTENT_UNAVAILABLE','PAGE_RELOAD_REQUIRED','CONNECTION_CHANGED','BROWSER_PREPARE_FAILED'];
+    // The same vocabulary the extension reports. A claim the Runtime refused
+    // keeps its own code, so the reason is not hidden behind a generic one.
+    const allowed=['TAB_NOT_OWNED','PAGE_CLOSED','WRONG_PAGE','WRONG_CONVERSATION','TURN_CHANGED','REOPEN_IDENTITY_UNPROVEN','CONTENT_UNAVAILABLE','PAGE_RELOAD_REQUIRED','CONNECTION_CHANGED','BROWSER_PREPARE_FAILED','COMMAND_NOT_CLAIMABLE','WRONG_TAB','TAB_ALREADY_OWNED','PAGE_IDENTITY_MISMATCH','INVALID_TAB','SESSION_UNKNOWN'];
     invariant(allowed.includes(error),'INVALID_PREPARE_ERROR');
     const result=await this.store.transaction(d=>{
       const c=d.commands[id];
