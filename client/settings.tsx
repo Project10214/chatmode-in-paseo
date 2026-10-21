@@ -4,11 +4,10 @@ import { useRpc, type PluginSurfaceProps } from '@getpaseo/plugin/client';
 import { Icon, TextInput, copyText } from '@getpaseo/plugin/client/react-native';
 import type { RpcOutput } from '@getpaseo/plugin';
 import { snapshot, saveDefaults, saveConcurrency, saveAutoAllow, pair, abandon } from '../shared/rpc.js';
-// The installed builds are inlined at build time. The server bundle is
-// evaluated from memory and cannot read its own package directory, so the
-// client is where the shipped versions are known.
-import pluginPackage from '../package.json' with { type: 'json' };
-import extensionManifest from '../extension/manifest.json' with { type: 'json' };
+// The shipped builds are declared in shared/ because the plugin loader keeps
+// modules inside client/, server/ and shared/. scripts/check.mjs refuses the
+// tree when these drift from package.json and extension/manifest.json.
+import { PLUGIN_VERSION, INSTALLED_EXTENSION_VERSION } from '../shared/versions.js';
 
 type State = RpcOutput<typeof snapshot>;
 const ERROR_LABELS: Record<string,string> = {
@@ -53,15 +52,8 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
   const filtered=state?.catalog?.apps.filter(a=>a.label.toLocaleLowerCase().includes(query.toLocaleLowerCase()))??[];
   // The loaded extension may be an older build than the one installed next to
   // this plugin. Say so plainly instead of letting the user guess.
-  // The JSON shape differs between the bundler (direct) and the TypeScript
-  // CommonJS emit (under `default`); read both rather than assume one.
-  const versionOf=(value:unknown):string|null=>{
-    const record=value as {version?:unknown;default?:{version?:unknown}}|null|undefined;
-    if(typeof record?.version==='string')return record.version;
-    return typeof record?.default?.version==='string'?record.default.version:null;
-  };
-  const pluginVersion=versionOf(pluginPackage);
-  const installedExtensionVersion=versionOf(extensionManifest);
+  const pluginVersion=PLUGIN_VERSION;
+  const installedExtensionVersion=INSTALLED_EXTENSION_VERSION;
   const extensionStale=!!state&&!!installedExtensionVersion&&!!state.extensionVersion&&state.extensionVersion!==installedExtensionVersion;
   const versionLine=state?`插件 ${pluginVersion??'版本未知'} · 协议 ${state.status.protocol}`:'';
   return <View style={{padding:compact?16:24,gap:26,width:'100%',maxWidth:800,alignSelf:'center',backgroundColor:c.surface0}}>

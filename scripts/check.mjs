@@ -20,5 +20,17 @@ for (const entry of manifest.content_scripts) for (const name of entry.js) await
 // Chrome and Paseo can be upgraded separately; Chrome's visible version must
 // identify the extension itself. Protocol compatibility is checked above.
 if (manifest.version_name !== manifest.version) throw new Error('Displayed Chrome extension version disagrees with manifest version');
+// The plugin loader keeps plugin modules inside client/, server/ and shared/,
+// so the shipped versions are declared in shared/versions.ts instead of being
+// read from the package root. They must not drift from the files they
+// describe: a stale constant would show the wrong build in the settings page.
+const versions = await readFile(path.join(root, 'shared/versions.ts'), 'utf8');
+const declared = name => new RegExp(`export const ${name} = '([^']*)'`).exec(versions)?.[1] ?? null;
+const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+if (declared('PLUGIN_VERSION') !== pkg.version)
+  throw new Error(`shared/versions.ts PLUGIN_VERSION (${declared('PLUGIN_VERSION')}) disagrees with package.json (${pkg.version})`);
+if (declared('INSTALLED_EXTENSION_VERSION') !== manifest.version)
+  throw new Error(`shared/versions.ts INSTALLED_EXTENSION_VERSION (${declared('INSTALLED_EXTENSION_VERSION')}) disagrees with extension/manifest.json (${manifest.version})`);
 console.log(`PASS: ${count} JavaScript files parsed; JSON manifests valid; no cookie/debugger permissions.`);
+console.log(`PASS: shipped versions agree (plugin ${pkg.version}, extension ${manifest.version}).`);
 console.log('This is a syntax check, not SDK typechecking or a live ChatGPT acceptance test.');

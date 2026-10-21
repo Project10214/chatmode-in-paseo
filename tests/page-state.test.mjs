@@ -1,5 +1,7 @@
 import test from 'node:test';
-const jsonModule = relative => { const value = JSON.parse(readFileSync(new URL(relative, import.meta.url), 'utf8')); return { ...value, default: value }; };
+const shippedVersions = () => { const source = readFileSync(new URL('../shared/versions.ts', import.meta.url), 'utf8');
+  const read = name => new RegExp(`export const ${name} = '([^']*)'`).exec(source)?.[1] ?? null;
+  return { PLUGIN_VERSION: read('PLUGIN_VERSION'), INSTALLED_EXTENSION_VERSION: read('INSTALLED_EXTENSION_VERSION') }; };
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -29,10 +31,7 @@ function render(file, name, props, state = []) {
   let cursor = 0;
   const jsx = (type, props) => ({ type, props });
   const modules = {
-    // A JSON module is the object itself under the bundler and under
-    // `default` in the TypeScript CommonJS emit. Provide both shapes.
-    '../package.json': jsonModule('../package.json'),
-    '../extension/manifest.json': jsonModule('../extension/manifest.json'),
+    '../shared/versions.js': shippedVersions(),
 
     'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' },
     react: { useState(value) { const at = cursor++; return [Object.hasOwn(state, at) ? state[at] : value, () => {}]; },
