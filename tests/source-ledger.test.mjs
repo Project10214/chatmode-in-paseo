@@ -370,3 +370,36 @@ test('LEDGER-13 a DOM path shift is a position change, not a content rewrite', (
   assert.deepEqual(byId(session, 'answer').order, [2]);
   assert.equal(byId(session, 'answer').text, 'Hello world');
 });
+
+test('LEDGER-14 a moved preceding-user reference is a pointer, not a content revision', () => {
+  // The reference is derived from the page's ambient cursor, so it moves
+  // without the content moving. It must not re-project or re-deliver the
+  // source, and the first reference must be kept.
+  const session = {};
+  reconcileSources(session, [
+    source('answer', 'Hello', { userMessageId: 'user-previous', order: [0] })
+  ], { now: 10 });
+
+  const moved = reconcileSources(session, [
+    source('answer', 'Hello', { userMessageId: 'user-current', order: [0] })
+  ], { now: 20 });
+  assert.deepEqual(moved.changes, []);
+  assert.equal(moved.issues.length, 1);
+  assert.equal(moved.issues[0].code, 'SOURCE_USER_MESSAGE_REVISED');
+  assert.equal(byId(session, 'answer').text, 'Hello');
+  assert.equal(byId(session, 'answer').userMessageId, 'user-previous');
+  assert.equal(byId(session, 'answer').rewrites, undefined);
+
+  // A reference that becomes known for the first time is the same case.
+  const second = {};
+  reconcileSources(second, [
+    source('answer', 'Hello', { userMessageId: null, order: [0] })
+  ], { now: 10 });
+  const known = reconcileSources(second, [
+    source('answer', 'Hello', { userMessageId: 'user-current', order: [0] })
+  ], { now: 20 });
+  assert.deepEqual(known.changes, []);
+  assert.equal(known.issues.length, 1);
+  assert.equal(known.issues[0].code, 'SOURCE_USER_MESSAGE_REVISED');
+  assert.equal(byId(second, 'answer').userMessageId, null);
+});
