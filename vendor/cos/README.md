@@ -94,3 +94,13 @@ Paseo 0.11.4 的机器侧 `getLastAssistantMessage` 在工具卡片穿插时可�
 `cos-shell-public.js` 原样读取公开 text/DIL，保留原生消息完成、可读性和源位置；不再调用浏览器解码器。`unescapeFallbackMarkdown` 移至接收侧 `shared/public-prose.mjs`，由 `server/message-delivery.mjs` 使用。普通 text 不解码，DIL 完结后一次适配；原 MIT 来源与最终转换语义保留。
 
 provenance 新增 SERVER 运行位置；校验器分别核查浏览器 manifest 与接收端导入/调用，不跳过迁移后的来源完整性检查。候选未部署；完整同步和旧 Agent 恢复未验收。
+
+## 2026-10-21 · 首条消息回执的路径边界候选
+
+`cos-send-evidence.js` 只对已识别会话路径和 group 首页的可选末尾斜线做规范化；不改会话 ID、group ID、大小写或其它路径段。因此 `/ → /c/<id>/ → /c/<id>` 可以保留同一次发送的证明，而 `/search` 等无关中间页、跨 group、会话 A → B → A 仍永久撤销本次证明。
+
+`cos-request-receipt.js` 在 HTTP 证明到达后继续维护相同的路径归属，直到回执被读取或关闭；关闭会移除本次新增的路由监听。证明仍要求已授权发送的准确正文哈希、唯一原生用户消息 UUID、相同应用集合、成功的同源 SSE 响应以及原有 12 秒请求 / 70 秒响应时限。没有增加发送、重试或延长等待。
+
+接收侧 `cos-native.js` 与 `dom-adapter.js` 已复核：初始首页的 Conversation 为 null，既有逻辑本来允许它取得第一个会话。既有会话 A 改成 B 的拒绝条件保留；不将它当作首页首发误判而删除。新增 `tests/first-send-receipt.test.mjs` 直接运行实际发送观察器、回执消费者及原生 Send 函数，覆盖正例、旧消息/错正文/未授权/草稿修改和路由反例；浏览器事件为合成夹具。
+
+**边界：**上述是可复现的路径规范化缺口，不证明已有线上 35 次误报全部由末尾斜线造成。现有脱敏诊断只有路径变化布尔值，没有原始跳转顺序；真实跳转形态和用户气泡正文差异仍需主会话补证。本候选未部署，离线测试不等于真实账号验收。
