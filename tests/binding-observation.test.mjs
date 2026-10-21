@@ -21,6 +21,9 @@ async function worker(local = {config:{endpoint:'http://127.0.0.1:17843',token:'
         result=state.rebindResult??{...body,observationLease:'fresh-observation',generation:body.generation+1};
         state.binding=result;
       }
+      if(route==='/recovery/targets')result=state.targets??{sessions:[]};
+      if(route==='/recovery/claim'||route==='/recovery/cancel')
+        result=state.recoveryResult??{accepted:true,sessionId:body?.sessionId};
       return {ok:true,text:async()=>JSON.stringify(result)};
     },
     chrome:{
@@ -43,13 +46,15 @@ async function worker(local = {config:{endpoint:'http://127.0.0.1:17843',token:'
         calls.push({message:m.type,payload:m.session});
         if(m.type==='identity')return state.identity?{ok:true,value:state.identity}:{ok:false,error:'CONTENT_UNAVAILABLE'};
         if(m.type==='pending-receipt')return state.pendingProbe??{ok:false,error:'TRANSCRIPT_UNCONFIRMED'};
+        if(m.type==='recovery-candidates')return state.recoveryCandidates??{ok:false,error:'RECOVERY_READ_FAILED'};
         if(m.type==='monitor')return {ok:state.monitor,value:{active:state.monitorActive===true}};
         return {ok:state.monitor};
       }}
     }
   });
   // Explicit single-iteration worker tests; the unmodified pump is exercised by binding-mv3-flow.py.
-  vm.runInContext(source.replace(/\nvoid pump\(\);\s*$/,'')+'\nglobalThis.testBinding={load,watch:s=>watchSession(s,config)};',context);
+  const single=source.replace(/\nvoid pump\(\);\s*$/,'').replaceAll('void pump();','void 0;');
+  vm.runInContext(single+'\nglobalThis.testBinding={load,watch:s=>watchSession(s,config)};',context);
   await context.testBinding.load();
   return {state,calls,local,clock,closeTab:async id=>tabRemoved(id),watch:(s=state.binding??session)=>context.testBinding.watch(s),message:(m,sender)=>new Promise(resolve=>handler(m,sender,resolve))};
 }
@@ -324,4 +329,81 @@ test('BIND23 a reused old tab on a different Conversation cannot terminate an un
   assert.equal(f.calls.some(c=>c.body?.kind==='binding_lost'),false);
   assert.equal(Object.keys(f.local.bindingWaits??{}).length,1);
   assert.equal(f.calls.some(c=>c.body?.kind==='receipt_recovered'||c.message==='command'),false);
+});
+
+const popupSender=()=>({id:'a'.repeat(32),url:'chrome-extension://'+'a'.repeat(32)+'/popup.html'});
+function recoveryWorker(){
+  return worker().then(f=>{
+    f.state.matches=[{id:71,url:sessionUrl()}];
+    f.state.targets={sessions:[{sessionId:'session-a',conversationId:'chat-a',status:'running'}]};
+    return f;
+  });
+}
+test('RECOVERY-POPUP1 inspect offers only an exact conversation and preserves page boundary evidence',async()=>{
+  const f=await recoveryWorker();
+  f.state.recoveryCandidates={ok:true,value:{conversationId:'chat-a',documentKey:'document-a',
+    url:sessionUrl(),transcriptComplete:true,candidates:[
+      {userMessageId:'u1',text:'first',recoverable:true,boundaryKnown:true,transcriptComplete:true},
+      {userMessageId:'u2',text:'second',recoverable:false,boundaryKnown:false,transcriptComplete:true}]}};
+  const result=await f.message({type:'recovery-inspect'},popupSender());
+  assert.equal(result.ok,true);
+  assert.equal(result.value.conversationId,'chat-a');
+  assert.equal(result.value.sessions.length,1);
+  assert.equal(result.value.candidates[1].boundaryKnown,false);
+  assert.equal(f.calls.some(c=>c.route==='/recovery/claim'),false);
+});
+test('RECOVERY-POPUP2 claim forwards the selected native ID, live URL and exact boundary; no Send',async()=>{
+  const f=await recoveryWorker();
+  f.state.recoveryCandidates={ok:true,value:{conversationId:'chat-a',documentKey:'document-a',
+    url:sessionUrl(),transcriptComplete:false,candidates:[
+      {userMessageId:'u1',text:'first',recoverable:true,boundaryKnown:true,transcriptComplete:false,nextUserMessageId:'u2'}]}};
+  const result=await f.message({type:'recovery-claim',sessionId:'session-a',userMessageId:'u1'},popupSender());
+  assert.equal(result.ok,true);
+  const claim=f.calls.find(c=>c.route==='/recovery/claim').body;
+  assert.deepEqual(claim,{sessionId:'session-a',tabId:71,documentKey:'document-a',
+    url:sessionUrl(),userMessageId:'u1',boundaryKnown:true,transcriptComplete:false,nextUserMessageId:'u2'});
+  assert.equal(f.calls.some(c=>['/claim','/authorize','/result'].includes(c.route)),false,
+    'manual recovery never creates a Send command');
+});
+test('RECOVERY-POPUP3 a missing boundary or stale page cannot be claimed',async()=>{
+  const f=await recoveryWorker();
+  f.state.recoveryCandidates={ok:true,value:{conversationId:'chat-a',documentKey:'document-a',
+    url:sessionUrl(),transcriptComplete:false,candidates:[
+      {userMessageId:'u1',text:'first',recoverable:true,boundaryKnown:false,transcriptComplete:false}]}};
+  const unknown=await f.message({type:'recovery-claim',sessionId:'session-a',userMessageId:'u1'},popupSender());
+  assert.equal(unknown.ok,false);
+  assert.equal(unknown.error,'RECOVERY_BOUNDARY_UNKNOWN');
+  assert.equal(f.calls.some(c=>c.route==='/recovery/claim'),false);
+  f.state.recoveryCandidates.value.documentKey='stale-document';
+  const stale=await f.message({type:'recovery-inspect'},popupSender());
+  assert.equal(stale.ok,false);
+  assert.equal(stale.error,'RECOVERY_READ_FAILED');
+});
+test('RECOVERY-POPUP4 cancel is an explicit popup-only operation and never a page action',async()=>{
+  const f=await recoveryWorker();
+  const result=await f.message({type:'recovery-cancel',sessionId:'session-a'},popupSender());
+  assert.equal(result.ok,true);
+  assert.deepEqual(f.calls.find(c=>c.route==='/recovery/cancel').body,{sessionId:'session-a'});
+  assert.equal(f.calls.some(c=>c.body?.kind==='binding_lost'||c.message==='command'),false);
+});
+test('RECOVERY-POPUP5 an unbound failed session remains selectable on the current conversation and claims by page identity',async()=>{
+  const f=await recoveryWorker();
+  f.state.targets={sessions:[
+    {sessionId:'session-unbound',conversationId:null,unbound:true,status:'blocked'},
+    {sessionId:'session-other',conversationId:'chat-b',unbound:false,status:'running'}
+  ]};
+  f.state.recoveryCandidates={ok:true,value:{conversationId:'chat-a',documentKey:'document-a',
+    url:sessionUrl(),transcriptComplete:true,candidates:[
+      {userMessageId:'u1',text:'first',recoverable:true,boundaryKnown:true,transcriptComplete:true}]}};
+  const inspect=await f.message({type:'recovery-inspect'},popupSender());
+  assert.equal(inspect.ok,true);
+  assert.equal(inspect.value.sessions.length,1);
+  assert.equal(inspect.value.sessions[0].sessionId,'session-unbound');
+  const claim=await f.message({type:'recovery-claim',sessionId:'session-unbound',userMessageId:'u1'},popupSender());
+  assert.equal(claim.ok,true);
+  assert.deepEqual(f.calls.find(c=>c.route==='/recovery/claim').body,
+    {sessionId:'session-unbound',tabId:71,documentKey:'document-a',url:sessionUrl(),
+      userMessageId:'u1',boundaryKnown:true,transcriptComplete:true});
+  assert.equal(f.calls.some(c=>['/claim','/authorize','/result'].includes(c.route)),false,
+    'binding an unbound recovery never creates a Send');
 });

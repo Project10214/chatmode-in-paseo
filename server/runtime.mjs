@@ -41,7 +41,7 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
     const json = (res, status, value, origin) => {
       const data = JSON.stringify(value);
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
-        ...(origin ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-CIP-Extension, X-CIP-Engine, X-CIP-Browser, X-CIP-Features', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' } : {}) });
+        ...(origin ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-CIP-Extension, X-CIP-Extension-Version, X-CIP-Engine, X-CIP-Browser, X-CIP-Features', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' } : {}) });
       res.end(data);
     };
     const body = async req => {
@@ -75,6 +75,11 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
         }
         invariant(credential && equal(req.headers.authorization, `Bearer ${credential.token}`) && req.headers['x-cip-extension'] === credential.extensionId, 'AUTH_REQUIRED');
         invariant(!origin || origin === `chrome-extension://${credential.extensionId}`, 'ORIGIN_REJECTED');
+        // The running extension reports its own build. The settings page uses
+        // this to tell "the loaded extension" from "the installed one".
+        const reportedVersion = req.headers['x-cip-extension-version'];
+        if (runtimeHandle && typeof reportedVersion === 'string' && /^\d{1,3}\.\d{1,3}\.\d{1,5}(?:\.\d{1,5})?$/.test(reportedVersion))
+          runtimeHandle.extensionVersion = reportedVersion;
         invariant(!broker.closed,'RUNTIME_CLOSED');
         lastSeen = Date.now();
         if (req.method === 'GET' && route === '/commands') {
@@ -88,6 +93,8 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
           return json(res,200,{sessions:broker.observationBindings()},origin);
         if (req.method === 'GET' && route === '/recovery-targets')
           return json(res, 200, { sessions: broker.recoveryTargets() }, origin);
+        if (req.method === 'GET' && route === '/recovery/targets')
+          return json(res, 200, { sessions: broker.manualRecoveryTargets() }, origin);
         invariant(req.method === 'POST', 'ROUTE_NOT_FOUND');
         const value = await body(req); let result;
         switch (route) {
@@ -104,14 +111,14 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
             if(store.read().commands[value.id]?.payload?.files?.length)
               await broker.inputFiles.remove(value.id);
             break;
-          case '/authorize': result = await broker.authorize(value.id, value.lease); break;
+          case '/authorize': result = await broker.authorize(value.id, value.lease, value.documentKey); break;
           case '/verify-tab-close': result = broker.verifyTabClose(value.id, value.lease); break;
           case '/verify-approval': result = broker.verifyApproval(value.id, value.lease); break;
           case '/bind-conversation':
             result = await broker.bindConversation(value.id,value.lease,
               {tabId:value.tabId,documentKey:value.documentKey,url:value.url});break;
           case '/result': {
-            result = await broker.result(value.id, value.lease, value.result);
+            result = await broker.result(value.id, value.lease, value.result, value.documentKey);
             const command = store.read().commands[value.id];
             if(command?.kind==='send' && ['done','failed'].includes(command.phase) && command.payload?.files?.length)
               await broker.inputFiles.remove(value.id);
@@ -139,6 +146,8 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
             break;
           }
           case '/rebind-observation': result = await broker.rebindObservation(value); break;
+          case '/recovery/claim': result = await broker.claimRecovery(value); break;
+          case '/recovery/cancel': result = await broker.cancelRecovery(value.sessionId); break;
           case '/page-view':
             result=await broker.observeView(value);
             if(!result.duplicate&&!result.stale&&typeof onExternalTurn==='function')
@@ -180,7 +189,7 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
     },1000);timer.unref();
     let closed = false;
     runtimeHandle = {
-      broker, store, address,
+      broker, store, address, extensionVersion: null,
       status: () => ({ address, paired: Boolean(credential), connected: Date.now() - lastSeen < 45000, lastSeenAt: lastSeen, protocol: PROTOCOL }),
       async renewPairing() {
         pairing = { code: randomBytes(24).toString('hex'), expiresAt: Date.now() + 15 * 60000 };

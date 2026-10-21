@@ -353,20 +353,38 @@
       nativeMode = true;
       // The intelligence picker mounts after the composer. A single read can
       // race that mount and report "model unavailable" on a healthy page.
-      // Re-check readiness and retry briefly before reporting the failure.
+      // Re-check readiness and retry before reporting the failure.
+      //
+      // The budget is the time the command really has: the deadline minus the
+      // reservation for the one-shot Send receipt. A short fixed cap made a
+      // slow but healthy page fail with "model unavailable" while the command
+      // still had most of its time left, and the user had to send again.
       const budget = Number.isFinite(deadline)
-        ? Math.max(1500, Math.min(6000, deadline - Date.now() - 30000)) : 6000;
+        ? Math.max(1500, Math.min(20000, deadline - Date.now() - 30000)) : 20000;
       const end = Date.now() + budget;
+      const startedAt = Date.now();
       let selected = false;
+      let lastProof = null;
       while (stillCurrent()) {
         if (await C.prepareChatModelSurface(stillCurrent) &&
             await M.selectModelSettings(config.model, config.thinkingOption, stillCurrent)) {
-          try { await refreshModelProof(); selected = true; break; } catch { /* picker not readable yet */ }
+          try { await refreshModelProof(); selected = true; break; } catch (error) { lastProof = error; }
         }
         if (Date.now() >= end) break;
         await delay(250);
       }
-      if (!selected) fail('MODEL_OR_THINKING_UNAVAILABLE');
+      if (!selected) {
+        // Say what was asked for and how long it waited: without this the
+        // failure is indistinguishable from a page that really has no such
+        // model or thinking option.
+        const error = new Error('MODEL_OR_THINKING_UNAVAILABLE');
+        error.code = 'MODEL_OR_THINKING_UNAVAILABLE';
+        error.diagnostic = { stage: 'model', model: String(config.model ?? '').slice(0, 80),
+          thinkingOption: String(config.thinkingOption ?? '').slice(0, 40),
+          waitedMs: Date.now() - startedAt, budgetMs: budget,
+          lastProofCode: lastProof?.code ?? null };
+        throw error;
+      }
     } else { await select('model', config.model); await select('thinking', config.thinkingOption); }
     guard();
     await atStage('apps', () => setApps(config.appIds, guard, ready)); guard();

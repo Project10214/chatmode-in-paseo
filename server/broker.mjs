@@ -1,7 +1,7 @@
 import { safeDiagnostic } from './diagnostics.mjs';
 import { APPROVAL_CHOICES } from './approval.mjs';
 import { ensureObservation, observationDescriptor, assertObservation, resetObservationDocument,
-  beginPromptObservation, recordPageView, recordObservationGap } from './continuous-observation.mjs';
+  beginPromptObservation, recordPageView, recordObservationGap, recoveryActive } from './continuous-observation.mjs';
 import { SlotQueue, concurrencyValue } from './slots.mjs';
 import path from 'node:path';
 import { MediaStore } from './media.mjs';
@@ -14,6 +14,12 @@ import { BridgeError, invariant, identifier, nativeMessageId as verifyNativeId, 
 
 const pending = c => ['queued', 'claimed', 'authorized'].includes(c.phase);
 const busy = s => ['sending', 'running', 'stopping'].includes(s.status);
+// A failed/uncertain turn leaves its authorized Send command pending. That
+// command belongs to the turn being recovered and cannot be replayed; it must
+// not block manual recovery. Any other Send or Stop is live work.
+const blockingControl = (session, command) => pending(command) && command.sessionId === session.id &&
+  (command.kind === 'stop' || command.kind === 'send' &&
+    command.payload?.turnId !== session.turn?.id);
 const now = () => Date.now();
 const token = () => randomBytes(24).toString('hex');
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -119,6 +125,22 @@ export class Broker {
       .filter(s => s.conversationId && Number.isInteger(s.tabId) && s.tabId >= 0 &&
         s.status !== 'abandoned')
       .map(s => ({ sessionId:s.id, conversationId:s.conversationId, tabId:s.tabId }));
+  }
+  // Manual recovery is offered only for an already-created failed/uncertain
+  // prompt. It does not depend on the original tab still being open. Completed
+  // recoveries are hidden; cancelled/expired ones may be selected again.
+  manualRecoveryTargets() {
+    const d=this.store.read();
+    return Object.values(d.sessions)
+      .filter(s => s.status!=='abandoned' && !s.archiveIntent &&
+        s.turn?.outcome==='failed' && s.turn?.notSent!==true &&
+        !(s.recovery?.status==='completed'&&s.recovery.turnId===s.turn.id) &&
+        !Object.values(d.commands).some(c=>blockingControl(s,c)))
+      .map(s => ({sessionId:s.id,conversationId:s.conversationId??null,unbound:!s.conversationId,
+        status:s.status,error:s.error??null,recovery:s.recovery?{
+          status:s.recovery.status,userMessageId:s.recovery.userMessageId,
+          createdAt:s.recovery.createdAt,reason:s.recovery.reason??null
+        }:null}));
   }
   // A binding, not a turn outcome, owns observation. Receipt reconciliation
   // accompanies the view; it never selects another collection mode.
@@ -227,11 +249,16 @@ export class Broker {
         s.turn?.outcome,'DELIVERY_UNCONFIRMED');
       s.status='idle';
       s.previousWarning=s.error;
+      // A cancelled/expired recovery belongs to the old turn. A fresh prompt is
+      // explicit user intent to leave that recovery and resume normal reads.
+      if(s.recovery&&['cancelled','expired'].includes(s.recovery.status))delete s.recovery;
       return {ready:true,conversationId:s.conversationId};
     },{control:true});
   }
   async failUnclaimed(id, error) {
-    const allowed=['TAB_NOT_OWNED','PAGE_CLOSED','WRONG_PAGE','WRONG_CONVERSATION','TURN_CHANGED','REOPEN_IDENTITY_UNPROVEN','CONTENT_UNAVAILABLE','PAGE_RELOAD_REQUIRED','CONNECTION_CHANGED','BROWSER_PREPARE_FAILED'];
+    // The same vocabulary the extension reports. A claim the Runtime refused
+    // keeps its own code, so the reason is not hidden behind a generic one.
+    const allowed=['TAB_NOT_OWNED','PAGE_CLOSED','WRONG_PAGE','WRONG_CONVERSATION','TURN_CHANGED','REOPEN_IDENTITY_UNPROVEN','CONTENT_UNAVAILABLE','PAGE_RELOAD_REQUIRED','CONNECTION_CHANGED','BROWSER_PREPARE_FAILED','COMMAND_NOT_CLAIMABLE','WRONG_TAB','TAB_ALREADY_OWNED','PAGE_IDENTITY_MISMATCH','INVALID_TAB','SESSION_UNKNOWN'];
     invariant(allowed.includes(error),'INVALID_PREPARE_ERROR');
     const result=await this.store.transaction(d=>{
       const c=d.commands[id];
@@ -492,13 +519,30 @@ export class Broker {
         invariant(s.observation?.lease===c.payload.observationLease&&
           s.tabId===tabId&&s.documentKey===documentKey,'PAGE_IDENTITY_MISMATCH');
         if(c.payload.choice==='allow-auto')
-          invariant(d.runtimeSettings?.autoAllowApprovals===true&&!c.vetoed&&
+          invariant(d.runtimeSettings?.autoAllowApprovals===true&&!recoveryActive(s)&&!c.vetoed&&
             !request.manualVeto&&!request.manualRequested&&!request.autoSuppressed,
             'AUTO_APPROVAL_DISABLED');
       }
       invariant(!s || !Object.values(d.commands).some(other=>other.id!==c.id&&other.sessionId&&other.sessionId!==s.id&&pending(other)&&other.tabId===tabId),'TAB_ALREADY_OWNED');
       invariant(!s || !Object.values(d.sessions).some(other => other.id !== s.id && other.tabId === tabId), 'TAB_ALREADY_OWNED');
       c.phase = 'claimed'; c.lease = token(); c.tabId = tabId; c.documentKey = documentKey;
+      // A Send is claimed from the page that will actually dispatch it. Keep
+      // the session's page generation in step with that claim so a reload
+      // between session.open and Send does not strand bind/result/observation
+      // on the previous document. The observation lease is intentionally
+      // reused; only the document identity moves.
+      if (c.kind === 'send' && s) {
+        invariant(s.turn?.id === c.payload.turnId, 'SESSION_UNKNOWN');
+        // A new page monitor starts its own sequence at 1. Keep the existing
+        // lease/generation/run, but clear only the old document's sequence
+        // bookkeeping when the document actually changes.
+        if (s.documentKey !== documentKey) {
+          const observation = ensureObservation(s);
+          observation.lastSequence = 0;
+          observation.frameDigest = null;
+        }
+        s.tabId = tabId; s.documentKey = documentKey;
+      }
       return { ...c };
     });
   }
@@ -511,25 +555,34 @@ export class Broker {
     invariant(s.tabId===c.tabId&&s.documentKey===c.documentKey&&
       s.observation?.lease===c.payload.observationLease,'PAGE_IDENTITY_MISMATCH');
     if(c.payload.choice==='allow-auto')
-      invariant(d.runtimeSettings?.autoAllowApprovals===true&&!c.vetoed&&
+      invariant(d.runtimeSettings?.autoAllowApprovals===true&&!recoveryActive(s)&&!c.vetoed&&
         !request.manualRequested&&!request.manualVeto&&!request.autoSuppressed,
         'APPROVAL_VETOED');
     return {allowed:true};
   }
-  async authorize(id, lease) {
+  async authorize(id, lease, documentKey) {
     return this.store.transaction(d => {
       const c = d.commands[id]; invariant(c && c.lease === lease && c.kind === 'send' && c.phase === 'claimed', 'SEND_NOT_AUTHORIZED');
       const s = d.sessions[c.sessionId];
       invariant(c.deadline > now() && s.turn?.id === c.payload.turnId && !s.turn.cancelRequested, 'SEND_CANCELLED');
+      // The click authorization must belong to the same page generation that
+      // claimed the Send. An old page may race the reload after claim; it must
+      // never authorize a click after the session has moved on.
+      invariant(c.documentKey === s.documentKey &&
+        (documentKey === undefined || documentKey === s.documentKey), 'PAGE_IDENTITY_MISMATCH');
       c.phase = 'authorized'; s.turn.authorized = true; return { authorized: true };
     });
   }
-  async result(id, lease, result) {
+  async result(id, lease, result, documentKey) {
     invariant(object(result), 'INVALID_RESULT');
     let affected;
     const output = await this.store.transaction(d => {
       const c = d.commands[id]; invariant(c && c.lease === lease, 'LEASE_MISMATCH');
       const s = c.sessionId && d.sessions[c.sessionId];
+      // A late result from an older page generation must not be accepted after
+      // the session moved to the document that actually claimed the Send.
+      if (c.kind === 'send' && documentKey !== undefined)
+        invariant(s && documentKey === s.documentKey, 'PAGE_IDENTITY_MISMATCH');
       // A slow browser may return its genuine native receipt after the 90s
       // command deadline became a soft handoff. Never discard that late proof.
       if(c.phase==='done' && c.result?.receiptPending && result.receipt===true &&
@@ -820,6 +873,139 @@ export class Broker {
     },{control:true});
     this.emit(result.id,result);return {accepted:true};
   }
+  // Manual recovery creates state only after the user selected a target turn.
+  // It reuses the existing observation/delivery path; it never creates a new
+  // native prompt or a second prompt_result.
+  async claimRecovery(input={}) {
+    invariant(!this.closed,'RUNTIME_CLOSED');
+    identifier(input.sessionId);identifier(input.documentKey);
+    invariant(Number.isInteger(input.tabId)&&input.tabId>=0,'INVALID_TAB');
+    const userMessageId=verifyNativeId(input.userMessageId);
+    const nextUserMessageId=input.nextUserMessageId==null?null:verifyNativeId(input.nextUserMessageId);
+    invariant(input.boundaryKnown===true&&
+      (nextUserMessageId!==null||input.transcriptComplete===true),'RECOVERY_BOUNDARY_UNKNOWN');
+    const route=conversationId(input.url);invariant(route,'WRONG_CONVERSATION');
+    const at=now();
+    const result=await this.store.transaction(d=>{
+      const s=d.sessions[input.sessionId];
+      invariant(s&&(!s.conversationId||s.conversationId===route)&&s.status!=='abandoned'&&!s.archiveIntent,'SESSION_UNKNOWN');
+      invariant(!recoveryActive(s),'RECOVERY_ALREADY_ACTIVE');
+      invariant(s.turn?.outcome==='failed'&&s.turn?.notSent!==true,'RECOVERY_NOT_AVAILABLE');
+      // A completed recovery belongs to its original turn. A later failed turn
+      // can still be recovered; a stale popup cannot recover the completed one.
+      invariant(!(s.recovery?.status==='completed'&&s.recovery.turnId===s.turn.id),
+        'RECOVERY_NOT_AVAILABLE');
+      invariant(!Object.values(d.commands).some(c=>blockingControl(s,c)),'RECOVERY_BUSY');
+      invariant(!Object.values(d.sessions).some(other=>other.id!==s.id&&other.tabId===input.tabId),'TAB_ALREADY_OWNED');
+      invariant(!Object.values(d.commands).some(other=>other.sessionId&&other.sessionId!==s.id&&
+        pending(other)&&other.tabId===input.tabId),'TAB_ALREADY_OWNED');
+      // A first Send can fail before any conversation route was bound. The
+      // user's explicit page selection supplies that route; this is an
+      // observation link only, never a native Send receipt.
+      const newlyBound=!s.conversationId;
+      s.conversationId=route;s.boundAt??=at;
+      // The failed turn's own Send command may still be pending because the
+      // click result was unconfirmed. Retire that one-shot gate now; it must
+      // never authorize a click after the user starts manual recovery.
+      const takeovers=[];
+      for(const c of Object.values(d.commands)) {
+        if(c.sessionId!==s.id||c.kind!=='send'||!pending(c)||c.payload?.turnId!==s.turn.id)continue;
+        c.phase='failed';c.error??='RECOVERY_TAKEOVER';takeovers.push(c.id);
+      }
+      // The selected message belongs to the current page document. When the
+      // original tab is gone, this moves the existing observation to the new
+      // document without creating a second observer.
+      if(s.tabId!==input.tabId||s.documentKey!==input.documentKey)
+        resetObservationDocument(s,input.tabId,input.documentKey);
+      else {s.tabId=input.tabId;s.documentKey=input.documentKey;ensureObservation(s);}
+      const observation=ensureObservation(s);
+      observation.lastSequence=0;observation.frameDigest=null;
+      const runId=randomUUID();
+      observation.run={id:runId,active:true,origin:'recovery',startedAt:at,endedAt:null};
+      s.turn.observationAnchorNativeMessageId=userMessageId;
+      s.recovery={conversationId:route,userMessageId,nextUserMessageId,tabId:input.tabId,
+        documentKey:input.documentKey,turnId:s.turn.id,runId,createdAt:at,
+        expiresAt:at+24*3600*1000,status:'observing',transcriptComplete:input.transcriptComplete===true,
+        required:{}};
+      s.status='running';s.error=null;
+      // Existing open cards keep the suppression mark even after recovery ends;
+      // only NEW cards from a later normal turn follow the global policy again.
+      for(const approval of Object.values(s.approvals??{}))
+        if(approval?.state==='open')approval.autoSuppressed=true;
+      const canceled=[];
+      for(const c of Object.values(d.commands)) {
+        if(c.kind!=='approval'||c.sessionId!==s.id||c.payload?.choice!=='allow-auto'||!pending(c))continue;
+        if(c.phase==='queued'){c.phase='failed';c.error='AUTO_APPROVAL_SUPPRESSED';canceled.push(c.id);}
+        else {c.vetoed=true;c.vetoReason='RECOVERY_ENTERED';}
+      }
+      return {sessionId:s.id,recovery:structuredClone(s.recovery),newlyBound,
+        observation:observationDescriptor(s),canceled,takeovers};
+    },{control:true});
+    for(const id of result.canceled)this.settle(id,'AUTO_APPROVAL_SUPPRESSED');
+    for(const id of result.takeovers){
+      this.settle(id,'RECOVERY_TAKEOVER');
+      if(this.store.read().commands[id]?.payload?.files?.length)await this.inputFiles.remove(id);
+    }
+    if(result.newlyBound)this.emit(result.sessionId,{id:result.sessionId,
+      turnId:result.recovery.turnId,state:'bound',conversationId:result.recovery.conversationId});
+    this.emit(result.sessionId,{id:result.sessionId,state:'recovery-started',
+      turnId:result.recovery.runId,userMessageId:result.recovery.userMessageId});
+    return {sessionId:result.sessionId,recovery:result.recovery,observation:result.observation};
+  }
+  async cancelRecovery(sessionId) {
+    identifier(sessionId);
+    const result=await this.store.transaction(d=>{
+      const s=d.sessions[sessionId];invariant(s,'SESSION_UNKNOWN');
+      invariant(recoveryActive(s),'RECOVERY_NOT_ACTIVE');
+      const at=now(),recovery=s.recovery;
+      recovery.status='cancelled';recovery.cancelledAt=at;recovery.reason='RECOVERY_CANCELLED';
+      const run=s.observation?.run;
+      if(run?.origin==='recovery'&&run.id===recovery.runId){run.active=false;run.endedAt=at;}
+      s.status='blocked';s.error='RECOVERY_CANCELLED';
+      return {sessionId:s.id,recovery:structuredClone(recovery)};
+    },{control:true});
+    this.emit(result.sessionId,{id:result.sessionId,state:'recovery-cancelled',
+      turnId:result.recovery.runId});
+    return result;
+  }
+  async recoveryTick(time=now()) {
+    const notifications=[],completed=[];
+    await this.store.transaction(d=>{
+      for(const s of Object.values(d.sessions)) {
+        if(!recoveryActive(s))continue;
+        const recovery=s.recovery;
+        if(recovery.expiresAt&&recovery.expiresAt<time) {
+          recovery.status='expired';recovery.expiredAt=time;recovery.reason='RECOVERY_EXPIRED';
+          const run=s.observation?.run;
+          if(run?.origin==='recovery'&&run.id===recovery.runId){run.active=false;run.endedAt=time;}
+          s.status='blocked';s.error='RECOVERY_EXPIRED';
+          notifications.push({id:s.id,state:'recovery-expired',turnId:recovery.runId});
+          continue;
+        }
+        if(!recovery.pageStandbyAt)continue;
+        const required=Object.entries(recovery.required??{});
+        // No projected answer is not a successful recovery. Keep the run busy
+        // so the user can cancel or select another turn; never mark an empty
+        // target as completed.
+        if(!required.length)continue;
+        const deliveries=s.nativeDelivery?.durable?.deliveries??[];
+        const confirmed=required.every(([itemId,row])=>{
+          const delivery=deliveries.find(value=>value.sourceId===itemId);
+          return delivery&&!delivery.pending&&delivery.confirmedText===row.text;
+        });
+        if(!confirmed)continue;
+        recovery.status='completed';recovery.completedAt=time;recovery.pageStandbyAt=time;
+        const run=s.observation?.run;
+        if(run?.origin==='recovery'&&run.id===recovery.runId){run.active=false;run.endedAt??=time;}
+        s.status='idle';s.error=null;
+        notifications.push({id:s.id,state:'recovery-completed',turnId:recovery.runId});
+        completed.push(s.id);
+      }
+    },{control:true});
+    for(const event of notifications)this.emit(event.id,event);
+    for(const id of completed)await this.finishArchive(id);
+    return {completed};
+  }
   async interrupt(id) {
     invariant(!this.closed,'RUNTIME_CLOSED');
     const decision=await this.store.transaction(d=>{
@@ -874,7 +1060,7 @@ export class Broker {
         (choice==='deny' && (request.canDeny===true || oldNegative)) ||
         (choice==='allow-auto' && request.autoEligible===true),'APPROVAL_UNRECOGNIZED');
       if(choice==='allow-auto')
-        invariant(d.runtimeSettings?.autoAllowApprovals===true&&!request.manualRequested&&
+        invariant(d.runtimeSettings?.autoAllowApprovals===true&&!recoveryActive(s)&&!request.manualRequested&&
           !request.manualVeto&&!request.autoSuppressed,'AUTO_APPROVAL_DISABLED');
       const prior=Object.values(d.commands).filter(c=>c.kind==='approval'&&c.sessionId===id&&pending(c));
       let canceled=[];
@@ -930,7 +1116,13 @@ export class Broker {
   }
   async tick(time = now()) {
     const peek = this.store.read();
-    if (!Object.values(peek.commands).some(c => pending(c) && c.deadline < time))return;
+    const hasExpired = Object.values(peek.commands).some(c => pending(c) && c.deadline < time);
+    const recovering = Object.values(peek.sessions).some(s => recoveryActive(s));
+    if (!hasExpired && !recovering)return;
+    // Recovery has its own read-only completion gate: projected answers still
+    // need the existing host confirmation. Expiry is checked here too.
+    if (recovering) await this.recoveryTick(time);
+    if (!hasExpired)return;
     const expired = await this.store.transaction(d => {
       const out = [];
       for (const c of Object.values(d.commands)) if (pending(c) && c.deadline < time) {

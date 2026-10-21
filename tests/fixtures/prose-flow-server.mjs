@@ -1,10 +1,10 @@
 // Offline stdin seam for Chromium; ORIGINAL Provider + pinned host world.
 import readline from 'node:readline';
 import {world} from './provider-host-world.mjs';
-import {loadInstalledPaseoContract,realTranslate,realRender} from './paseo-real-contract.mjs';
+import {loadInstalledPaseoContract,realTranslate,realRender,PINNED_HOST_VERSIONS} from './paseo-real-contract.mjs';
 const cleanup=[],w=await world({after:fn=>cleanup.push(fn)});
 const client=await loadInstalledPaseoContract();
-if(!client||client.appVersion!=='0.12.0-beta.2')throw Error('PINNED_CLIENT_REQUIRED');
+if(!client||!PINNED_HOST_VERSIONS.includes(client.appVersion))throw Error('PINNED_CLIENT_REQUIRED');
 const snapshot=()=>w.broker.snapshot(w.s.id);
 const binding=()=>{const s=snapshot();return {sessionId:s.id,conversationId:s.conversationId,tabId:s.tabId,
  documentKey:s.documentKey,observationLease:s.observation.lease};};

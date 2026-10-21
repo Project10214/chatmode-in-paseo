@@ -43,12 +43,13 @@ function session(extra = {}) {
 
 function frame(s, {
   sequence = 1, state = 'running', items = [], approvals = [], closedApprovals = [],
-  issues = [], page = {}
+  issues = [], page = {}, readFinal
 } = {}) {
   return {
     sessionId: s.id, observationLease: s.observation.lease,
     tabId: s.tabId, documentKey: s.documentKey,
     url: `https://chatgpt.com/c/${s.conversationId}`, sequence,
+    ...(readFinal === undefined ? {} : { readFinal }),
     view: {
       conversationId: s.conversationId, page: buttonState(state, page),
       items, approvals, closedApprovals, issues
@@ -350,4 +351,51 @@ test('CONTOBS-13 unknown sourceKind is retained and reaches the projected source
   assert.equal(notice.item.data.source.text, 'known notice text');
   assert.equal(notice.item.data.source.sourceKind, undefined);
   assert.equal(stored.text, 'visible unknown item');
+});
+
+test('CONTOBS-14 a split page read ends the run only on its final frame', () => {
+  // One page read can be split into several transport frames. Ending the run on
+  // an earlier frame reported the host turn as completed before the remaining
+  // content had been received.
+  const s = session();
+  s.prompts = { prompt: { outcome: null } };
+  s.turn = { id: 'turn-1', clientMessageId: 'prompt', outcome: null };
+  beginPromptObservation(s, 'turn-1', 100);
+
+  const running = recordPageView(s, frame(s, {
+    sequence: 1, state: 'running', readFinal: false,
+    items: [source('split-1', 'first part')]
+  }), {}, 100);
+  assert.equal(events(running, 'page-standby').length, 0);
+
+  const middle = recordPageView(s, frame(s, {
+    sequence: 2, state: 'standby', readFinal: false,
+    items: [source('split-2', 'second part')]
+  }), {}, 200);
+  assert.equal(events(middle, 'page-standby').length, 0);
+  assert.equal(s.observation.run.active, true);
+  assert.equal(s.turn.outcome, null);
+
+  const last = recordPageView(s, frame(s, {
+    sequence: 3, state: 'standby', readFinal: true,
+    items: [source('split-3', 'last part')]
+  }), {}, 300);
+  assert.equal(events(last, 'page-standby').length, 1);
+  assert.equal(s.observation.run.active, false);
+  assert.equal(s.turn.outcome, 'completed');
+  // Every part of the split read was projected before the run ended.
+  assert.deepEqual(s.history.filter(row => row.type === 'assistant_message').map(row => row.text),
+    ['first part', 'second part', 'last part']);
+});
+
+test('CONTOBS-15 a read without a finality flag keeps the single-frame behaviour', () => {
+  // An extension that does not split its reads sends no flag at all.
+  const s = session();
+  s.prompts = { prompt: { outcome: null } };
+  s.turn = { id: 'turn-1', clientMessageId: 'prompt', outcome: null };
+  beginPromptObservation(s, 'turn-1', 100);
+  recordPageView(s, frame(s, { sequence: 1, state: 'running' }), {}, 100);
+  const standby = recordPageView(s, frame(s, { sequence: 2, state: 'standby' }), {}, 200);
+  assert.equal(events(standby, 'page-standby').length, 1);
+  assert.equal(s.turn.outcome, 'completed');
 });

@@ -11,7 +11,16 @@ const LANES = new Set(['process', 'output']);
 const KINDS = new Set(['message', 'reasoning', 'tool_call', 'notice', 'image', 'file']);
 const FORMATS = new Set(['text', 'markdown']);
 const STATUSES = new Set(['running', 'completed', 'failed']);
-const IDENTITY = ['role', 'lane', 'kind', 'nativeMessageId', 'callId', 'userMessageId'];
+// Hard identity: a source id must keep denoting the same thing.
+// `userMessageId` is a REFERENCE to another source, not the source's own
+// identity. The extension derives it from the page's ambient "last seen user
+// message" cursor, so one and the same assistant message legitimately reports
+// a different reference once that user message becomes readable, unreadable
+// or re-identified. It is compared separately and never blocks a content
+// update: enforcing it here dropped the whole update and froze the assistant
+// body at the length of its first captured frame.
+const IDENTITY = ['role', 'lane', 'kind', 'nativeMessageId', 'callId'];
+const REFERENCE = 'userMessageId';
 const ARRAY_INDEX = /^(?:0|[1-9]\d*)$/;
 const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
@@ -75,7 +84,13 @@ function canonical(value) {
   return 'null';
 }
 
-/** Stable content revision. Observation time and ledger history are excluded. */
+/** Stable content revision. Observation time and ledger history are excluded.
+ * Position is excluded as well: `order` is a DOM path, not content. A page
+ * that inserts or removes one sibling shifts every path and must not be read
+ * as a rewrite of the whole conversation. The preceding-user reference takes
+ * part in the revision, but only its FIRST value does: a reference that the
+ * extension later reports differently is a moved pointer, not new content,
+ * so it must not re-project or re-deliver the source. */
 export function sourceRevision(input) {
   const value = isObject(input) && isObject(input.item) && !hasOwn(input, 'text') ? input.item : input;
   if (!isObject(value)) fail('SOURCE_ITEM_INVALID', 'item', 'Source item must be an object.');
@@ -88,7 +103,6 @@ export function sourceRevision(input) {
     value.sourceKind ?? null,
     value.text ?? null,
     value.format ?? null,
-    value.order ?? null,
     value.nativeMessageId ?? null,
     value.callId ?? null,
     value.name ?? null,
@@ -413,13 +427,28 @@ function merge(old, next, provided) {
 function conflicts(old, next) {
   const found = [];
   for (const key of IDENTITY) {
-    if (key === 'nativeMessageId' || key === 'callId' || key === 'userMessageId') {
+    if (key === 'nativeMessageId' || key === 'callId') {
       const before = old[key], after = next[key];
       if (before !== undefined && before !== null && after !== undefined && after !== null && before !== after)
         found.push(key);
     } else if (old[key] !== next[key]) found.push(key);
   }
   return found;
+}
+// A moved reference is reported, never enforced. The first reference is kept so
+// the source keeps the turn attribution it was first seen with, and so the
+// projected item does not move to another activity card. The content update
+// still applies.
+//
+// A reference that was UNKNOWN and is now known is not a moved pointer: the
+// first value was absent, not chosen. The known value is adopted, and because
+// the reference takes part in the revision the source is projected again so
+// the delivered card carries the real attribution.
+function referenceMoved(old, next) {
+  const before = old[REFERENCE], after = next[REFERENCE];
+  if (before === null || before === undefined) return false; // unknown, not moved
+  if (after === null || after === undefined) return false;   // merge keeps the first reference
+  return before !== after;
 }
 
 function compareOrder(a, b) {
@@ -472,6 +501,7 @@ export function reconcileSources(session, items, options = {}) {
   const { byId, extras } = ledger;
   const changes = [];
   let unchanged = 0;
+  let moved = false;
 
   for (let index = 0; index < items.length; index++) {
     let normalized;
@@ -516,10 +546,44 @@ export function reconcileSources(session, items, options = {}) {
         'Source identity changed; the first version was kept.', at, { fields: changedIdentity }));
       continue;
     }
+    // The preceding-user reference moved. It is a pointer, not the source's own
+    // identity: keep the first reference, like every other identity field, but
+    // still apply the content update. Dropping the update here is what froze
+    // an assistant body at the length of its first captured frame. The
+    // reference itself is not part of the content revision, so a moved pointer
+    // is reported on its own and never re-projects or re-delivers the source.
+    const movedReference = referenceMoved(old, next);
+    if (movedReference)
+      issues.push(issue(index, next.id, 'SOURCE_USER_MESSAGE_REVISED',
+        'The preceding user turn reference changed; the first reference was kept and the content was not re-delivered.',
+        at, { fields: [REFERENCE] }));
+    else if (old[REFERENCE] === null || old[REFERENCE] === undefined) {
+      if (next[REFERENCE] !== null && next[REFERENCE] !== undefined)
+        issues.push(issue(index, next.id, 'SOURCE_USER_MESSAGE_RESOLVED',
+          'The preceding user turn reference became known; the source was projected again with it.',
+          at, { fields: [REFERENCE] }));
+    }
 
     const merged = merge(old, next, normalized.provided);
+    if (movedReference) merged[REFERENCE] = old[REFERENCE];
     const revision = sourceRevision(merged);
     if (revision === current.revision) {
+      // Position is not content. A DOM path shift must not re-project, re-deliver
+      // or re-order the conversation; only the stored position is refreshed.
+      if (canonical(merged.order) !== canonical(old.order)) {
+        current.record = recordOf(merged, {
+          revision: current.revision,
+          originalText: old.originalText,
+          previousText: old.previousText,
+          rewrites: old.rewrites,
+          firstSeenAt: old.firstSeenAt,
+          updatedAt: old.updatedAt,
+          originalProse: old.originalProse,
+          previousProse: old.previousProse,
+          proseRewrites: old.proseRewrites
+        });
+        moved = true;
+      }
       unchanged++;
       continue;
     }
@@ -527,7 +591,7 @@ export function reconcileSources(session, items, options = {}) {
     const change = next.text.length > old.text.length && next.text.startsWith(old.text) ? 'append' : 'rewrite';
     const rewrites = change === 'rewrite'
       ? [...(Array.isArray(old.rewrites) ? old.rewrites : []),
-        { revision: current.revision, text: old.text, at: old.updatedAt ?? at }]
+        { revision: current.revision, text: old.text, reference: old[REFERENCE] ?? null, at: old.updatedAt ?? at }]
       : old.rewrites;
     const previousProse = old.prose?.status === 'available' ? old.prose : old.previousProse;
     const currentProse = merged.prose?.status === 'available' ? merged.prose : undefined;
@@ -547,7 +611,7 @@ export function reconcileSources(session, items, options = {}) {
     changes.push({ item: merged, revision, change });
   }
 
-  if (changes.length) {
+  if (changes.length || moved) {
     const records = [...byId.values()].map(entry => entry.record).sort(compareOrder);
     try {
       session.sources = attachIndexes(extras.length ? [...records, ...extras] : records);

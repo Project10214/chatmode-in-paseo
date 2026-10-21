@@ -1,4 +1,11 @@
 const PROTOCOL = 9, DEFAULT_ENDPOINT = 'http://127.0.0.1:17843';
+// The running build reports itself so the Paseo settings page can say whether
+// the loaded extension is the installed one. A version that cannot be read is
+// reported as unknown, never guessed.
+const EXTENSION_VERSION = (() => {
+  try { const version = chrome.runtime.getManifest?.()?.version; return typeof version === 'string' ? version : ''; }
+  catch { return ''; }
+})();
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 let pumpFlight = null, timer = null, loaded = null, lastOnlineAt = 0, pairingIntent = 0;
 let config, ledger, tabs, catalogBrowserId, upgradeRecovery=null, updateEventPending=false, versionRecoveryInitiated=false;
@@ -62,6 +69,7 @@ async function api(route, value, authenticated = true, profile = config) {
   const response = await fetch(`${endpoint.origin}${route}`, {
     method: value === undefined ? 'GET' : 'POST',
     headers: { ...(value === undefined ? {} : { 'Content-Type': 'application/json' }), 'X-CIP-Extension': chrome.runtime.id, 'X-CIP-Features': 'files-v2',
+      'X-CIP-Extension-Version': EXTENSION_VERSION,
       ...(authenticated ? { Authorization: `Bearer ${profile.token}`, 'X-CIP-Engine': 'cos-native-alpha4.3', 'X-CIP-Browser': catalogBrowserId } : {}) },
     body: value === undefined ? undefined : JSON.stringify(value), signal: AbortSignal.timeout(15000), cache: 'no-store', redirect: 'error'
   });
@@ -105,28 +113,69 @@ function conversation(url) {
 // conversation, no composer) until it is reloaded again (seen three times on
 // 2026-10-17). Before preparing a Send nothing is typed or claimed yet, so
 // such a tab is reloaded once; the normal identity checks then run as usual.
-async function settleBlankTab(tabId) {
+//
+// A tab whose document is still LOADING is a slow ChatGPT page, not an empty
+// shell. Reloading it restarts the load and makes it slower, so it is only
+// waited for. Every wait is bounded by the command deadline: a claim filed
+// after the deadline is refused by the Runtime.
+async function settleBlankTab(tabId, deadline) {
   const ready = async () => {
     try { const r = await tabRpc(tabId, { type: 'page-ready' }, 3000); return r?.ok === true && r.value?.composer === true; }
     catch { return false; }
   };
-  // chrome.tabs.create() resolving only proves a tab object exists. A tab in a
-  // background/occluded window can stay blank or throttled, so also wait for
-  // the actual ChatGPT document. If it still is not loading, bring that one
-  // tab to the foreground once (never reload a loaded page first).
-  const loaded = async () => {
+  const page = async () => {
     try { const tab = await chrome.tabs.get(tabId);
-      return tab?.status === 'complete' && !tab.discarded && String(tab.url || '').startsWith('https://chatgpt.com/'); }
-    catch { return false; }
+      return { url: String(tab?.url || ''), complete: tab?.status === 'complete', discarded: Boolean(tab?.discarded) }; }
+    catch { return { url: '', complete: false, discarded: true }; }
   };
-  for (const end = Date.now() + 8000; Date.now() < end; await delay(500)) if (await ready()) return false;
-  if (!(await loaded())) {
+  const atChatGPT = value => value.url.startsWith('https://chatgpt.com/');
+  const limit = Number.isFinite(deadline) ? Math.max(2000, deadline - Date.now() - 12000) : 45000;
+  const end = Date.now() + limit;
+  for (const until = Math.min(end, Date.now() + 8000); Date.now() < until; await delay(500)) if (await ready()) return false;
+  let state = await page();
+  if (!state.complete || state.discarded || !atChatGPT(state)) {
+    // chrome.tabs.create() resolving only proves a tab object exists. A tab in
+    // a background/occluded window can stay blank or throttled, so also wait
+    // for the actual ChatGPT document. If it still is not loading, bring that
+    // one tab to the foreground once (never reload a loaded page first).
     try { await chrome.tabs.update?.(tabId, { active: true }); } catch {}
-    for (const end = Date.now() + 10000; Date.now() < end; await delay(500)) if (await ready()) return false;
+    for (const until = Math.min(end, Date.now() + 10000); Date.now() < until; await delay(500)) if (await ready()) return false;
+    state = await page();
   }
-  try { await chrome.tabs.reload(tabId); } catch { return false; }
-  for (const end = Date.now() + 30000; Date.now() < end; await delay(500)) if (await ready()) break;
+  // A document that FINISHED loading but still has no composer is the empty
+  // shell this was written for, and is reloaded once. A tab whose content was
+  // discarded is reloaded too. A document that is still LOADING is only waited
+  // for: reloading it restarts the load and makes it slower.
+  if ((state.complete || state.discarded) && atChatGPT(state)) {
+    try { await chrome.tabs.reload(tabId); } catch { return false; }
+    for (const until = Math.min(end, Date.now() + 30000); Date.now() < until; await delay(500)) if (await ready()) break;
+  }
   return true;
+}
+async function recoveryTab() {
+  const pick = async query => (await chrome.tabs.query(query)).find(tab => conversation(tab?.url));
+  let tab = null;
+  try { tab = await pick({ active: true, lastFocusedWindow: true }); } catch {}
+  if (!tab) tab = await pick({ active: true });
+  if (!tab || !Number.isInteger(tab.id)) throw codeError('OPEN_CHATGPT_TAB');
+  return tab;
+}
+async function recoveryInspect() {
+  const tab = await recoveryTab(), profile = config;
+  if (!profile.token) throw codeError('AUTH_REQUIRED');
+  const page = await identity(tab.id);
+  const cid = conversation(page.url);
+  if (!cid) throw codeError('WRONG_CONVERSATION');
+  const reply = await tabRpc(tab.id, { type: 'recovery-candidates' }, 5000);
+  if (!reply?.ok || reply.value?.conversationId !== cid || reply.value?.documentKey !== page.documentKey)
+    throw codeError(reply?.error ?? 'RECOVERY_READ_FAILED');
+  const targets = await api('/recovery/targets', undefined, true, profile);
+  if (config !== profile) throw codeError('CONNECTION_CHANGED');
+  const sessions = (Array.isArray(targets.sessions) ? targets.sessions : [])
+    .filter(row => row?.conversationId === cid ||
+      (row?.conversationId == null && row?.unbound === true));
+  return { tabId: tab.id, conversationId: cid, documentKey: page.documentKey,
+    url: page.url, sessions, candidates: Array.isArray(reply.value.candidates) ? reply.value.candidates : [] };
 }
 async function identity(tabId, expected = null) {
   const deadline = Date.now() + 25000;
@@ -149,7 +198,7 @@ async function identity(tabId, expected = null) {
 }
 async function postReceipt(id, row, profile = config) {
   if (row.endpoint && row.endpoint !== profile.endpoint) return;
-  await api('/result', { id, lease: row.lease, result: row.result }, true, profile);
+  await api('/result', { id, lease: row.lease, documentKey: row.documentKey, result: row.result }, true, profile);
   row.phase = 'acked';
   if (row.command?.kind === 'send' && row.result?.notSent === true) {
     discardKnownUnsentPayload(row);
@@ -223,7 +272,7 @@ async function execute(command) {
   if (Object.hasOwn(ledger, command.id)) return;
   const profile = config;
   ledger[command.id] = { phase: 'reserved', command, endpoint: profile.endpoint, at: Date.now() }; await saveLedger();
-  let claim, tabId, reopened = false; const temporary = command.kind === 'catalog';
+  let claim, tabId, reopened = false, claimRejected = null; const temporary = command.kind === 'catalog';
   try {
     if(command.kind==='close-tab') {
       tabId=command.payload.tabId;
@@ -262,12 +311,21 @@ async function execute(command) {
       if (!tabs[tabId] || tabs[tabId].sessionId !== command.sessionId) throw codeError('TAB_NOT_OWNED');
     }
     ledger[command.id].tabId = tabId; await saveLedger();
-    if (['open','configure','ensure'].includes(command.kind) && !reopened) await settleBlankTab(tabId);
+    if (['open','configure','ensure'].includes(command.kind) && !reopened) await settleBlankTab(tabId, command.deadline);
     const page = command.kind === 'close-tab'
       ? { documentKey: command.payload.documentKey }
       : await identity(tabId, command.kind==='ensure'?command.payload:null);
     if (config !== profile) throw codeError('CONNECTION_CHANGED');
-    claim = await api('/claim', { id: command.id, tabId, documentKey: page.documentKey, ...(command.kind==='ensure'?{url:page.url,nativeMessageId:page.nativeMessageId,reopened}:{}) }, true, profile);
+    try {
+      claim = await api('/claim', { id: command.id, tabId, documentKey: page.documentKey, ...(command.kind==='ensure'?{url:page.url,nativeMessageId:page.nativeMessageId,reopened}:{}) }, true, profile);
+    } catch (error) {
+      // The Runtime refused the claim. That is a fact about the Runtime, not a
+      // local prepare failure, and it must be reported as itself: a generic
+      // code hides the only reason that matters (a claim filed after the
+      // command deadline).
+      claimRejected = error.code ?? null;
+      throw error;
+    }
     ledger[command.id] = { ...ledger[command.id], phase: 'claimed', lease: claim.lease, documentKey: page.documentKey };
     await saveLedger();
     if (command.kind !== 'close-tab') {
@@ -306,8 +364,11 @@ async function execute(command) {
       // Nothing was claimed or clicked according to the local worker. A
       // request to /claim might still have reached the server before its
       // reply was lost: only the server can prove this was never claimed.
-      const allowed=['TAB_NOT_OWNED','PAGE_CLOSED','WRONG_PAGE','WRONG_CONVERSATION','TURN_CHANGED','REOPEN_IDENTITY_UNPROVEN','CONTENT_UNAVAILABLE','PAGE_RELOAD_REQUIRED','CONNECTION_CHANGED'];
-      const error=allowed.includes(e.code)?e.code:'BROWSER_PREPARE_FAILED';
+      // The same vocabulary the Runtime accepts on /fail-unclaimed. A claim the
+      // Runtime refused keeps its own code: a generic one hides the only
+      // reason that matters.
+      const allowed=['TAB_NOT_OWNED','PAGE_CLOSED','WRONG_PAGE','WRONG_CONVERSATION','TURN_CHANGED','REOPEN_IDENTITY_UNPROVEN','CONTENT_UNAVAILABLE','PAGE_RELOAD_REQUIRED','CONNECTION_CHANGED','COMMAND_NOT_CLAIMABLE','WRONG_TAB','TAB_ALREADY_OWNED','PAGE_IDENTITY_MISMATCH','INVALID_TAB','SESSION_UNKNOWN'];
+      const error=claimRejected??(allowed.includes(e.code)?e.code:'BROWSER_PREPARE_FAILED');
       const row = ledger[command.id];
       row.phase = 'unclaimed'; row.prepareError = error;
       // Persist before the ACK so an MV3 restart can retry only this server
@@ -681,6 +742,29 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     // Trust only our exact extension UI, whether Chrome opens it as a popup or a tab.
     const popup = sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL('popup.html');
     if (popup && message.type === 'status') return { paired: Boolean(config.token), connected: Boolean(config.token) && Date.now() - lastOnlineAt < 15000, endpoint: config.endpoint, activeSessions: activeSessions.length };
+    if (popup && message.type === 'recovery-inspect') return recoveryInspect();
+    if (popup && message.type === 'recovery-claim') {
+      const info = await recoveryInspect();
+      if (!info.sessions.some(row => row.sessionId === message.sessionId))
+        throw codeError('RECOVERY_SESSION_NOT_FOUND');
+      const candidate = info.candidates.find(row => row.userMessageId === message.userMessageId);
+      if (!candidate || candidate.recoverable !== true) throw codeError('RECOVERY_MESSAGE_UNSUPPORTED');
+      if (candidate.boundaryKnown !== true) throw codeError('RECOVERY_BOUNDARY_UNKNOWN');
+      const actual = await chrome.tabs.get(info.tabId);
+      if (conversation(actual.url) !== info.conversationId) throw codeError('RECOVERY_BOUNDARY_UNKNOWN');
+      const result = await api('/recovery/claim', { sessionId: message.sessionId,
+        tabId: info.tabId, documentKey: info.documentKey, url: actual.url,
+        userMessageId: message.userMessageId, boundaryKnown: true,
+        transcriptComplete: candidate.transcriptComplete === true,
+        ...(candidate.nextUserMessageId ? { nextUserMessageId: candidate.nextUserMessageId } : {}) });
+      void pump();
+      return result;
+    }
+    if (popup && message.type === 'recovery-cancel') {
+      const result = await api('/recovery/cancel', { sessionId: message.sessionId });
+      void pump();
+      return result;
+    }
     if (popup && message.type === 'pair') {
       const candidate = { endpoint: endpointOf(message.endpoint || DEFAULT_ENDPOINT).origin, token: null };
       if (executions.size || activeSessions.length) throw codeError('BRIDGE_BUSY');
@@ -756,7 +840,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (message.type === 'authorize') {
       const row = ledger[message.id];
       if (!row || row.tabId !== tabId || row.documentKey !== message.documentKey || row.lease !== message.lease || row.phase !== 'claimed' || row.endpoint !== config.endpoint) throw codeError('CLAIM_MISMATCH');
-      const result = await api('/authorize', { id: message.id, lease: message.lease });
+      const result = await api('/authorize', { id: message.id, lease: message.lease,
+        documentKey: message.documentKey });
       row.phase = 'authorized'; await saveLedger(); return result;
     }
     const artifactRoute=({'artifact-begin':'/artifact/begin','artifact-chunk':'/artifact/chunk',

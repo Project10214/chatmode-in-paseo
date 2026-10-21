@@ -6,12 +6,13 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {fixture,sourceItem} from '../helpers.mjs';
 import {loadPaseoHost} from './paseo-host-sources.mjs';
+import {PINNED_HOST_VERSIONS} from './paseo-real-contract.mjs';
 import {createProvider} from '../../server/provider.mjs';
 import {createHostObservation} from '../../server/host-observation.mjs';
 import {createWakeCoordinator} from '../../server/wake.mjs';
 const dir=process.env.CIP_PASEO_SERVER_PACKAGE;
 const {AgentManager,PluginAgentClientRegistry,ProviderEventSchema,version}=await loadPaseoHost(dir);
-assert.equal(version,'0.12.0-beta.2');
+assert(PINNED_HOST_VERSIONS.includes(version),'UNPINNED_HOST_VERSION: '+version);
 assert.equal(createHash('sha256').update(await readFile(path.join(dir,'dist/server/server/session.js'))).digest('hex'),
  '2a22a6716bec6dd2c52ccdc96449a1fe9f33937a8bf4dff1097bfb52f736b752');
 const load=relative=>import(pathToFileURL(path.join(dir,relative)).href);

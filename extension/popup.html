@@ -34,6 +34,18 @@
         <button id="open-chat" type="button" class="primary">打开 ChatGPT <span aria-hidden="true">↗</span></button>
         <button id="show-pair" type="button" aria-controls="pair-section">配对设置</button>
       </div>
+      <button id="show-recovery" type="button" class="text-button recovery-link" hidden
+        aria-controls="recovery-section">结果未确认？接回网页回答</button>
+    </section>
+
+    <section id="recovery-section" class="view" aria-labelledby="recovery-title" hidden>
+      <button id="back-from-recovery" type="button" class="back">← 返回概况</button>
+      <div class="view-heading">
+        <span class="eyebrow">结果未确认</span>
+        <h2 id="recovery-title" tabindex="-1">接回网页回答</h2>
+        <p>先打开对应的 ChatGPT 对话，再选择目标用户消息。只读取这一轮内容，不会自动重发原消息。</p>
+      </div>
+      <div id="recovery-body" class="recovery-body" aria-live="polite"></div>
     </section>
 
     <section id="pair-section" class="view" aria-labelledby="pair-title" hidden>

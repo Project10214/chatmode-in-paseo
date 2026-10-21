@@ -251,17 +251,36 @@
     m.proseFlight=work;
     void work.finally(()=>{if(m.proseFlight===work)m.proseFlight=null;});
   }
-  function envelope(m, view, sequence) {
+  function envelope(m, view, sequence, readFinal = true) {
     return { type: 'page-view', event: { sessionId: m.sessionId, observationLease: m.observationLease,
-      documentKey, tabId: m.tabId, url: location.href, sequence, view } };
+      documentKey, tabId: m.tabId, url: location.href, sequence, readFinal, view } };
+  }
+  // The selected recovery turn is a property of the whole page capture, not of
+  // one transport frame. Copy the proven boundary into every frame so a split
+  // before the anchor or answer cannot be mistaken for a disappearing anchor.
+  function recoveryScope(m, view) {
+    const recovery=m.recovery;
+    if(!recovery||typeof recovery.userMessageId!=='string')return null;
+    const users=(Array.isArray(view.items)?view.items:[]).filter(item=>item?.role==='user');
+    const index=users.findIndex(item=>item.nativeMessageId===recovery.userMessageId ||
+      item.userMessageId===recovery.userMessageId || item.id===recovery.userMessageId);
+    if(index<0)return null;
+    const next=users[index+1];
+    const nextUserMessageId=typeof next?.nativeMessageId==='string'&&next.nativeMessageId
+      ? next.nativeMessageId : null;
+    if(!nextUserMessageId&&view.transcriptComplete!==true)return null;
+    return {userMessageId:recovery.userMessageId,anchorPresent:true,
+      nextUserMessageId,transcriptComplete:view.transcriptComplete===true};
   }
   function framesOf(m, view) {
     const collections = ['items', 'approvals', 'closedApprovals', 'issues'];
-    let base = { ...view, items: [], approvals: [], closedApprovals: [], issues: [] };
+    const scope = recoveryScope(m, view);
+    let base = { ...view, ...(scope?{recoveryScope:scope}:{}), items: [], approvals: [], closedApprovals: [], issues: [] };
     // Reserve the maximum sequence width so crossing 9 -> 10 cannot overflow.
     const sizeOfBase = value => encode(JSON.stringify(envelope(m, value, Number.MAX_SAFE_INTEGER)));
     if (sizeOfBase(base) > MAX_FRAME_BYTES) {
-      base = { conversationId: m.conversationId, page: view.page, items: [], approvals: [], closedApprovals: [],
+      base = { conversationId: m.conversationId, page: view.page, ...(scope?{recoveryScope:scope}:{}),
+        items: [], approvals: [], closedApprovals: [],
         issues: [{ code: 'PAGE_VIEW_METADATA_TOO_LARGE' }] };
     }
     if (sizeOfBase(base) > MAX_FRAME_BYTES) {
@@ -306,6 +325,11 @@
     for (const collection of collections)
       for (const [index, value] of view[collection].entries()) append(collection, value, index);
     if (count || !frames.length) flush();
+    // Only the LAST frame of one page read is the closing evidence of that
+    // read. A read split by the transport must not end the host turn before
+    // its remaining content has been received and projected: the server waits
+    // for the final frame before it treats a standby page as "finished".
+    for (let i = 0; i < frames.length; i++) frames[i].event.readFinal = i === frames.length - 1;
     return frames;
   }
   function drain(m) {
@@ -402,6 +426,32 @@
       }, e=>respond({ok:false,error:e.code??'TRANSCRIPT_UNCONFIRMED'}));
       return true;
     }
+    if (message.type === 'recovery-candidates') {
+      const cid = conversation();
+      if (!cid) { respond({ ok: false, error: 'WRONG_CONVERSATION' }); return; }
+      const source = readSource({ conversationId: cid });
+      if (source.conversationId !== cid) { respond({ ok: false, error: 'WRONG_CONVERSATION' }); return; }
+      const users = source.items.filter(item => item?.role === 'user');
+      const candidates = users.map((item, index) => {
+        const next = users[index + 1] ?? null;
+        const nextUserMessageId = typeof next?.nativeMessageId === 'string' && next.nativeMessageId
+          ? next.nativeMessageId : null;
+        return {
+          userMessageId: typeof item.nativeMessageId === 'string' && item.nativeMessageId
+            ? item.nativeMessageId : null,
+          text: typeof item.text === 'string' ? item.text.slice(0, 500) : '',
+          recoverable: typeof item.nativeMessageId === 'string' && item.nativeMessageId.length > 0,
+          // A next user item without a stable native ID is not a usable server
+          // boundary. Only page-end proof can make that last turn selectable.
+          boundaryKnown: Boolean(nextUserMessageId) || source.transcriptComplete === true,
+          transcriptComplete: source.transcriptComplete === true,
+          ...(nextUserMessageId ? { nextUserMessageId } : {}),
+        };
+      });
+      respond({ ok: true, value: { conversationId: cid, documentKey, url: location.href,
+        transcriptComplete: source.transcriptComplete === true, candidates } });
+      return;
+    }
     if (message.type === 'monitor') {
       const s = message.session;
       if (disposed || !s || s.documentKey !== documentKey || s.conversationId !== conversation() ||
@@ -414,6 +464,12 @@
             monitor.conversationId !== s.conversationId) {
           respond({ ok: false, error: 'PAGE_IDENTITY_CHANGED' }); return;
         }
+        // The same document can enter/leave recovery without a new lease.
+        // Refresh only boundary metadata; pending frames keep their original
+        // capture-wide scope.
+        monitor.recovery = s.recovery;
+        monitor.runId = s.runId;
+        monitor.active = s.active;
       } else {
         if (monitor) revokeObservation(monitor);
         monitor = { ...s, routeRevoked: false, sequence: 0, pending: [], deliveryFlight: null,

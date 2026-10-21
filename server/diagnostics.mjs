@@ -1,6 +1,13 @@
 /** Whitelisted operational evidence only: no prompts, app names, URLs or secrets. */
+import { readFileSync } from 'node:fs';
+
+/** The version the RUNNING extension reported. The installed builds are
+ * known to the client bundle, which is compiled from the same package and
+ * can inline them; the server bundle is evaluated from memory and cannot
+ * read its own package directory. */
+const VERSION_PATTERN = /^\d{1,3}\.\d{1,3}\.\d{1,5}(?:\.\d{1,5})?$/;
 export function safeDiagnostic(value) {
-  if (!value || typeof value !== 'object' || !['composer', 'chat-surface', 'models', 'apps', 'receipt', 'binding'].includes(value.stage)) return null;
+  if (!value || typeof value !== 'object' || !['composer', 'chat-surface', 'model', 'models', 'apps', 'receipt', 'binding'].includes(value.stage)) return null;
   const out = { stage: value.stage };
   for (const key of ['editorCount', 'panelCount', 'rowCount', 'matchingUserCount']) {
     const n = value[key];
@@ -20,6 +27,16 @@ export function safeDiagnostic(value) {
       if (Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 60000) out[key] = value[key];
     for (const key of ['initiallyEmpty','emptyAtInjection','editorReplaced','hasPaseoContextHeader','sameEditorSinceInjection','snapshotTruncated','pageGenerating'])
       if (typeof value[key] === 'boolean') out[key] = value[key];
+  }
+  if (value.stage === 'model') {
+    // The model picker failed to prove a selection. Say which one was asked
+    // for and how long it waited: without it the failure looks like a page
+    // that really has no such model or thinking option.
+    if (typeof value.model === 'string' && /^[A-Za-z0-9._-]{1,80}$/.test(value.model)) out.model = value.model;
+    if (typeof value.thinkingOption === 'string' && /^[A-Za-z0-9._-]{1,40}$/.test(value.thinkingOption)) out.thinkingOption = value.thinkingOption;
+    for (const key of ['waitedMs', 'budgetMs'])
+      if (Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 120000) out[key] = value[key];
+    if (typeof value.lastProofCode === 'string' && /^[A-Z][A-Z0-9_]{0,59}$/.test(value.lastProofCode)) out.lastProofCode = value.lastProofCode;
   }
   if (value.stage === 'binding' && ['identity_unavailable','message_unavailable','monitor_unavailable','page_loading','route_changed','message_changed','page_closed','multiple_tabs','unsupported_engine','ownership_conflict','invalid_message_id','wait_capacity','observation_rejected','receipt_identity_conflict','receipt_observation_unavailable'].includes(value.reason)) out.reason = value.reason;
   if (value.stage === 'apps') {
@@ -96,6 +113,7 @@ export async function settingsSnapshot(runtime, refresh = false) {
   const { refreshing, refreshStartedAt, error } = service.snapshot();
   if (!refreshError && !refreshing) refreshError = error || (lastCatalogAttempt?.phase === 'failed' ? lastCatalogAttempt.error : null);
   return { checkedAt: Date.now(), status: runtime.status(), observation: observationHealth(state, runtime.broker), catalog: state.catalog, defaults: state.defaults,
+    extensionVersion: typeof runtime.extensionVersion === 'string' && VERSION_PATTERN.test(runtime.extensionVersion) ? runtime.extensionVersion : null,
     autoAllow: state.runtimeSettings?.autoAllowApprovals === true,
     capacity: runtime.broker.slots?.snapshot() ?? { limit: 2, active: 0, waiting: 0 },
     refreshing, refreshStartedAt, refreshError, lastCatalogAttempt,
