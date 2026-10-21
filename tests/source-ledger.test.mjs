@@ -389,17 +389,27 @@ test('LEDGER-14 a moved preceding-user reference is a pointer, not a content rev
   assert.equal(byId(session, 'answer').text, 'Hello');
   assert.equal(byId(session, 'answer').userMessageId, 'user-previous');
   assert.equal(byId(session, 'answer').rewrites, undefined);
+});
 
-  // A reference that becomes known for the first time is the same case.
-  const second = {};
-  reconcileSources(second, [
+test('LEDGER-15 a reference that was unknown and is now known is adopted, not kept', () => {
+  // The extension reads the assistant message before the user message becomes
+  // recognisable, so the first reference it reports is absent. An absent
+  // reference means UNKNOWN, not a chosen value: the known one is adopted and
+  // the source is projected again so the delivered card carries the real
+  // attribution.
+  const session = {};
+  reconcileSources(session, [
     source('answer', 'Hello', { userMessageId: null, order: [0] })
   ], { now: 10 });
-  const known = reconcileSources(second, [
+  assert.equal(byId(session, 'answer').userMessageId, null);
+
+  const resolved = reconcileSources(session, [
     source('answer', 'Hello', { userMessageId: 'user-current', order: [0] })
   ], { now: 20 });
-  assert.deepEqual(known.changes, []);
-  assert.equal(known.issues.length, 1);
-  assert.equal(known.issues[0].code, 'SOURCE_USER_MESSAGE_REVISED');
-  assert.equal(byId(second, 'answer').userMessageId, null);
+  assert.equal(resolved.issues.length, 1);
+  assert.equal(resolved.issues[0].code, 'SOURCE_USER_MESSAGE_RESOLVED');
+  assert.equal(byId(session, 'answer').userMessageId, 'user-current');
+  // The revision covers the reference, so the attribution reaches the delivery.
+  assert.equal(resolved.changes.length, 1);
+  assert.equal(resolved.changes[0].item.userMessageId, 'user-current');
 });

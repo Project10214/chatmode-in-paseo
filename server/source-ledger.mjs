@@ -87,14 +87,16 @@ function canonical(value) {
 /** Stable content revision. Observation time and ledger history are excluded.
  * Position is excluded as well: `order` is a DOM path, not content. A page
  * that inserts or removes one sibling shifts every path and must not be read
- * as a rewrite of the whole conversation. The preceding-user reference is a
- * pointer for the same reason: the extension derives it from the page's
- * ambient cursor, so it moves without the content moving. */
+ * as a rewrite of the whole conversation. The preceding-user reference takes
+ * part in the revision, but only its FIRST value does: a reference that the
+ * extension later reports differently is a moved pointer, not new content,
+ * so it must not re-project or re-deliver the source. */
 export function sourceRevision(input) {
   const value = isObject(input) && isObject(input.item) && !hasOwn(input, 'text') ? input.item : input;
   if (!isObject(value)) fail('SOURCE_ITEM_INVALID', 'item', 'Source item must be an object.');
   return createHash('sha256').update(canonical([
     value.id ?? null,
+    value.userMessageId ?? null,
     value.role ?? null,
     value.lane ?? null,
     value.kind ?? null,
@@ -437,9 +439,15 @@ function conflicts(old, next) {
 // the source keeps the turn attribution it was first seen with, and so the
 // projected item does not move to another activity card. The content update
 // still applies.
+//
+// A reference that was UNKNOWN and is now known is not a moved pointer: the
+// first value was absent, not chosen. The known value is adopted, and because
+// the reference takes part in the revision the source is projected again so
+// the delivered card carries the real attribution.
 function referenceMoved(old, next) {
   const before = old[REFERENCE], after = next[REFERENCE];
-  if (after === null || after === undefined) return false; // merge keeps the first reference
+  if (before === null || before === undefined) return false; // unknown, not moved
+  if (after === null || after === undefined) return false;   // merge keeps the first reference
   return before !== after;
 }
 
@@ -549,6 +557,12 @@ export function reconcileSources(session, items, options = {}) {
       issues.push(issue(index, next.id, 'SOURCE_USER_MESSAGE_REVISED',
         'The preceding user turn reference changed; the first reference was kept and the content was not re-delivered.',
         at, { fields: [REFERENCE] }));
+    else if (old[REFERENCE] === null || old[REFERENCE] === undefined) {
+      if (next[REFERENCE] !== null && next[REFERENCE] !== undefined)
+        issues.push(issue(index, next.id, 'SOURCE_USER_MESSAGE_RESOLVED',
+          'The preceding user turn reference became known; the source was projected again with it.',
+          at, { fields: [REFERENCE] }));
+    }
 
     const merged = merge(old, next, normalized.provided);
     if (movedReference) merged[REFERENCE] = old[REFERENCE];
@@ -577,7 +591,7 @@ export function reconcileSources(session, items, options = {}) {
     const change = next.text.length > old.text.length && next.text.startsWith(old.text) ? 'append' : 'rewrite';
     const rewrites = change === 'rewrite'
       ? [...(Array.isArray(old.rewrites) ? old.rewrites : []),
-        { revision: current.revision, text: old.text, at: old.updatedAt ?? at }]
+        { revision: current.revision, text: old.text, reference: old[REFERENCE] ?? null, at: old.updatedAt ?? at }]
       : old.rewrites;
     const previousProse = old.prose?.status === 'available' ? old.prose : old.previousProse;
     const currentProse = merged.prose?.status === 'available' ? merged.prose : undefined;

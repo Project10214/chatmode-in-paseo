@@ -58,8 +58,12 @@ for (const session of sessions) {
   for (const source of sources) {
     const movable = source.prose || source.media || source.details || source.status;
     if (movable) continue;
-    for (const rewrite of source.rewrites || [])
-      if (rewrite.text === source.text) churn++;
+    for (const rewrite of source.rewrites || []) {
+      // A rewrite that only the preceding-user reference explains is a real
+      // attribution gain, not a position shift.
+      const explained = rewrite.reference !== undefined && rewrite.reference !== source.userMessageId;
+      if (rewrite.text === source.text && !explained) churn++;
+    }
   }
 
   rows.push({
