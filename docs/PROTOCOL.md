@@ -1,6 +1,6 @@
 # CIP v9：Chrome 扩展与本机 Runtime 协议
 
-适用源码：Paseo 插件 `0.1.0-alpha.4.50`，Chrome 扩展 `0.2.52`（2026-10-21）。
+适用源码：Paseo 插件 `0.1.0-alpha.4.51`，Chrome 扩展 `0.2.53`（2026-10-21）。
 **唯一版本依据**：`server/protocol.mjs` 的 `PROTOCOL` 与 `extension/background.js` 的 `PROTOCOL`。此协议不是 MCP、ACP 或原版 CoS bridge；Paseo Provider 另采用其原生 v1 接口。旧 CIP v1–v8 不能与 v9 混用。
 
 ## 通信与身份

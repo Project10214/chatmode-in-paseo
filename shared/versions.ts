@@ -9,5 +9,5 @@
 // The version the RUNNING extension reports is not here: it arrives over the
 // wire and is proven by the server.
 
-export const PLUGIN_VERSION = '0.1.0-alpha.4.50';
-export const INSTALLED_EXTENSION_VERSION = '0.2.52';
+export const PLUGIN_VERSION = '0.1.0-alpha.4.51';
+export const INSTALLED_EXTENSION_VERSION = '0.2.53';

@@ -10,6 +10,18 @@ test('DIA1 diagnostics discard arbitrary text, endpoints, tokens and unknown sta
   assert.deepEqual(safeDiagnostic({stage:'apps',rowCount:129,panelCount:-1,editorCount:NaN}),{stage:'apps'});
   assert.equal(safeError(new Error('Bearer private-secret')),'CATALOG_FAILED');
 });
+test('DIA1b the model picker diagnostic keeps the request and the wait, and drops anything else', () => {
+  assert.deepEqual(safeDiagnostic({stage:'model',model:'gpt-6',thinkingOption:'xhigh',
+    waitedMs:8123,budgetMs:20000,lastProofCode:'MODEL_IDENTITY_UNPROVEN'}),
+    {stage:'model',model:'gpt-6',thinkingOption:'xhigh',waitedMs:8123,budgetMs:20000,
+     lastProofCode:'MODEL_IDENTITY_UNPROVEN'});
+  // An unproven model id, an oversized wait or a foreign stage never leaks:
+  // the unusable fields are dropped, not carried.
+  assert.deepEqual(safeDiagnostic({stage:'model',model:'a b',thinkingOption:'x'.repeat(41),
+    waitedMs:999999}),{stage:'model'});
+  assert.equal(safeDiagnostic({stage:'model',model:'gpt-6',waitedMs:1,secret:'PRIVATE'}).secret,undefined);
+  assert.equal(safeDiagnostic({stage:'private'}),null);
+});
 test('DIA2 failed catalog returns fresh connection and keeps last confirmed catalog', async () => {
   const state={sessions:{},commands:{c:{kind:'catalog',phase:'failed',createdAt:5,error:'APP_MENU_TIMEOUT',diagnostic:{stage:'apps'}}},catalog:{models:[{id:'m'}]},defaults:{appIds:[]}};
   const runtime={status:()=>({connected:true,paired:true}),store:{read:()=>structuredClone(state)},broker:{call:async()=>{throw Object.assign(new Error('APP_MENU_TIMEOUT'),{code:'APP_MENU_TIMEOUT'})}}};

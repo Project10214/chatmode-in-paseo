@@ -1,6 +1,6 @@
 # Chatmode in Paseo｜产品说明书
 
-更新：2026-10-19；本说明针对 **Paseo 插件 0.1.0-alpha.4.50、Chrome 扩展 0.2.52、CIP v9**。版本以 `package.json`、`extension/manifest.json` 和 `server/protocol.mjs` 为准。它仍属于 alpha，不是正式验收声明。
+更新：2026-10-19；本说明针对 **Paseo 插件 0.1.0-alpha.4.51、Chrome 扩展 0.2.53、CIP v9**。版本以 `package.json`、`extension/manifest.json` 和 `server/protocol.mjs` 为准。它仍属于 alpha，不是正式验收声明。
 
 ## 1. 产品定位
 
