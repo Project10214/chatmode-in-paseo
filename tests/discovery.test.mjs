@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { safeDiagnostic, safeError, catalogAttempt, settingsSnapshot, installedVersions } from '../server/diagnostics.mjs';
+import { safeDiagnostic, safeError, catalogAttempt, settingsSnapshot } from '../server/diagnostics.mjs';
 import { readFileSync } from 'node:fs';
 import { fixture, until } from './helpers.mjs';
 
@@ -39,25 +39,21 @@ test('DIA5 catalog diagnostic survives receipt and restart-readable state', asyn
   assert.equal(catalogAttempt(state).error,'APP_MENU_TIMEOUT');
 });
 
-test('DIA6 the snapshot proves the plugin build, the installed extension build and the loaded one', async () => {
-  const versions = installedVersions();
-  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-  const manifest = JSON.parse(readFileSync(new URL('../extension/manifest.json', import.meta.url), 'utf8'));
-  assert.equal(versions.pluginVersion, pkg.version);
-  assert.equal(versions.installedExtensionVersion, manifest.version);
-
+test('DIA6 the snapshot carries the build the RUNNING extension reported', async () => {
+  // The plugin's own build and the installed extension build are inlined into
+  // the CLIENT bundle: the server bundle is evaluated from memory and cannot
+  // read its own package directory. The snapshot therefore carries only the
+  // version the running extension reported over the wire.
   const state = { sessions: {}, commands: {}, catalog: null, defaults: { appIds: [] } };
   const runtime = { status: () => ({ connected: true }), store: { read: () => structuredClone(state) },
-    broker: { call: async () => {} }, extensionVersion: '0.2.51' };
+    broker: { call: async () => {} }, extensionVersion: '0.2.52' };
   const snapshot = await settingsSnapshot(runtime, false);
-  assert.equal(snapshot.pluginVersion, pkg.version);
-  assert.equal(snapshot.installedExtensionVersion, manifest.version);
-  assert.equal(snapshot.extensionVersion, '0.2.51');
+  assert.equal(snapshot.extensionVersion, '0.2.52');
+  assert.equal('pluginVersion' in snapshot, false);
+  assert.equal('installedExtensionVersion' in snapshot, false);
 
   // An extension that reported nothing, or reported something unusable, is
   // unknown - never reported as the installed build.
-  const silent = { ...runtime, extensionVersion: undefined };
-  assert.equal((await settingsSnapshot(silent, false)).extensionVersion, null);
-  const hostile = { ...runtime, extensionVersion: 'not-a-version' };
-  assert.equal((await settingsSnapshot(hostile, false)).extensionVersion, null);
+  assert.equal((await settingsSnapshot({ ...runtime, extensionVersion: undefined }, false)).extensionVersion, null);
+  assert.equal((await settingsSnapshot({ ...runtime, extensionVersion: 'not-a-version' }, false)).extensionVersion, null);
 });

@@ -4,6 +4,11 @@ import { useRpc, type PluginSurfaceProps } from '@getpaseo/plugin/client';
 import { Icon, TextInput, copyText } from '@getpaseo/plugin/client/react-native';
 import type { RpcOutput } from '@getpaseo/plugin';
 import { snapshot, saveDefaults, saveConcurrency, saveAutoAllow, pair, abandon } from '../shared/rpc.js';
+// The installed builds are inlined at build time. The server bundle is
+// evaluated from memory and cannot read its own package directory, so the
+// client is where the shipped versions are known.
+import pluginPackage from '../package.json' with { type: 'json' };
+import extensionManifest from '../extension/manifest.json' with { type: 'json' };
 
 type State = RpcOutput<typeof snapshot>;
 const ERROR_LABELS: Record<string,string> = {
@@ -48,15 +53,24 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
   const filtered=state?.catalog?.apps.filter(a=>a.label.toLocaleLowerCase().includes(query.toLocaleLowerCase()))??[];
   // The loaded extension may be an older build than the one installed next to
   // this plugin. Say so plainly instead of letting the user guess.
-  const extensionStale=!!state&&!!state.installedExtensionVersion&&!!state.extensionVersion&&state.extensionVersion!==state.installedExtensionVersion;
-  const versionLine=state?`插件 ${state.pluginVersion??'版本未知'} · 协议 ${state.status.protocol}`:'';
+  // The JSON shape differs between the bundler (direct) and the TypeScript
+  // CommonJS emit (under `default`); read both rather than assume one.
+  const versionOf=(value:unknown):string|null=>{
+    const record=value as {version?:unknown;default?:{version?:unknown}}|null|undefined;
+    if(typeof record?.version==='string')return record.version;
+    return typeof record?.default?.version==='string'?record.default.version:null;
+  };
+  const pluginVersion=versionOf(pluginPackage);
+  const installedExtensionVersion=versionOf(extensionManifest);
+  const extensionStale=!!state&&!!installedExtensionVersion&&!!state.extensionVersion&&state.extensionVersion!==installedExtensionVersion;
+  const versionLine=state?`插件 ${pluginVersion??'版本未知'} · 协议 ${state.status.protocol}`:'';
   return <View style={{padding:compact?16:24,gap:26,width:'100%',maxWidth:800,alignSelf:'center',backgroundColor:c.surface0}}>
     <View style={{gap:8}}><View style={{flexDirection:'row',justifyContent:'space-between',alignItems:'center',gap:12}}><Text style={{color:c.foreground,fontSize:27,fontWeight:'700',letterSpacing:-.6}}>Chatmode</Text><Text style={{color:c.foregroundMuted,fontSize:11}}>Chatmode in Paseo</Text></View><Text style={{color:c.foregroundMuted,fontSize:14,lineHeight:21}}>在 Paseo 收发 ChatGPT 网页消息。</Text>{state&&<Text selectable style={{color:c.foregroundMuted,fontSize:12,lineHeight:18}}>{versionLine}</Text>}</View>
     <View style={{borderWidth:1,borderColor:c.border,borderRadius:16,padding:18,backgroundColor:c.surface1,gap:14}}>
       <View style={{flexDirection:'row',alignItems:'center',gap:12}}><View style={{width:40,height:40,borderRadius:12,backgroundColor:c.surface2,alignItems:'center',justifyContent:'center'}}><Icon name="Link" size={20} color={connected?c.statusSuccess:c.foregroundMuted}/></View><View style={{flex:1,gap:3}}><Text style={{color:c.foreground,fontWeight:'600',fontSize:15}}>{!state?'正在检查连接…':connected?'扩展已连接':state.status.paired?'已配对 · 扩展离线':'尚未配对'}</Text><Text selectable style={{color:c.foregroundMuted,fontSize:12}}>{state?.status.address??'本机连接 · 配对信息保存在 Paseo 所在电脑'}</Text></View></View>
       {state&&<View style={{gap:4}}>
         <Text selectable style={{color:extensionStale?c.statusWarning:c.foregroundMuted,fontSize:12,lineHeight:18}}>
-          {`扩展 ${state.extensionVersion??'版本未上报'}${state.installedExtensionVersion?` · 已安装 ${state.installedExtensionVersion}`:''}`}
+          {`扩展 ${state.extensionVersion??'版本未上报'}${installedExtensionVersion?` · 已安装 ${installedExtensionVersion}`:''}`}
         </Text>
         {extensionStale&&<Text accessibilityRole="alert" style={{color:c.statusWarning,fontSize:12,lineHeight:18}}>已加载的扩展与已安装的版本不同，请在 chrome://extensions 重新加载扩展。</Text>}
         {!!state&&!state.extensionVersion&&<Text style={{color:c.foregroundMuted,fontSize:12,lineHeight:18}}>扩展没有上报版本：它可能没有连接，或版本早于该信息。</Text>}
