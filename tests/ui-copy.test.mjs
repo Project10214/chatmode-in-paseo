@@ -218,3 +218,32 @@ test('COPY provider notices do not infer page execution, completion or approval 
   assert.equal(failed.error.message, copy.errorLabel('MODEL_UNAVAILABLE'));
   assert.equal(f.broker.queued().filter(c => ['send', 'approval', 'stop'].includes(c.kind)).length, 0);
 });
+
+test('COPY settings state the plugin and extension builds and flag a stale extension', () => {
+  const base = settingsState();
+  const state = [];
+  state[2] = { ...base, pluginVersion: '0.1.0-alpha.4.46', extensionVersion: '0.2.51',
+    installedExtensionVersion: '0.2.51', status: { ...base.status, protocol: 9 } };
+  const tree = renderer('settings.tsx', { state }).render('SettingsScreen', { theme, layout: { compact: false } });
+  const body = text(tree);
+  assert.match(body, /插件 0\.1\.0-alpha\.4\.46/);
+  assert.match(body, /协议 9/);
+  assert.match(body, /扩展 0\.2\.51/);
+  assert.doesNotMatch(body, /重新加载扩展/);
+
+  const stale = [];
+  stale[2] = { ...base, pluginVersion: '0.1.0-alpha.4.46', extensionVersion: '0.2.50',
+    installedExtensionVersion: '0.2.51', status: { ...base.status, protocol: 9 } };
+  const staleBody = text(renderer('settings.tsx', { state: stale }).render('SettingsScreen', { theme, layout: { compact: false } }));
+  assert.match(staleBody, /扩展 0\.2\.50/);
+  assert.match(staleBody, /已安装 0\.2\.51/);
+  assert.match(staleBody, /重新加载扩展/);
+
+  // An extension that has never reported a build is unknown, not "up to date".
+  const unknown = [];
+  unknown[2] = { ...base, pluginVersion: '0.1.0-alpha.4.46', extensionVersion: null,
+    installedExtensionVersion: '0.2.51', status: { ...base.status, protocol: 9 } };
+  const unknownBody = text(renderer('settings.tsx', { state: unknown }).render('SettingsScreen', { theme, layout: { compact: false } }));
+  assert.match(unknownBody, /扩展 版本未上报/);
+  assert.doesNotMatch(unknownBody, /重新加载扩展/);
+});

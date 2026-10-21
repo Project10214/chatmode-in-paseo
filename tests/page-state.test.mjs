@@ -240,6 +240,7 @@ test('new health schema rejects old dual-track counters and impossible partition
 const settingsSnapshot = observation => ({ checkedAt: 1700000001000,
   status: { connected: true, paired: true, address: '127.0.0.1', protocol: 1, lastSeenAt: 1700000000000 },
   observation, catalog: null, defaults: { appIds: [] }, autoAllow: false, blocked: [], capacity: { active: 0, waiting: 0, limit: 2 },
+  pluginVersion: '0.1.0-alpha.4.47', extensionVersion: '0.2.52', installedExtensionVersion: '0.2.52',
   refreshing: false, refreshStartedAt: null, refreshError: null, lastCatalogAttempt: null });
 test('real settings RPC schema accepts only the unified health fields', () => {
   const observation = { bound: 3, running: 1, standby: 1, abnormal: 1, sourceIssues: 2, lastObservedAt: 1700000000000 };

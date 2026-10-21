@@ -1,4 +1,27 @@
 /** Whitelisted operational evidence only: no prompts, app names, URLs or secrets. */
+import { readFileSync } from 'node:fs';
+
+/** The versions this installation can prove, never a claim about "latest".
+ * The plugin version is this package. The installed extension version is the
+ * manifest on disk. The running extension reports its own build over the wire,
+ * so a mismatch means the loaded extension is an older build than the one
+ * installed next to the plugin. */
+const VERSION_PATTERN = /^\d{1,3}\.\d{1,3}\.\d{1,5}(?:\.\d{1,5})?$/;
+const PLUGIN_VERSION_PATTERN = /^\d{1,3}\.\d{1,3}\.\d{1,5}(?:\.\d{1,5})?(?:-[0-9A-Za-z.-]{1,40})?$/;
+let cachedVersions = null;
+function readVersion(relative, pattern) {
+  try {
+    const value = JSON.parse(readFileSync(new URL(relative, import.meta.url), 'utf8'))?.version;
+    return typeof value === 'string' && pattern.test(value) ? value : null;
+  } catch { return null; }
+}
+export function installedVersions() {
+  if (!cachedVersions) cachedVersions = {
+    pluginVersion: readVersion('../package.json', PLUGIN_VERSION_PATTERN),
+    installedExtensionVersion: readVersion('../extension/manifest.json', VERSION_PATTERN)
+  };
+  return { ...cachedVersions };
+}
 export function safeDiagnostic(value) {
   if (!value || typeof value !== 'object' || !['composer', 'chat-surface', 'models', 'apps', 'receipt', 'binding'].includes(value.stage)) return null;
   const out = { stage: value.stage };
@@ -96,6 +119,8 @@ export async function settingsSnapshot(runtime, refresh = false) {
   const { refreshing, refreshStartedAt, error } = service.snapshot();
   if (!refreshError && !refreshing) refreshError = error || (lastCatalogAttempt?.phase === 'failed' ? lastCatalogAttempt.error : null);
   return { checkedAt: Date.now(), status: runtime.status(), observation: observationHealth(state, runtime.broker), catalog: state.catalog, defaults: state.defaults,
+    ...installedVersions(),
+    extensionVersion: typeof runtime.extensionVersion === 'string' && VERSION_PATTERN.test(runtime.extensionVersion) ? runtime.extensionVersion : null,
     autoAllow: state.runtimeSettings?.autoAllowApprovals === true,
     capacity: runtime.broker.slots?.snapshot() ?? { limit: 2, active: 0, waiting: 0 },
     refreshing, refreshStartedAt, refreshError, lastCatalogAttempt,

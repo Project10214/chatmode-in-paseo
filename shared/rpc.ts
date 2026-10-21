@@ -11,6 +11,9 @@ export const snapshot = defineRpc({ name: 'bridge.snapshot', input: z.object({ r
     lastCatalogAttempt: z.object({ phase: z.string(), at: z.number(), error: z.string().nullable(), diagnostic: z.object({ stage: z.string(), editorCount: z.number().optional(), panelCount: z.number().optional(), rowCount: z.number().optional(), nativeProbeAttempted: z.boolean().optional(), hintRequestSeen: z.boolean().optional(), observerReplySeen: z.boolean().optional() }).nullable() }).nullable(),
     capacity: z.object({ limit: z.number().int().min(1).max(8), active: z.number().int().nonnegative(), waiting: z.number().int().nonnegative() }).optional(),
     status: z.object({ address: z.string(), connected: z.boolean(), paired: z.boolean(), protocol: z.number(), lastSeenAt: z.number().optional() }),
+    pluginVersion: z.string().nullable(),
+    extensionVersion: z.string().nullable(),
+    installedExtensionVersion: z.string().nullable(),
     observation: observationHealthSchema.optional(),
     catalog: catalog.nullable(), defaults: selection, autoAllow: z.boolean(), blocked: z.array(z.object({ id: z.string(), error: z.string() })) }) });
 export const saveDefaults = defineRpc({ name: 'bridge.defaults', input: selection, output: selection });

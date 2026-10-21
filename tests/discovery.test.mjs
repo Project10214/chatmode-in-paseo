@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { safeDiagnostic, safeError, catalogAttempt, settingsSnapshot } from '../server/diagnostics.mjs';
+import { safeDiagnostic, safeError, catalogAttempt, settingsSnapshot, installedVersions } from '../server/diagnostics.mjs';
+import { readFileSync } from 'node:fs';
 import { fixture, until } from './helpers.mjs';
 
 test('DIA1 diagnostics discard arbitrary text, endpoints, tokens and unknown stages', () => {
@@ -36,4 +37,27 @@ test('DIA5 catalog diagnostic survives receipt and restart-readable state', asyn
   await assert.rejects(call,/APP_MENU_TIMEOUT/);const state=f.store.read();
   assert.deepEqual(state.commands[c.id].diagnostic,{stage:'apps',rowCount:0});assert.ok(!JSON.stringify(state).includes('MUST_NOT_STORE'));
   assert.equal(catalogAttempt(state).error,'APP_MENU_TIMEOUT');
+});
+
+test('DIA6 the snapshot proves the plugin build, the installed extension build and the loaded one', async () => {
+  const versions = installedVersions();
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const manifest = JSON.parse(readFileSync(new URL('../extension/manifest.json', import.meta.url), 'utf8'));
+  assert.equal(versions.pluginVersion, pkg.version);
+  assert.equal(versions.installedExtensionVersion, manifest.version);
+
+  const state = { sessions: {}, commands: {}, catalog: null, defaults: { appIds: [] } };
+  const runtime = { status: () => ({ connected: true }), store: { read: () => structuredClone(state) },
+    broker: { call: async () => {} }, extensionVersion: '0.2.51' };
+  const snapshot = await settingsSnapshot(runtime, false);
+  assert.equal(snapshot.pluginVersion, pkg.version);
+  assert.equal(snapshot.installedExtensionVersion, manifest.version);
+  assert.equal(snapshot.extensionVersion, '0.2.51');
+
+  // An extension that reported nothing, or reported something unusable, is
+  // unknown - never reported as the installed build.
+  const silent = { ...runtime, extensionVersion: undefined };
+  assert.equal((await settingsSnapshot(silent, false)).extensionVersion, null);
+  const hostile = { ...runtime, extensionVersion: 'not-a-version' };
+  assert.equal((await settingsSnapshot(hostile, false)).extensionVersion, null);
 });

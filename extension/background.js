@@ -1,4 +1,11 @@
 const PROTOCOL = 9, DEFAULT_ENDPOINT = 'http://127.0.0.1:17843';
+// The running build reports itself so the Paseo settings page can say whether
+// the loaded extension is the installed one. A version that cannot be read is
+// reported as unknown, never guessed.
+const EXTENSION_VERSION = (() => {
+  try { const version = chrome.runtime.getManifest?.()?.version; return typeof version === 'string' ? version : ''; }
+  catch { return ''; }
+})();
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 let pumpFlight = null, timer = null, loaded = null, lastOnlineAt = 0, pairingIntent = 0;
 let config, ledger, tabs, catalogBrowserId, upgradeRecovery=null, updateEventPending=false, versionRecoveryInitiated=false;
@@ -62,6 +69,7 @@ async function api(route, value, authenticated = true, profile = config) {
   const response = await fetch(`${endpoint.origin}${route}`, {
     method: value === undefined ? 'GET' : 'POST',
     headers: { ...(value === undefined ? {} : { 'Content-Type': 'application/json' }), 'X-CIP-Extension': chrome.runtime.id, 'X-CIP-Features': 'files-v2',
+      'X-CIP-Extension-Version': EXTENSION_VERSION,
       ...(authenticated ? { Authorization: `Bearer ${profile.token}`, 'X-CIP-Engine': 'cos-native-alpha4.3', 'X-CIP-Browser': catalogBrowserId } : {}) },
     body: value === undefined ? undefined : JSON.stringify(value), signal: AbortSignal.timeout(15000), cache: 'no-store', redirect: 'error'
   });

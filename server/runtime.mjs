@@ -41,7 +41,7 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
     const json = (res, status, value, origin) => {
       const data = JSON.stringify(value);
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
-        ...(origin ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-CIP-Extension, X-CIP-Engine, X-CIP-Browser, X-CIP-Features', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' } : {}) });
+        ...(origin ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-CIP-Extension, X-CIP-Extension-Version, X-CIP-Engine, X-CIP-Browser, X-CIP-Features', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' } : {}) });
       res.end(data);
     };
     const body = async req => {
@@ -75,6 +75,11 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
         }
         invariant(credential && equal(req.headers.authorization, `Bearer ${credential.token}`) && req.headers['x-cip-extension'] === credential.extensionId, 'AUTH_REQUIRED');
         invariant(!origin || origin === `chrome-extension://${credential.extensionId}`, 'ORIGIN_REJECTED');
+        // The running extension reports its own build. The settings page uses
+        // this to tell "the loaded extension" from "the installed one".
+        const reportedVersion = req.headers['x-cip-extension-version'];
+        if (runtimeHandle && typeof reportedVersion === 'string' && /^\d{1,3}\.\d{1,3}\.\d{1,5}(?:\.\d{1,5})?$/.test(reportedVersion))
+          runtimeHandle.extensionVersion = reportedVersion;
         invariant(!broker.closed,'RUNTIME_CLOSED');
         lastSeen = Date.now();
         if (req.method === 'GET' && route === '/commands') {
@@ -184,7 +189,7 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
     },1000);timer.unref();
     let closed = false;
     runtimeHandle = {
-      broker, store, address,
+      broker, store, address, extensionVersion: null,
       status: () => ({ address, paired: Boolean(credential), connected: Date.now() - lastSeen < 45000, lastSeenAt: lastSeen, protocol: PROTOCOL }),
       async renewPairing() {
         pairing = { code: randomBytes(24).toString('hex'), expiresAt: Date.now() + 15 * 60000 };
