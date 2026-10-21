@@ -51,9 +51,16 @@ for (const session of sessions) {
 
   // 3. Position churn. A rewrite whose text is byte-identical to the current
   //    text is the signature of a DOM path shift read as a content rewrite.
+  //    Only sources whose OTHER content cannot legitimately change are
+  //    counted: a source with prose, a tool status, media or details has
+  //    real reasons to be revised without its text moving.
   let churn = 0;
-  for (const source of sources) for (const rewrite of source.rewrites || [])
-    if (rewrite.text === source.text) churn++;
+  for (const source of sources) {
+    const movable = source.prose || source.media || source.details || source.status;
+    if (movable) continue;
+    for (const rewrite of source.rewrites || [])
+      if (rewrite.text === source.text) churn++;
+  }
 
   rows.push({
     id: session.id,
@@ -90,7 +97,8 @@ const lagging = rows.reduce((sum, row) => sum + row.lagging, 0);
 console.log('lag      = 账本文本比已投递的历史更长 -> 正文被冻结/落后（修复 1）');
 console.log('rev      = 前一条用户消息引用发生漂移（修复 1 的触发条件，新诊断码）');
 console.log('cfl      = 来源身份冲突（修复 1 修复前的症状，修复后不应出现）');
-console.log('churn    = 正文一字未改却被记为 rewrite 的次数（修复 2 的历史指纹，修复后应为 0）');
+console.log('churn    = 正文一字未改却被记为 rewrite 的次数，且该来源没有 prose/status/media/details');
+console.log('           —— DOM 路径位移被读成内容改写的指纹（修复 2），修复后新会话应为 0');
 console.log('dom      = DOM 本地身份（没有稳定 native id，位移风险高）');
 console.log(`\n合计：位置抖动 churn=${total}，正文落后 lagging=${lagging}`);
 console.log(`状态文件：${statePath}`);
