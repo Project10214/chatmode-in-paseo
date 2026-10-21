@@ -34,6 +34,24 @@ const PASEO_012_BETA2 = Object.freeze({
   webMetroReducerId:3664
 });
 
+// 0.12.0 final (2026-10-21): the published @getpaseo/server@0.12.0 is
+// byte-identical to the installed desktop app, so this audit is reproducible
+// from the registry. Against the audited 0.12.0-beta.2 the daemon mapper
+// differs by three lines, all in the prompt.steer capability negotiation, and
+// the agent manager by two lines, both in the agent REGISTRATION path - not
+// in the pending/staged-events turn lifecycle. mapTimelineItem is byte
+// identical, and the reducer keeps Metro module id 3664 with the same three
+// dependencies.
+const PASEO_012_FINAL = Object.freeze({
+  appVersion:'0.12.0',
+  daemonFileSha256:'d33af5c95b5fa06c232ad6a7a8e4f7f41926757ae77d0574fa8380ff0a774ed1',
+  webBundleSha256:'5a975098ad9ec6669f1a0178c5f83a8ab7b5975c65c346531237791534f84a22',
+  webMetroReducerId:3664
+});
+// Every host build this repository has audited, by its app version.
+export const PINNED_HOST_VERSIONS=Object.freeze(
+  [PASEO_0114,PASEO_012_BETA1,PASEO_012_BETA2,PASEO_012_FINAL].map(entry=>entry.appVersion));
+
 export async function loadInstalledPaseoContract() {
   const serverPath=process.env.CIP_PASEO_PROVIDER_SOURCE;
   const rendererPath=process.env.CIP_PASEO_RENDERER_BUNDLE;
@@ -43,7 +61,7 @@ export async function loadInstalledPaseoContract() {
 
   const source=await readFile(serverPath,'utf8');
   const bundle=await readFile(rendererPath,'utf8');
-  const pinned=[PASEO_0114,PASEO_012_BETA1,PASEO_012_BETA2].find(p=>p.webBundleSha256===hash(bundle));
+  const pinned=[PASEO_0114,PASEO_012_BETA1,PASEO_012_BETA2,PASEO_012_FINAL].find(p=>p.webBundleSha256===hash(bundle));
   assert(pinned,'Paseo renderer bundle hash/version changed; update only after a new audit');
   assert.equal(hash(source),pinned.daemonFileSha256,
     'Paseo daemon file hash/version changed; update only after a new audit');

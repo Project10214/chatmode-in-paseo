@@ -53,6 +53,22 @@ export const PASEO_HOST_SOURCES = Object.freeze({
       [SDK_PROVIDER]: '53d8c6be6e12ff496bcf213ee0ea751226ae12e273969ddc56a1987b0712fa8e' },
     dependencies: { '@getpaseo/plugin': '0.12.0-beta.2', '@getpaseo/protocol': '0.12.0-beta.2', '@getpaseo/client': '0.12.0-beta.2',
       '@getpaseo/relay': '0.12.0-beta.2' }
+  },
+  // 0.12.0 final (2026-10-21): the published tarball is byte-identical to the
+  // installed desktop app. Against beta.2 the plugin provider differs by three
+  // lines, all prompt.steer capability negotiation, and the agent manager by
+  // two lines, both in the agent REGISTRATION path. The pending/staged-events
+  // turn lifecycle, the run state, the prompt orchestration and the SDK
+  // provider are unchanged, so the host boundary this plugin depends on is
+  // the same one beta.2 was audited against.
+  '0.12.0': {
+    files: { ...SHARED_CORE, [AGENT + 'agent-loading.js']: '68a49992ea1f6e4813b8a1860cb725bc43cb5d4a4dae6c4db9b5ba0a0e39ae44',
+      [AGENT + 'plugin-provider.js']: 'd33af5c95b5fa06c232ad6a7a8e4f7f41926757ae77d0574fa8380ff0a774ed1',
+      [AGENT + 'agent-manager.js']: 'c5030ef7eb9577f2822dec0e9bd1b2adcd09fe37137a0516f32a1eba061bce03',
+      [AGENT + 'agent-prompt.js']: 'b2c262e9fb6165e47fb3c9407f392bd06e5d1485c1ffe5a2d270c0927e3a96e6',
+      [SDK_PROVIDER]: '53d8c6be6e12ff496bcf213ee0ea751226ae12e273969ddc56a1987b0712fa8e' },
+    dependencies: { '@getpaseo/plugin': '0.12.0', '@getpaseo/protocol': '0.12.0', '@getpaseo/client': '0.12.0',
+      '@getpaseo/relay': '0.12.0' }
   }
 });
 

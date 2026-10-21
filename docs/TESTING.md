@@ -80,17 +80,24 @@ python3 tests/page-view-framing-browser.py      # 一次页面读数被传输分
    ```
 3. **真实宿主夹具要一个解包并装好依赖的 `@getpaseo/server` 目录**，缺了就抛 `CIP_PASEO_SERVER_PACKAGE is required`，不 skip：
    ```sh
-   export CIP_PASEO_SERVER_PACKAGE="$PWD/.test-tools/paseo-server/package"
+   export CIP_PASEO_SERVER_PACKAGE="$PWD/.test-tools/paseo-server-012/package"
+   ```
+   要跑到**已安装的 Paseo** 上，还要指明它的 daemon 源文件与 web 渲染包（哈希必须落在 `tests/fixtures/paseo-real-contract.mjs` 的 pinned 审计里）：
+   ```sh
+   export CIP_PASEO_PROVIDER_SOURCE="$CIP_PASEO_SERVER_PACKAGE/dist/server/server/agent/plugin-provider.js"
+   export CIP_PASEO_RENDERER_BUNDLE="/Applications/Paseo.app/Contents/Resources/app-dist/_expo/static/js/web/index-<hash>.js"
    ```
 
-`.test-tools/run-browser-tests.sh` 已把这三项固定下来（本目录被 `.gitignore` 忽略，不进版本库）：
+`.test-tools/run-browser-tests.sh` 已把这几项固定下来（本目录被 `.gitignore` 忽略，不进版本库）：
 
 ```sh
-sh .test-tools/run-browser-tests.sh                 # 全部 29 个夹具
+sh .test-tools/run-browser-tests.sh                 # 全部 30 个夹具
 sh .test-tools/run-browser-tests.sh page-content-browser.py
 ```
 
-**2026-10-21 基线：29 个夹具 28 通过、1 失败。** 失败项是 `tests/prose-source-flow-browser.py`：它要求 `CIP_PASEO_PROVIDER_SOURCE` / `CIP_PASEO_RENDERER_BUNDLE` 指向**已安装 Paseo** 的 daemon 源文件与 web 渲染包，且哈希必须落在 `tests/fixtures/paseo-real-contract.mjs` 的 pinned 审计里。pinned 目前只覆盖 0.11.4 / 0.12.0-beta.1 / 0.12.0-beta.2，而本机已安装的是 **0.12.0 正式版**，其 daemon 文件与 web 包哈希均不在 pinned 列表内，因此按设计拒绝执行。
+**2026-10-21 基线：30 个夹具全部通过**（含 `prose-source-flow-browser.py`），`npm run test:host-gate` 对着 **Paseo 0.12.0 正式版** 4/4。
+
+**pinned 审计现覆盖 0.11.4 / 0.12.0-beta.1 / 0.12.0-beta.2 / 0.12.0 正式版。** 0.12.0 的审计依据：npm 发布的 `@getpaseo/server@0.12.0` 与已安装桌面 app **逐字节一致**（`plugin-provider.js`、`agent-manager.js` 哈希均相同），因此可复现。与 beta.2 相比，daemon mapper 差 3 行（全在 `prompt.steer` 能力协商），agent manager 差 2 行（**都在 agent 注册路径**，不在 pending/staged-events 轮次生命周期里），`mapTimelineItem` 字节一致，web reducer 仍是 Metro id `3664` + 同样的三个依赖。
 
 
 `test:failed-send-persistence` 使用临时浏览器 profile 和本地路由，模拟网站的 IndexedDB 自动保存；验证自己的未发送正文与应用清理后不会在新页恢复，用户修改、历史未知草稿和未知回执仍保留。它不是 ChatGPT 闭源保存代码的复刻；真实 B01 的来源追踪与清理验收记录只保存在本地 `docs/internal/`，不随仓库发布。
