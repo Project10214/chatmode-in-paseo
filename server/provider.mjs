@@ -543,7 +543,14 @@ function createConnection(runtime,capabilities,validateEvent,observation=null) {
           await (runtime.chromeWake ?? wakeChrome)({status:()=>runtime.status(),signal:controller.signal});
         const { catalog } = await catalogService(runtime).forForm({ signal: controller.signal });
         const saved = store.read().defaults;
-        const defaults = validateSelection(saved, catalog);
+        // Catalog discovery must survive account changes. Project only valid
+        // model defaults for display; keep saved selections and send validation strict.
+        const preferredModel = saved.model ?? catalog.defaultModel;
+        const model = catalog.models.find(m => m.id === preferredModel)
+          ?? catalog.models.find(m => m.id === catalog.defaultModel);
+        const thinkingOption = model.id === preferredModel && model.thinkingOptions.some(t => t.id === saved.thinkingOption)
+          ? saved.thinkingOption : undefined;
+        const defaults = validateSelection({ model: model.id, thinkingOption, appIds: [] }, catalog);
         emit({ type: 'catalog', requestId: input.requestId, catalog: { models: wireModels(catalog, defaults), modes: [], defaultModel: defaults.model,
           ...(defaults.thinkingOption != null ? { defaultThinkingOption: defaults.thinkingOption } : {}) } }); return;
       }

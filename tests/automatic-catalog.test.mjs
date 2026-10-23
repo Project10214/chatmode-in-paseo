@@ -66,3 +66,38 @@ test('AUTO4 closing a provider does not cancel another consumers automatic disco
   await until(()=>!catalogService(runtime).snapshot().refreshing);
   assert.equal(runtime.store.read().catalog.models[0].id,'model-a');
 });
+
+test('AUTO5 account changes do not hide the model catalog or rewrite invalid saved selections',async t=>{
+  const {runtime,heartbeat}=await setup(t);await heartbeat();
+  const command=await until(()=>runtime.broker.queued().find(c=>c.kind==='catalog'));
+  const claim=await runtime.broker.claim(command.id,54,'doc-new-account');
+  const currentCatalog={...catalog,models:[{...catalog.models[0],thinkingOptions:[
+    {id:'low',label:'Low'},{id:'high',label:'High'}
+  ]}]};
+  await runtime.broker.result(command.id,claim.lease,{catalog:currentCatalog});
+  const provider=await createProvider(runtime).connect({versions:[1],capabilities:CAPABILITIES});t.after(()=>provider.close());
+  const events=[];provider.onEvent(e=>events.push(e));
+  const cases=[
+    {saved:{model:'model-a',thinkingOption:'low',appIds:['asdk_app_old_account']},error:'APP_UNAVAILABLE',thinking:'low'},
+    {saved:{model:'old-model',thinkingOption:'low',appIds:['asdk_app_host']},error:'MODEL_UNAVAILABLE',thinking:'high'},
+    {saved:{model:'model-a',thinkingOption:'old-effort',appIds:['asdk_app_host']},error:'THINKING_UNAVAILABLE',thinking:'high'}
+  ];
+  for(const [index,{saved,error,thinking}] of cases.entries()){
+    await runtime.store.transaction(d=>{d.defaults=saved;});
+    const requestId='account-change-'+index;
+    await provider.send({type:'catalog',requestId});
+    const event=await until(()=>events.find(e=>e.requestId===requestId));
+    assert.equal(event.type,'catalog',JSON.stringify(event));
+    assert.deepEqual(event.catalog.models.map(m=>m.id),['model-a']);
+    assert.equal(event.catalog.defaultModel,'model-a');
+    assert.equal(event.catalog.defaultThinkingOption,thinking);
+    assert.equal(event.catalog.models[0].defaultThinkingOptionId,thinking);
+    assert.deepEqual(runtime.store.read().defaults,saved,'discovery must not migrate saved selections');
+    await assert.rejects(runtime.broker.defaults(saved),e=>e.code===error);
+    await assert.rejects(runtime.broker.create(saved),e=>e.code===error);
+  }
+  assert.equal(Object.keys(runtime.store.read().sessions).length,0);
+  assert.equal(runtime.broker.queued().length,0,'reading models must not send or configure a conversation');
+  const corrected={model:'model-a',thinkingOption:'low',appIds:['asdk_app_host']};
+  assert.deepEqual(await runtime.broker.defaults(corrected),corrected);
+});
