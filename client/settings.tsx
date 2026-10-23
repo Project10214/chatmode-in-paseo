@@ -50,6 +50,8 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
   const selectedModel=state?.catalog?.models.find(m=>m.id===model),expires=pairing?Math.max(0,Math.ceil((pairing.expiresAt-(state?.checkedAt??Date.now()))/1000)):0;
   const failed=!state?.refreshing&&state?.refreshError;
   const filtered=state?.catalog?.apps.filter(a=>a.label.toLocaleLowerCase().includes(query.toLocaleLowerCase()))??[];
+  const unavailableApps=state?.catalog?apps.filter(id=>!state.catalog!.apps.some(app=>app.id===id)):[];
+  const unavailableThinking=!!selectedModel&&thinking!==null&&!selectedModel.thinkingOptions.some(option=>option.id===thinking);
   // The loaded extension may be an older build than the one installed next to
   // this plugin. Say so plainly instead of letting the user guess.
   const pluginVersion=PLUGIN_VERSION;
@@ -100,15 +102,22 @@ export function SettingsScreen({ theme, layout }: PluginSurfaceProps) {
       <Text style={{color:c.foreground,fontSize:13,fontWeight:'600'}}>模型</Text>
       <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{state?.catalog?.models.map(m=><Pressable key={m.id} accessibilityRole="radio" accessibilityLabel={m.label} accessibilityState={{checked:model===m.id}} aria-checked={model===m.id} disabled={busy} onPress={()=>edit(()=>{setModel(m.id);setThinking(m.defaultThinkingOptionId??null);})} style={{minHeight:44,padding:12,borderRadius:10,borderWidth:1,borderColor:model===m.id?c.accent:c.border,backgroundColor:model===m.id?c.surface2:c.surface1,flexDirection:'row',alignItems:'center',gap:8}}><Icon name={model===m.id?'CircleCheck':'Circle'} size={15} color={model===m.id?c.accent:c.foregroundMuted}/><Text style={{color:c.foreground,fontSize:13,fontWeight:model===m.id?'600':'400'}}>{m.label}</Text></Pressable>)}</View>
       {!state?.catalog&&<Text style={{color:c.foregroundMuted,fontSize:13}}>连接扩展后显示网页可用模型。</Text>}
+      {!!state?.catalog&&!!model&&!selectedModel&&<Text accessibilityRole="alert" style={{color:c.statusWarning,fontSize:13,lineHeight:20}}>此前选择的模型 {model} 当前不可用，请重新选择。</Text>}
       <Text style={{color:c.foreground,fontSize:13,fontWeight:'600'}}>思考强度</Text>
       <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{selectedModel?.thinkingOptions.map(t=><Pressable key={t.id} accessibilityRole="radio" accessibilityLabel={t.label} accessibilityState={{checked:thinking===t.id}} aria-checked={thinking===t.id} disabled={busy} onPress={()=>edit(()=>setThinking(t.id))} style={{minHeight:44,borderRadius:9,paddingHorizontal:16,paddingVertical:12,backgroundColor:thinking===t.id?c.accent:c.surface2}}><Text style={{color:thinking===t.id?c.accentForeground:c.foreground,fontSize:13}}>{effortLabel[t.id]??t.label}</Text></Pressable>)}</View>
       {selectedModel&&!selectedModel.thinkingOptions.length&&<Text style={{color:c.foregroundMuted,fontSize:13}}>此模型不支持单独设置思考强度。</Text>}
+      {unavailableThinking&&<Text accessibilityRole="alert" style={{color:c.statusWarning,fontSize:13,lineHeight:20}}>此前选择的思考强度 {thinking} 当前不可用，请重新选择模型或强度。</Text>}
       <View style={{height:1,backgroundColor:c.border}}/>
       <View style={{flexDirection:'row',justifyContent:'space-between'}}><Text style={{color:c.foreground,fontSize:13,fontWeight:'600'}}>ChatGPT 应用</Text><Text style={{color:c.foregroundMuted,fontSize:12}}>已选 {apps.length} 项</Text></View>
+      {!!unavailableApps.length&&<View style={{gap:8,padding:12,borderWidth:1,borderColor:c.statusWarning,borderRadius:10}}>
+        <Text accessibilityRole="alert" style={{color:c.statusWarning,fontSize:13,lineHeight:20}}>有 {unavailableApps.length} 个已选应用不在当前网页选项中。更换账号后，请移除失效选择，再选择当前可用的应用。</Text>
+        {unavailableApps.map(id=><Text selectable key={id} style={{color:c.foregroundMuted,fontSize:12,lineHeight:18}}>{id}</Text>)}
+        {button('移除这些失效应用',()=>edit(()=>setApps(old=>old.filter(id=>!unavailableApps.includes(id)))),{icon:'Unplug'})}
+      </View>}
       <TextInput accessibilityLabel="搜索应用" value={query} onChangeText={setQuery} placeholder="搜索已授权的应用" placeholderTextColor={c.foregroundMuted} style={{minHeight:44,borderWidth:1,borderColor:c.border,borderRadius:9,paddingHorizontal:12,color:c.foreground,backgroundColor:c.surface2,fontSize:13}}/>
       <View>{filtered.map(app=><View key={app.id} style={{minHeight:52,flexDirection:'row',alignItems:'center',gap:12,borderBottomWidth:1,borderColor:c.border}}><Icon name="Blocks" size={16} color={c.foregroundMuted}/><Text style={{color:c.foreground,fontSize:14,flex:1}}>{app.label}</Text><Switch accessibilityLabel={app.label} disabled={busy} value={apps.includes(app.id)} onValueChange={v=>edit(()=>setApps(old=>v?[...old,app.id]:old.filter(id=>id!==app.id)))}/></View>)}{!filtered.length&&<Text style={{color:c.foregroundMuted,fontSize:13,paddingVertical:8}}>未找到匹配应用。</Text>}</View>
       <Text style={{color:c.foregroundMuted,fontSize:12,lineHeight:19}}>对话中的「工具」菜单可切换应用。本页可设置多应用默认组合，仅用于新建 Agent，不新增授权。</Text>
-      <View style={{gap:10,backgroundColor:c.surface2,padding:14,borderRadius:10}}><Text style={{color:c.foreground,fontSize:13}}>{selectedModel?.label??'尚未选择模型'} · {thinking?(effortLabel[thinking]??thinking):'默认强度'} · {apps.length} 个应用{changed?' · 未保存':''}</Text>{button(busy?'正在处理…':'保存默认配置',()=>void persist(),{primary:true,icon:'Check',disabled:busy||!!state?.refreshing||!connected||!state?.catalog||!model})}{changed&&button('撤销修改',()=>{if(state){dirty.current=false;setChanged(false);defaults(state);setNotice('未保存的修改已撤销。');}},{icon:'Undo2'})}</View>
+      <View style={{gap:10,backgroundColor:c.surface2,padding:14,borderRadius:10}}><Text style={{color:c.foreground,fontSize:13}}>{selectedModel?.label??'尚未选择模型'} · {thinking?(effortLabel[thinking]??thinking):'默认强度'} · {apps.length} 个应用{changed?' · 未保存':''}</Text>{button(busy?'正在处理…':'保存默认配置',()=>void persist(),{primary:true,icon:'Check',disabled:busy||!!state?.refreshing||!connected||!selectedModel||unavailableThinking||unavailableApps.length>0})}{changed&&button('撤销修改',()=>{if(state){dirty.current=false;setChanged(false);defaults(state);setNotice('未保存的修改已撤销。');}},{icon:'Undo2'})}</View>
       {!!notice&&<Text accessibilityLiveRegion="polite" selectable style={{color:c.foreground,fontSize:13,lineHeight:20}}>{notice}</Text>}
     </>)}
     {section('04','网页授权自动允许','仅处理精确识别的一次性/持久允许按钮；未知或歧义仍回退手动。',<>

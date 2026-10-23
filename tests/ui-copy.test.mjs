@@ -173,6 +173,38 @@ test('COPY settings render in compact and wide layouts without stale version or 
   }
 });
 
+test('COPY account-switch recovery removes hidden invalid apps only after an explicit edit', async () => {
+  for(const compact of [true,false]){
+    const snapshot=settingsState(),old='asdk_app_old_account',current='asdk_app_current';
+    snapshot.catalog={defaultModel:'model-a',models:[{id:'model-a',label:'Model A',thinkingOptions:[{id:'high',label:'High'}],defaultThinkingOptionId:'high'}],
+      apps:[{id:current,label:'mymac'},{id:'asdk_app_other',label:'Other app'}]};
+    snapshot.defaults={model:'model-a',thinkingOption:'high',appIds:[old,current]};
+    const state=[];state[2]=snapshot;state[3]='model-a';state[4]='high';state[5]=[old,current];
+    const writes=[];
+    const h=renderer('settings.tsx',{state,useRpc:(contract,rpc)=>async input=>{
+      assert.equal(contract,rpc.saveDefaults);writes.push(input);return input;
+    }});
+    const render=()=>h.render('SettingsScreen',{theme,layout:{compact}});
+    const button=(tree,label)=>nodes(tree).find(n=>n.type==='Pressable'&&text(n)===label);
+    let tree=render();
+    assert(text(tree).includes(old),'the invisible old selection must be discoverable');
+    assert.equal(button(tree,'保存默认配置').props.disabled,true);
+    assert.equal(writes.length,0,'rendering must not silently migrate selections');
+    button(tree,'移除这些失效应用').props.onPress();tree=render();
+    assert.deepEqual(Array.from(state[5]),[current]);
+    assert.deepEqual(snapshot.defaults.appIds,[old,current],'editing must not mutate saved defaults');
+    assert.equal(button(tree,'保存默认配置').props.disabled,false);
+    button(tree,'撤销修改').props.onPress();tree=render();
+    assert.deepEqual(Array.from(state[5]),[old,current]);
+    assert.equal(button(tree,'保存默认配置').props.disabled,true);
+    button(tree,'移除这些失效应用').props.onPress();tree=render();
+    button(tree,'保存默认配置').props.onPress();
+    await until(()=>state[8]==='已保存，仅用于新建 Agent。');
+    assert.deepEqual(JSON.parse(JSON.stringify(writes)),[{model:'model-a',thinkingOption:'high',appIds:[current]}]);
+    assert.equal(state[7],false);
+  }
+});
+
 test('COPY image messages distinguish a generated image from an unavailable or loading preview', () => {
   const image = { sessionId: 'copy-session', turnId: 'copy-turn', conversationId: 'copy-conversation', status: 'unavailable' };
   const h = renderer('generated-image.tsx');

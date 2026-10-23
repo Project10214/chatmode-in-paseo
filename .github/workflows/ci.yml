@@ -41,7 +41,8 @@ jobs:
       - run: npm run test:sdk
 
   browser-regression:
-    runs-on: ubuntu-latest
+    # Keep the OS compatible with the pinned Playwright dependency installer.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
