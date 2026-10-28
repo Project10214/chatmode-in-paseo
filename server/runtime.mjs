@@ -2,13 +2,70 @@ import { safeDiagnostic, safeError } from './diagnostics.mjs';
 import { catalogService } from './catalog.mjs';
 import http from 'node:http';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Store } from './store.mjs';
 import { Broker } from './broker.mjs';
 import { PROTOCOL, PRODUCT, LIMITS, invariant, object } from './protocol.mjs';
 
 const equal = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const runPs = promisify(execFile);
+const lockPayload = () => JSON.stringify({ pid: process.pid, hostname: os.hostname(), at: new Date().toISOString(), startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString() });
+/** Holder start time, or null when it cannot be established (then we assume the holder is real). */
+async function holderStartedAt(pid) {
+  try {
+    const { stdout } = await runPs('ps', ['-p', String(pid), '-o', 'lstart='], { timeout: 5000 });
+    const value = Date.parse(String(stdout).trim());
+    return Number.isFinite(value) ? value : null;
+  } catch { return null; }
+}
+/** Stale = the recorded holder provably no longer exists; anything uncertain counts as held. */
+export async function inspectLock(file) {
+  let raw;
+  try { raw = await fs.readFile(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return { state: 'free' }; throw e; }
+  let value = null;
+  try { value = JSON.parse(raw); } catch { return { state: 'stale', reason: 'unreadable-lock', pid: null }; }
+  const pid = Number(value?.pid);
+  if (!Number.isInteger(pid) || pid <= 0) return { state: 'stale', reason: 'invalid-pid', pid: null };
+  if (pid === process.pid) return { state: 'held', reason: 'same-process', pid };
+  let alive = true;
+  try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') alive = false; }
+  if (!alive) return { state: 'stale', reason: 'holder-gone', pid };
+  const writtenAt = Date.parse(String(value?.at ?? ''));
+  const started = await holderStartedAt(pid);
+  // The live process started after the lock was written, so it cannot be the holder: recycled pid.
+  if (Number.isFinite(writtenAt) && started !== null && started > writtenAt + 2000) return { state: 'stale', reason: 'pid-reused', pid };
+  if (value?.hostname && value.hostname !== os.hostname()) return { state: 'held', reason: 'other-host', pid };
+  return { state: 'held', reason: 'holder-alive', pid };
+}
+async function pruneStaleLocks(directory) {
+  try {
+    const names = (await fs.readdir(directory)).filter(name => name.startsWith('runtime.lock.stale-'));
+    const entries = [];
+    for (const name of names) { const full = path.join(directory, name); const st = await fs.stat(full); entries.push({ full, mtime: st.mtimeMs }); }
+    entries.sort((a, b) => b.mtime - a.mtime);
+    const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+    for (const entry of entries.slice(10)) if (entry.mtime < cutoff) await fs.rm(entry.full, { force: true });
+  } catch {}
+}
+/** Takes the one-writer lock, reclaiming it only when the previous holder is provably gone. */
+async function acquireLock(lockPath) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { return await fs.open(lockPath, 'wx', 0o600); }
+    catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      const seen = await inspectLock(lockPath);
+      if (seen.state !== 'stale') throw new Error(`RUNTIME_LOCKED: inspect ${lockPath}; do not run standalone and Paseo runtimes together.`);
+      const parked = `${lockPath}.stale-${seen.pid ?? 'unknown'}-${Date.now()}`;
+      try { await fs.rename(lockPath, parked); } catch (err) { if (err.code === 'ENOENT') continue; throw err; }
+      await fs.appendFile(`${lockPath}.recovered.log`, JSON.stringify({ at: new Date().toISOString(), pid: process.pid, stalePid: seen.pid ?? null, reason: seen.reason, parked }) + '\n').catch(() => {});
+    }
+  }
+  throw new Error(`RUNTIME_LOCKED: inspect ${lockPath}; do not run standalone and Paseo runtimes together.`);
+}
 async function privateJson(file, data) {
   const temp = `${file}.${randomUUID()}.tmp`;
   await fs.writeFile(temp, JSON.stringify(data, null, 2), { mode: 0o600, flag: 'wx' });
@@ -19,12 +76,15 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
   invariant(typeof directory === 'string' && path.isAbsolute(directory), 'ABSOLUTE_STATE_DIRECTORY_REQUIRED');
   invariant(Number.isInteger(port) && port >= 0 && port <= 65535, 'INVALID_PORT');
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-  // No automatic deletion of someone else's lock or takeover of their running instance.
+  // Only a lock whose recorded holder is provably gone is reclaimed; a live holder is never displaced.
   const lockPath = path.join(directory, 'runtime.lock');
-  let lock;
-  try { lock = await fs.open(lockPath, 'wx', 0o600); }
-  catch (e) { if (e.code === 'EEXIST') throw new Error(`RUNTIME_LOCKED: inspect ${lockPath}; do not run standalone and Paseo runtimes together.`); throw e; }
-  await lock.writeFile(JSON.stringify({ pid: process.pid, at: new Date().toISOString() })); await lock.close();
+  const lock = await acquireLock(lockPath);
+  await lock.writeFile(lockPayload()); await lock.close();
+  void pruneStaleLocks(directory);
+  const releaseLock = async () => {
+    try { const value = JSON.parse(await fs.readFile(lockPath, 'utf8')); if (Number(value?.pid) !== process.pid) return; } catch { return; }
+    await fs.rm(lockPath, { force: true });
+  };
   let server, timer, store, broker, runtimeHandle;
   const sockets = new Set(); const epoch = randomUUID();
   try {
@@ -203,12 +263,12 @@ export async function createRuntime({ directory, port = 17843, maxConcurrent = 2
         await new Promise(resolve => { server.close(resolve); for (const socket of sockets) socket.destroy(); });
         await fs.rm(path.join(directory, 'endpoint.json'), { force: true });
         await fs.rm(path.join(directory, 'pairing.json'), { force: true });
-        await fs.rm(lockPath, { force: true });
+        await releaseLock();
       }
     };
     return runtimeHandle;
   } catch (e) {
     clearInterval(timer); server?.close(); for (const socket of sockets) socket.destroy();
-    await fs.rm(lockPath, { force: true }); throw e;
+    await releaseLock(); throw e;
   }
 }
