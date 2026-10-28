@@ -299,6 +299,9 @@ export class Broker {
       }
       for (const s of Object.values(data.sessions)) {
         const observation=ensureObservation(s);
+        // A browser restart drops every tab-ownership record, so the close that the
+        // previous runtime attempted can no longer be evaluated. Probe once per start.
+        if (s.archiveIntent && s.tabCloseAttempt) delete s.tabCloseAttempt;
         // Import an unfinished host operation, never native model metadata as
         // a current webpage state. Every bound conversation keeps observing.
         if(!observation.run&&s.turn&&!s.turn.outcome&&s.turn.receivedAt)
@@ -716,15 +719,19 @@ export class Broker {
       } else if (c.kind === 'close-tab') {
         const skipReasons = ['ACTIVE_TAB','DOCUMENT_CHANGED','PAGE_BUSY','PAGE_UNAVAILABLE',
           'TAB_MISSING','TAB_NOT_OWNED','WRONG_CONVERSATION','SESSION_BUSY'];
+        // A missing tab, an ownership record lost with the browser session, or an
+        // unavailable page all mean the page can no longer belong to this session.
+        // Releasing the binding lets the archive settle instead of blocking forever.
+        const released = result.closed === false && ['TAB_MISSING','TAB_NOT_OWNED','PAGE_UNAVAILABLE'].includes(result.skipped);
         invariant(result.closed === true || (result.closed === false && skipReasons.includes(result.skipped)), 'TAB_CLOSE_UNCONFIRMED');
-        if (result.closed === true) {
+        if (result.closed === true || released) {
           invariant(s && s.status === 'idle' && s.tabId === c.tabId && s.documentKey === c.documentKey,
             'PAGE_IDENTITY_MISMATCH');
           s.tabId = null;
           s.documentKey = null;
           // Conversation binding is durable and is used when a new Send reopens the tab.
         }
-        c.result = result.closed ? { closed: true } : { closed: false, skipped: result.skipped };
+        c.result = result.closed ? { closed: true } : { closed: false, skipped: result.skipped, ...(released ? { tabReleased: true } : {}) };
       } else throw new BridgeError('UNKNOWN_COMMAND');
       c.phase = 'done'; return { value: c.result };
     });
